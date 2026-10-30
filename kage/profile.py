@@ -8,7 +8,8 @@ no values for any of them:
   org.json       kage.org/v1       organisation conventions: the tracker, the ticket reference pattern, and
                                    the names of shared channels
   instance.json  kage.instance/v1  where this instance's files are: the task workspace root and other named
-                                   paths, kept exactly as written (a "~/..." path stays "~/..." in text)
+                                   paths, kept exactly as written (a "~/..." path stays "~/..." in text); the
+                                   marker this instance puts on the messages its agents send
 
 Loading is strict. Any problem raises ProfileError and nothing is half-loaded, so a caller can fall back as a
 whole. A profile file that is group- or world-writable is refused, like any other file that decides who may
@@ -39,6 +40,8 @@ WORKSPACE_URL_RE = re.compile(r'https://[a-z0-9][a-z0-9-]*\.slack\.com')
 CHANNEL_NAME_RE = re.compile(r'#[a-z0-9][a-z0-9._-]{0,79}')
 PATH_NAME_RE = re.compile(r'[a-z][a-z0-9_]{0,63}')
 OWNER_KEY_RE = re.compile(r'[a-z][a-z0-9_]{0,31}')
+MARKER_RE = re.compile(r'[a-z][a-z0-9_]{2,63}')
+DEFAULT_AGENT_MARKER = 'kage_agent_sent'
 TRACKERS = ('linear', 'jira', 'none')
 
 
@@ -84,6 +87,7 @@ class Org:
 @dataclasses.dataclass(frozen=True)
 class Instance:
     paths: types.MappingProxyType      # name -> path text exactly as written in instance.json
+    agent_marker: str = DEFAULT_AGENT_MARKER   # hidden marker (event type) on every message this instance's agents send
 
     @property
     def workspace_root(self):
@@ -192,7 +196,10 @@ def parse_instance(raw):
         if not (text.startswith('/') or text.startswith('~/')):
             raise ProfileError(f'paths.{name} must be absolute or start with ~/')
         paths[name] = text
-    return Instance(paths=types.MappingProxyType(paths))
+    marker = _text(raw, 'agent_marker') or DEFAULT_AGENT_MARKER
+    if not MARKER_RE.fullmatch(marker):
+        raise ProfileError('agent_marker must be a lower-case identifier such as kage_agent_sent')
+    return Instance(paths=types.MappingProxyType(paths), agent_marker=marker)
 
 
 def _read(path):

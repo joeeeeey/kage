@@ -222,6 +222,14 @@ class InstanceValidationTest(unittest.TestCase):
     def test_paths_are_optional(self):
         self.assertIsNone(profile.parse_instance({'schema': profile.INSTANCE_SCHEMA}).workspace_root)
 
+    def test_agent_marker(self):
+        self.assertEqual(profile.parse_instance({'schema': profile.INSTANCE_SCHEMA}).agent_marker, 'kage_agent_sent')
+        marked = profile.parse_instance({'schema': profile.INSTANCE_SCHEMA, 'agent_marker': 'mira_kage_sent'})
+        self.assertEqual(marked.agent_marker, 'mira_kage_sent')
+        for bad in ('Mira-sent', 'x', 'kage agent'):
+            with self.assertRaises(profile.ProfileError):
+                profile.parse_instance({'schema': profile.INSTANCE_SCHEMA, 'agent_marker': bad})
+
 
 class FileHandlingTest(unittest.TestCase):
     def test_missing_document(self):
