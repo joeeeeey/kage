@@ -1,0 +1,29 @@
+{
+  "id": "R-0007",
+  "kind": "limit",
+  "title": "At most three open cards per task",
+  "statement": "Fixture rule for card.open_limit.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.open_limit",
+    "hint": "Fix the open_limit field."
+  },
+  "cases": [
+    "C-R-0007"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

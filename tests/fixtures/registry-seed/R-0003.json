@@ -1,0 +1,29 @@
+{
+  "id": "R-0003",
+  "kind": "limit",
+  "title": "Check before asking",
+  "statement": "Fixture rule for card.checked_first.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.checked_first",
+    "hint": "Fix the checked_first field."
+  },
+  "cases": [
+    "C-R-0003"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

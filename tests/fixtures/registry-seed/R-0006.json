@@ -1,0 +1,29 @@
+{
+  "id": "R-0006",
+  "kind": "limit",
+  "title": "An apply card names the plan scope",
+  "statement": "Fixture rule for card.infra_plan_scope.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.infra_plan_scope",
+    "hint": "Fix the infra_plan_scope field."
+  },
+  "cases": [
+    "C-R-0006"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

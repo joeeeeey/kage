@@ -44,6 +44,7 @@ class LoadExampleTest(unittest.TestCase):
     def test_example_deployment_loads(self):
         d = profile.load(EXAMPLE)
         self.assertEqual(d.owner.name, 'Mira Lind')
+        self.assertEqual((d.owner.short_name, d.owner.key), ('Mira', 'owner'))   # defaults
         self.assertEqual(d.owner.language, 'en')
         self.assertEqual(d.owner.slack_user, 'U0000TEST01')
         self.assertEqual(d.owner.slack_workspace, 'T0000TEST01')
@@ -99,6 +100,12 @@ class OwnerValidationTest(unittest.TestCase):
     def test_name_language_timezone_are_required(self):
         for key in ('name', 'language', 'timezone'):
             self.assertRefused(self.owner(lambda r: r['owner'].pop(key)), f'owner.{key}')
+
+    def test_short_name_and_key(self):
+        owner = profile.parse_owner(self.owner(lambda r: r['owner'].update(short_name='M.', key='mira')))
+        self.assertEqual((owner.short_name, owner.key), ('M.', 'mira'))
+        for key in ('Mira', 'mira lind', '1mira', ''):
+            self.assertRefused(self.owner(lambda r: r['owner'].update(key=key)), 'owner.key')
 
     def test_language_must_be_a_tag(self):
         self.assertRefused(self.owner(lambda r: r['owner'].update(language='English')), 'language')

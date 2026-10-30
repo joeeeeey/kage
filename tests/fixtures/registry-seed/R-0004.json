@@ -1,0 +1,29 @@
+{
+  "id": "R-0004",
+  "kind": "limit",
+  "title": "Waiting on a person is your follow-up",
+  "statement": "Fixture rule for card.not_waiting_on_person.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.not_waiting_on_person",
+    "hint": "Fix the not_waiting_on_person field."
+  },
+  "cases": [
+    "C-R-0004"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

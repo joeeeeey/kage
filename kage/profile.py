@@ -3,8 +3,8 @@
 A deployment is a directory with three small JSON documents. They are data, never code, and the engine ships
 no values for any of them:
 
-  owner.json     kage.owner/v1     the one person this instance serves: name, language, timezone, the owner's
-                                   identity on each channel, and the assistant (bot) identity
+  owner.json     kage.owner/v1     the one person this instance serves: name, short name, key, language,
+                                   timezone, the owner's identity on each channel, and the assistant (bot) identity
   org.json       kage.org/v1       organisation conventions: the tracker, the ticket reference pattern, and
                                    the names of shared channels
   instance.json  kage.instance/v1  where this instance's files are: the task workspace root and other named
@@ -38,6 +38,7 @@ SLACK_ID_RE = {
 WORKSPACE_URL_RE = re.compile(r'https://[a-z0-9][a-z0-9-]*\.slack\.com')
 CHANNEL_NAME_RE = re.compile(r'#[a-z0-9][a-z0-9._-]{0,79}')
 PATH_NAME_RE = re.compile(r'[a-z][a-z0-9_]{0,63}')
+OWNER_KEY_RE = re.compile(r'[a-z][a-z0-9_]{0,31}')
 TRACKERS = ('linear', 'jira', 'none')
 
 
@@ -48,6 +49,8 @@ class ProfileError(ValueError):
 @dataclasses.dataclass(frozen=True)
 class Owner:
     name: str
+    short_name: str     # how text names the owner ("waiting for Mira")
+    key: str            # the owner's word in identifiers: CLI values, stored states (default "owner")
     language: str
     timezone: str
     timezone_fallback_offset: str | None
@@ -113,6 +116,10 @@ def parse_owner(raw):
     _schema(raw, OWNER_SCHEMA)
     who = _obj(raw, 'owner', required=True)
     name = _text(who, 'owner.name', required=True)
+    short_name = _text(who, 'owner.short_name') or name.split()[0]
+    key = _text(who, 'owner.key') or 'owner'
+    if not OWNER_KEY_RE.fullmatch(key):
+        raise ProfileError('owner.key must be a lower-case word such as owner or mira')
     language = _text(who, 'owner.language', required=True)
     if not LANGUAGE_RE.fullmatch(language):
         raise ProfileError('owner.language must be a language tag such as en or zh-CN')
@@ -125,7 +132,8 @@ def parse_owner(raw):
     assistant = _obj(raw, 'assistant')
     assistant_slack = _obj(assistant, 'assistant.slack')
     owner = Owner(
-        name=name, language=language, timezone=timezone, timezone_fallback_offset=fallback,
+        name=name, short_name=short_name, key=key, language=language, timezone=timezone,
+        timezone_fallback_offset=fallback,
         slack_workspace=_slack_id(slack, 'workspace', 'identities.slack.workspace'),
         slack_workspace_url=_text(slack, 'identities.slack.workspace_url'),
         slack_user=_slack_id(slack, 'user', 'identities.slack.user'),

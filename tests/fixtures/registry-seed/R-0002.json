@@ -1,0 +1,29 @@
+{
+  "id": "R-0002",
+  "kind": "limit",
+  "title": "Say who waits on whom",
+  "statement": "Fixture rule for card.situation_line.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.situation_line",
+    "hint": "Fix the situation_line field."
+  },
+  "cases": [
+    "C-R-0002"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

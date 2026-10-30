@@ -1,0 +1,29 @@
+{
+  "id": "R-0005",
+  "kind": "limit",
+  "title": "A PR card has four parts",
+  "statement": "Fixture rule for card.pr_four_parts.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.pr_four_parts",
+    "hint": "Fix the pr_four_parts field."
+  },
+  "cases": [
+    "C-R-0005"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

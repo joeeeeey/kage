@@ -1,0 +1,29 @@
+{
+  "id": "R-0001",
+  "kind": "limit",
+  "title": "Lead with the decision",
+  "statement": "Fixture rule for card.decision_line.",
+  "why": [
+    "2026-01-01 fictional incident"
+  ],
+  "scope": {
+    "actions": [
+      "ask-owner"
+    ],
+    "task_classes": [
+      "*"
+    ]
+  },
+  "enforcement": {
+    "level": "L3",
+    "guard": "card.decision_line",
+    "hint": "Fix the decision_line field."
+  },
+  "cases": [
+    "C-R-0001"
+  ],
+  "status": "active",
+  "created": "2026-01-01",
+  "retired": null,
+  "supersedes": []
+}

@@ -81,8 +81,9 @@ class LeakScanTest(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stdout)
 
     def test_usage_errors(self):
-        self.assertEqual(leak_scan.main([]), 2)
-        self.assertEqual(leak_scan.main(['--tree', 'some/path']), 2)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(leak_scan.main([]), 2)
+            self.assertEqual(leak_scan.main(['--tree', 'some/path']), 2)
 
 
 class BundleTest(unittest.TestCase):
