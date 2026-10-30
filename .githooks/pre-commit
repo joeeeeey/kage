@@ -1,0 +1,8 @@
+#!/bin/sh
+# Enable once per clone: git config core.hooksPath .githooks
+# Refuses a commit that carries a secret (gitleaks) or a person's / company's identifier (tools/leak_scan.py).
+set -e
+root=$(git rev-parse --show-toplevel)
+command -v gitleaks >/dev/null 2>&1 || { echo "pre-commit: gitleaks is not installed" >&2; exit 1; }
+gitleaks git --pre-commit --staged --redact --no-banner "$root"
+python3 "$root/tools/leak_scan.py" --staged

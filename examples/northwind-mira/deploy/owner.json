@@ -1,0 +1,23 @@
+{
+  "schema": "kage.owner/v1",
+  "owner": {
+    "name": "Mira Lind",
+    "language": "en",
+    "timezone": "Europe/Berlin",
+    "timezone_fallback_offset": "+01:00"
+  },
+  "identities": {
+    "slack": {
+      "workspace": "T0000TEST01",
+      "workspace_url": "https://northwind-example.slack.com",
+      "user": "U0000TEST01"
+    }
+  },
+  "assistant": {
+    "display": "Mira's kage",
+    "slack": {
+      "bot_user": "U0000TEST02",
+      "app": "A0000TEST01"
+    }
+  }
+}

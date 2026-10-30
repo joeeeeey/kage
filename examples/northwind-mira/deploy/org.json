@@ -1,0 +1,14 @@
+{
+  "schema": "kage.org/v1",
+  "name": "Northwind Labs",
+  "tickets": {
+    "tracker": "jira",
+    "team": "PM",
+    "ref": "(?:PM|OPS)-\\d{1,6}",
+    "ref_ignorecase": true
+  },
+  "channels": {
+    "#ops": "C0000TEST01",
+    "#incidents": "C0000TEST02"
+  }
+}

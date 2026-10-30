@@ -1,0 +1,7 @@
+{
+  "schema": "kage.instance/v1",
+  "paths": {
+    "workspace_root": "~/kage/tasks",
+    "notes": "/srv/kage/notes"
+  }
+}
