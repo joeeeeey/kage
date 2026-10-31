@@ -8,7 +8,8 @@
     "card.addressed_to_owner": "你",
     "card.failure": "(?i)unauthori[sz]ed|forbidden|\\b40[13]\\b|permission denied|access denied|not authori[sz]ed|timed?[ -]?out|invalid[_ ]token|token (?:expired|invalid)|认证失败|鉴权|未授权|无权限|没有权限|权限不[足够]|拒绝访问|超时|登录失效|凭证失效|token ?失效",
     "card.infra_apply": "(?i)apply-approved|make\\s+apply|(?:terraform|tofu|terragrunt)\\s+apply|saved[- ]?plan|(?:apply|执行|应用).{0,24}(?:plan|terraform|tofu|root)|(?:plan|terraform|tofu|root).{0,24}(?:apply|执行|应用)",
-    "registry.title_script": "[一-鿿]"
+    "registry.title_script": "[一-鿿]",
+    "secret.labelled": "(?:密码|口令|密钥)\\s*[:=：]\\s*[^\\s<]{6,}"
   },
   "messages": {
     "you": "你",
@@ -44,6 +45,21 @@
     "registry.show.where_live": "线上目录",
     "registry.show.where_seed": "skill 自带的初始版本",
     "registry.show.rule": "{id} {title} · {status}\n  怎么检查：{how}\n  来由：{why}",
-    "registry.problem.title": "title must be one Chinese line"
+    "registry.problem.title": "title must be one Chinese line",
+    "ask.hint": "有别的需求直接在 thread 里说就行",
+    "ask.reminder": "{mentions} 有空看下上面这个哈",
+    "ask.not_responder": "这个是问 {mentions} 的哈，有想法在 thread 里说就行",
+    "ask.handled": "这个已经处理过了",
+    "ask.external": "按钮这边暂时点不了，直接在 thread 里回复我就行",
+    "ask.chose": "{icon} {who} 选择了：{label}{note} · {clock}",
+    "ask.override": "{icon} {owner} 代选：{label}{note} · {clock}",
+    "ask.expired": "（已过期，未回复）",
+    "ask.confirm": "{mention}我理解为：{label}{note}。对吗？",
+    "ask.confirm_yes": "✅ 对",
+    "ask.confirm_no": "✏️ 不对",
+    "ask.confirmed": "✅ 已确认 · {clock}",
+    "ask.confirm_cancelled": "好的，那你在 thread 里说下具体情况",
+    "ask.echo": "好的，按 {label} 处理，有不对的跟我说",
+    "ask.closed": "（这个已经处理过了）"
   }
 }

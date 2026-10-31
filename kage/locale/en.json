@@ -8,7 +8,8 @@
     "card.addressed_to_owner": "\\byou\\b",
     "card.failure": "(?i)unauthori[sz]ed|forbidden|\\b40[13]\\b|permission denied|access denied|not authori[sz]ed|timed?[ -]?out|invalid[_ ]token|token (?:expired|invalid)",
     "card.infra_apply": "(?i)apply-approved|make\\s+apply|(?:terraform|tofu|terragrunt)\\s+apply|saved[- ]?plan|apply.{0,24}(?:plan|terraform|tofu|root)|(?:plan|terraform|tofu|root).{0,24}apply",
-    "registry.title_script": "[A-Za-z]"
+    "registry.title_script": "[A-Za-z]",
+    "secret.labelled": "(?i)\\b(?:password|passwd|pwd|secret|api[_-]?key|token)\\s*[:=]\\s*[^\\s<]{6,}"
   },
   "messages": {
     "you": "you",
@@ -44,6 +45,21 @@
     "registry.show.where_live": "live directory",
     "registry.show.where_seed": "the shipped seed",
     "registry.show.rule": "{id} {title} · {status}\n  How it is checked: {how}\n  Why: {why}",
-    "registry.problem.title": "title must be one line"
+    "registry.problem.title": "title must be one line",
+    "ask.hint": "Anything else, just reply in the thread",
+    "ask.reminder": "{mentions} when you get a chance, could you take a look at the question above?",
+    "ask.not_responder": "This one's for {mentions} — feel free to share thoughts in the thread",
+    "ask.handled": "This one's already been handled",
+    "ask.external": "Buttons don't work across workspaces yet — just reply in the thread",
+    "ask.chose": "{icon} {who} chose: {label}{note} · {clock}",
+    "ask.override": "{icon} {owner} answered: {label}{note} · {clock}",
+    "ask.expired": "(Expired, no reply)",
+    "ask.confirm": "{mention}Just to confirm: {label}{note}?",
+    "ask.confirm_yes": "✅ Yes",
+    "ask.confirm_no": "✏️ Not quite",
+    "ask.confirmed": "✅ Confirmed · {clock}",
+    "ask.confirm_cancelled": "OK, could you add a bit more detail in the thread?",
+    "ask.echo": "Got it, going with {label}. Let me know if that's not right",
+    "ask.closed": "(Already handled)"
   }
 }
