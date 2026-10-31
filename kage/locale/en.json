@@ -1196,7 +1196,27 @@
     "trace.render_text.2": "\n(also matching {value} more: ",
     "trace.Store.run_lines.1": " · says · ",
     "trace.Store.run_lines.2": " · result · ",
-    "trace.Trace.finish.1": "not reached"
+    "trace.Trace.finish.1": "not reached",
+    "followup.outcome_label.success": "✅ succeeded",
+    "followup.outcome_label.failed": "⚠️ failed",
+    "followup.outcome_label.partial": "◑ handled in part",
+    "followup.outcome_label.unresolved": "⚠️ events not fully handled",
+    "followup.outcome_label.stopped": "⏹ stopped",
+    "followup.ask_owner_text.1": "🚨 *HIGH PRIORITY* · ",
+    "followup.ask_owner_text.2": "\nWhile {owner} is away, ",
+    "followup.ask_owner_text.3": " can also decide with the buttons.",
+    "followup.ask_owner_footer.1": "session",
+    "followup._run_who.1": "resumed session ",
+    "followup._run_who.2": "new session",
+    "followup.owner_terminal_only.1": "agent_session: only {owner} can run this, in their own terminal, never from an agent session (",
+    "followup.owner_terminal_only.2": ", ",
+    "followup.owner_terminal_only.3": ")",
+    "followup.owner_terminal_only.4": "not_a_terminal: only {owner} can run this, in their own terminal (stdin is not a terminal)",
+    "followup._tail_header.1": "▶ run {run_id} · task {task} · {run_who} · trigger {get} · started {started}",
+    "followup._tail_outcome.1": "… still running · step {int} · running for {duration} · handled {handled}/{total} events · follow: {tail_command} {run_id}",
+    "followup._tail_outcome.2": "■ run ended · {label}",
+    "followup._tail_outcome.3": " ({reason})",
+    "followup._tail_outcome.4": " · handled {handled}/{total} events · took {duration}"
   },
   "words": {
     "decision.approve_phrases": [

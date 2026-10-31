@@ -1196,7 +1196,27 @@
     "trace.render_text.2": "\n(另外 {value} 条也匹配：",
     "trace.Store.run_lines.1": " · 说明 · ",
     "trace.Store.run_lines.2": " · 结果 · ",
-    "trace.Trace.finish.1": "没有到这一步"
+    "trace.Trace.finish.1": "没有到这一步",
+    "followup.outcome_label.success": "✅ 成功",
+    "followup.outcome_label.failed": "⚠️ 失败",
+    "followup.outcome_label.partial": "◑ 只处理了一部分",
+    "followup.outcome_label.unresolved": "⚠️ 事件没有处理完",
+    "followup.outcome_label.stopped": "⏹ 已停止",
+    "followup.ask_owner_text.1": "🚨 *高优先级* · ",
+    "followup.ask_owner_text.2": "\n{owner} 休假期间，",
+    "followup.ask_owner_text.3": " 也可以点按钮决定。",
+    "followup.ask_owner_footer.1": "会话",
+    "followup._run_who.1": "恢复会话 ",
+    "followup._run_who.2": "新会话",
+    "followup.owner_terminal_only.1": "agent_session: 只能由 {owner} 在自己的终端里运行，agent 会话里不行（",
+    "followup.owner_terminal_only.2": "、",
+    "followup.owner_terminal_only.3": "）",
+    "followup.owner_terminal_only.4": "not_a_terminal: 只能由 {owner} 在自己的终端里运行（stdin 不是终端）",
+    "followup._tail_header.1": "▶ run {run_id} · 任务 {task} · {run_who} · 触发 {get} · {started} 开始",
+    "followup._tail_outcome.1": "… 仍在运行 · 第 {int} 步 · 已运行 {duration} · 已处理 {handled}/{total} 个事件 · 跟随：{tail_command} {run_id}",
+    "followup._tail_outcome.2": "■ 运行结束 · {label}",
+    "followup._tail_outcome.3": "（{reason}）",
+    "followup._tail_outcome.4": " · 已处理 {handled}/{total} 个事件 · 用时 {duration}"
   },
   "words": {
     "decision.approve_phrases": [
