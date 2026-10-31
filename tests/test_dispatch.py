@@ -1,3 +1,4 @@
+import types
 import unittest
 import zoneinfo
 
@@ -6,7 +7,11 @@ from kage.core import dispatch as D
 
 def core(language='en', **over):
     args = dict(tz=zoneinfo.ZoneInfo('Asia/Shanghai'), tz_name='Asia/Shanghai', owner_key='owner', owner_name='Mira',
-                run_id_env='TEST_RUN_ID', task_env='TEST_TASK', hops_env='TEST_HOPS', run_context_env='TEST_RUN_CONTEXT')
+                run_id_env='TEST_RUN_ID', task_env='TEST_TASK', hops_env='TEST_HOPS', run_context_env='TEST_RUN_CONTEXT',
+                probe_dir_prefix='test-probe-', runner='/nonexistent/runner.py', build_command=lambda *a, **kw: ['true'],
+                parse_run_log=lambda *a, **kw: {}, prompt_layout=lambda *a, **kw: {}, lean_claude=lambda *a, **kw: None,
+                claude_settings=lambda *a, **kw: {}, rc_exports=lambda *a, **kw: {}, owner_user=lambda rt: 'U0000TEST01',
+                ask_owner=lambda rt: None)
     return D.DispatchCore(language, **{**args, **over})
 
 
@@ -42,6 +47,32 @@ class DispatchCoreTest(unittest.TestCase):
         self.assertEqual(c._waited(7200), 'waited 2 h')
         env = c.strip_agent_env({'TEST_RUN_ID': 'r1', 'CLAUDE_CODE_X': '1', 'CODEX_THREAD_ID': 't', 'PATH': '/bin'})
         self.assertEqual(env, {'PATH': '/bin'})
+
+
+class DispatcherTest(unittest.TestCase):
+    def setUp(self):
+        import sqlite3
+        self.db = sqlite3.connect(':memory:')
+        self.db.row_factory = sqlite3.Row
+        self.db.executescript('CREATE TABLE events (id TEXT PRIMARY KEY, watch_id TEXT, status TEXT, receipt TEXT, '
+                              'received REAL);')  # the runtime's table the dispatcher indexes
+        self.core = core()
+        D.initialize(self.db)
+
+    def test_the_store_follows_the_owner_key(self):
+        self.assertIn("'needs_owner'", self.core.holding.__repr__())
+        self.assertEqual((self.core.takeover_actor, self.core.takeover_reason), ('owner-terminal', 'owner_takeover'))
+        self.assertTrue({'dispatches', 'consumer_runs', 'consumer_leases'} <= {
+            r[0] for r in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")})
+
+    def test_a_dispatcher_holds_the_core_and_its_seams(self):
+        rt = types.SimpleNamespace(__file__='/nonexistent/runtime.py', liveness=None)
+        d = D.Dispatcher(self.db, '/tmp/kage-test.sqlite', rt, probe=object(), spawn=lambda *a: 1,
+                         pid_start=lambda pid: None, killer=lambda pid, sig: None, clock=lambda: 1.0, core=self.core)
+        self.assertIs(d.core, self.core)
+        self.assertEqual(d.runs_root.name, 'runs')
+        self.assertFalse(d.alive(None, None))
+        self.assertTrue(isinstance(D.Dispatcher.__dict__['_step'], staticmethod))
 
 
 if __name__ == '__main__':
