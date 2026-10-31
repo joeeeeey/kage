@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import types
 import unittest
+import unittest.mock
 import zoneinfo
 
 from kage.core import intake as I
@@ -17,7 +18,9 @@ def core(**over):
     args = dict(tz=zoneinfo.ZoneInfo('Asia/Shanghai'), owner_key='owner', owner_name='Mira', owner_slack_user=OWNER,
                 bot_user=BOT, app_id=APP, archive_url='https://example.slack.com/archives',
                 known_channels={'#ops': 'C0000OPS001'}, ticket_ref_re=re.compile(r'\b(TEST-\d{1,6})\b', re.I),
-                agent_event_type='test_agent_post', ticket_ref_reason='ticket_ref')
+                agent_event_type='test_agent_post', ticket_ref_reason='ticket_ref', run_id_env='TEST_RUN_ID',
+                workspace_bootstrap=lambda *a, **kw: {'workspace': '/nonexistent'}, owner_user=lambda rt: OWNER,
+                ask_owner=lambda rt: None)
     return I.IntakeCore('en', **{**args, **over})
 
 
@@ -148,6 +151,54 @@ class EngineTest(unittest.TestCase):
             budget.take('conversations.history')
         self.assertEqual(self.core.ask_kind_zh['watch'], 'waiting for their reply')
         self.assertIn('Mira', self.core.window_why)
+
+
+class CommandsTest(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(':memory:')
+        self.db.row_factory = sqlite3.Row
+        self.core = core()
+        self.core.initialize(self.db)
+        self.db.execute("INSERT INTO intake_bursts (burst_id, conv_key, channel, conv_type, sender, first_ts, last_ts, "
+                        "msg_count, refs, state, event_id, created_at, updated_at) VALUES "
+                        "('in00000000000001','D1','D0000DM0001','im','U0000ADA001','1.0','1.0',1,'[\"1.0\"]','routed',"
+                        "'e1',0,0)")
+        rt = types.SimpleNamespace(transaction=lambda db: db, asks=types.SimpleNamespace(check_secret_free=lambda *t: None),
+                                   envelopes=types.SimpleNamespace(people_path=lambda: Path('/nonexistent')))
+        self.rt = rt
+
+    def test_an_owner_keyed_keyword_and_the_owner_default(self):
+        b = dict(self.db.execute('SELECT * FROM intake_bursts').fetchone())
+        with unittest.mock.patch.object(I, 'time', types.SimpleNamespace(time=lambda: 100.0)):
+            rid = self.core.record_triage(self.rt, self.db, b, intent='request', clarity='clear', disposition='log',
+                                          needs_owner=True, enforce=False)
+        row = self.db.execute('SELECT needs_owner, recorded_by FROM triage_records WHERE id=?', (rid,)).fetchone()
+        self.assertEqual(tuple(row), (1, 'owner'))  # the owner's key as the default author
+        rid2 = self.core.record_triage(self.rt, self.db, b, intent='request', clarity='clear', disposition='log',
+                                       recorded_by='inbox-task', enforce=False, now=101.0)
+        self.assertEqual(self.db.execute('SELECT recorded_by FROM triage_records WHERE id=?', (rid2,)).fetchone()[0],
+                         'inbox-task')
+        mira = core(owner_key='mira')  # callers name the flag with the owner's key: needs_mira
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        mira.initialize(db)
+        db.execute("INSERT INTO intake_bursts SELECT * FROM (SELECT 'in00000000000002','D1','D0000DM0001','im',NULL,"
+                   "'U0000ADA001','person','1.0','1.0',1,'[]',NULL,NULL,NULL,NULL,NULL,0,NULL,NULL,NULL,NULL,'routed',NULL,"
+                   "NULL,NULL,NULL,'e2',NULL,0,NULL,0,NULL,NULL,0,NULL)")
+        b2 = dict(db.execute('SELECT * FROM intake_bursts').fetchone())
+        rid3 = mira.record_triage(self.rt, db, b2, intent='request', clarity='clear', disposition='log', needs_mira=True,
+                                  enforce=False, now=102.0)
+        self.assertEqual(tuple(db.execute('SELECT needs_mira, recorded_by FROM triage_records WHERE id=?', (rid3,)).fetchone()),
+                         (1, 'mira'))
+
+    def test_option_labels_and_the_brief_in_the_owner_language(self):
+        self.assertEqual([o.split('=')[0] for o in self.core.brief_options], ['self', 'draft', 'research', 'ignore'])
+        zh = I.IntakeCore('zh-CN', **{k: getattr(self.core, k) for k in (
+            'tz', 'owner_slack_user', 'bot_user', 'app_id', 'archive_url', 'known_channels', 'ticket_ref_re',
+            'agent_event_type', 'ticket_ref_reason', 'run_id_env', 'workspace_bootstrap', 'owner_user', 'ask_owner')},
+            owner_key='owner', owner_name='Mira')
+        self.assertEqual(zh.brief_options[0], 'self=我来回:other')
+        self.assertTrue(all(len(o.split('=')[1].rsplit(':', 1)[0]) <= 30 for o in self.core.brief_options))
 
 
 if __name__ == '__main__':

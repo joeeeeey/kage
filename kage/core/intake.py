@@ -1,17 +1,19 @@
-"""Intake (K11a core, K11b engine): the pure helpers of the intake — channel names, permalinks, message text
-and digests, ticket / PR references, alert fingerprints, local times — the people-registry handling fields
-and display names, the reader-language gate and the owner's private notes guard; and the engine inside the
-supervisor: Slack discovery (search, conversation cursors, exact fetches, per-endpoint backoff, a call
-budget), the filter, bursts (alert dedupe, DM settle), deterministic routing, delivery (a refs-only file and
-an intake event) and request bindings. `rt` is the loaded runtime module.
+"""Intake: the pure helpers, the reader-language gate and the owner's notes guard (K11a); the engine inside the
+supervisor (K11b); and the inbox / oncall commands the agents use (K11c): triage records, context and
+reconcile, the send-once ledger and replies as the owner, launch / forward / hand-off, the owner's brief /
+draft / incident cards, request-binding migration, status, probe and smoke.
+Creating a task workspace is the deployment's (a hook). `rt` is the loaded runtime module.
 """
 import datetime as dt
+import errno
 import fnmatch
+import functools
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import socket
 import sys
 import tempfile
 import time
@@ -21,6 +23,19 @@ import urllib.parse
 import uuid
 
 from kage import locale
+
+_OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
+
+
+def _owner_kwargs(fn):
+    """A method whose keyword names carry the owner's key (`needs_<key>`) takes them under the generic name
+    (`needs_owner`)."""
+    @functools.wraps(fn)
+    def call(self, *args, **kw):
+        pattern = re.compile(rf'(?<![a-z0-9]){re.escape(self.key)}(?![a-z0-9])')
+        return fn(self, *args, **{pattern.sub('owner', k): v for k, v in kw.items()})
+    return call
+
 
 SLACKBOT = 'USLACKBOT'
 
@@ -40,10 +55,16 @@ BURST_ID_RE = re.compile(r'in[0-9a-f]{14}')
 EVENT_ID_RE = re.compile(r'[0-9a-f]{24}')
 
 
+RECORD_ID_RE = re.compile(r'tr[0-9a-f]{14}')
+
+
 ALLOWED_SUBTYPES = (None, 'file_share', 'thread_broadcast', 'bot_message', 'me_message')
 
 
 STATE_KEY = 'intake_state'
+
+
+BOOTSTRAP_KEY = 'intake_bootstrap'
 
 
 SEARCH_COUNT = 50
@@ -110,13 +131,40 @@ AUTH_ERRORS = ('invalid_auth', 'not_authed', 'token_revoked', 'token_expired', '
 CHANNEL_ERRORS = ('channel_not_found', 'not_in_channel', 'is_archived', 'thread_not_found', 'message_not_found')
 
 
+INTENTS = ('request', 'question', 'directive', 'follow_up', 'fyi', 'chit_chat', 'alert', 'other')
+
+
+CLARITIES = ('clear', 'partial', 'vague')
+
+
 REQUEST_STYLES = ('standard', 'strategic_directive')
 
 
 HANDLING_FIELDS = ('request_style', 'auto_execute')
 
 
+NO_AUTO_REFUSED = ('launch',)                                 # auto_execute=false: no launch without the owner
+
+
 DEFAULT_ACK = '收到，在弄～'
+
+
+SEND_KINDS = ('intake_reply', 'intake_ack')  # P38 (F29): what intake posts AS THE OWNER to a burst's requester
+
+
+AGAIN_ERROR = 'already_replied_to_this_burst_use_--again_to_send_another'
+
+
+SMOKE_USER = 'USMOKEINTAKE'
+
+
+SMOKE_DM = 'D0SMOKEINTAKE'
+
+
+SMOKE_ONCALL = 'C0SMOKEONCALL'
+
+
+SMOKE_TASK_PREFIX = 'smoke-dispatch-intake-'
 
 
 def parse_permalink_thread(permalink):
@@ -1570,6 +1618,35 @@ class Intake:
             return None
 
 
+def _cfg(rt):
+    return rt.worker_config.load()[0]
+
+
+def burst(db, ident):
+    text = str(ident or '').strip()
+    if BURST_ID_RE.fullmatch(text):
+        row = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (text,)).fetchone()
+    elif EVENT_ID_RE.fullmatch(text):
+        row = db.execute('SELECT * FROM intake_bursts WHERE event_id=?', (text,)).fetchone()
+    else:
+        raise ValueError('burst_must_be_a_burst_id_or_its_event_id')
+    if row is None:
+        raise ValueError('unknown_burst')
+    return row
+
+
+def _handling(rt, b):
+    """Burst guard facts: captured at burst creation, OR-ed with the registry now (the stricter one wins)."""
+    style, auto = b['person_style'] or 'standard', None if b['auto_execute'] is None else bool(b['auto_execute'])
+    if b['sender'] and USER_RE.fullmatch(str(b['sender'])):
+        now = load_handling(rt.envelopes.people_path()).get(b['sender'], {})
+        if now.get('request_style') == 'strategic_directive':
+            style = 'strategic_directive'
+        if now.get('auto_execute') is False:
+            auto = False
+    return style, auto, guards(style, auto)
+
+
 def binding_key(conv_type, thread_root, first_ts, sender):
     """intake_bindings.thread_root for a conversation: the request's thread — its thread, or (a top-level DM / group
     DM message, a channel request) the thread under the request message itself (its first ts). P39: never a whole DM
@@ -1613,12 +1690,206 @@ def by_window(db, b, reason=None):
         "AND reason='our_agent' LIMIT 1", (b['channel'], root, b['channel'], root)).fetchone())
 
 
+class AlreadyReplied(ValueError):
+    """The burst already has a reply / ack as the owner that no later message of the requester followed."""
+
+    def __init__(self, prior):
+        self.prior = prior
+        parts = [f"{s['kind']} {s['state']} at {s['at']} by {s['by'] or 'an_earlier_run'}"
+                 + (f" ts {s['ts']}" if s['ts'] else '') for s in prior[-3:]]
+        super().__init__(f'{AGAIN_ERROR}: ' + '; '.join(parts))
+
+
+def _public_sends(sends):
+    return [{k: s[k] for k in ('kind', 'state', 'at', 'ts', 'by')} for s in sends]
+
+
+def _conversation(b):
+    """SQL filter on `events e LEFT JOIN event_sources s` for the burst's conversation: its reply thread, else the DM /
+    group-DM top level."""
+    thread = _reply_thread(b)
+    return ('e.channel=? AND s.root=?', (b['channel'], thread)) if thread else ('e.channel=?', (b['channel'],))
+
+
+def _followups(db, b):
+    """The requester's later messages a watch delivered in the burst's conversation (continuations that got no burst of
+    their own), oldest first: {id, ts, top} (`top`: a DM / group-DM top-level message, not a thread reply). Only the
+    requester's own messages count — never the owner's or another person's — and nothing after the requester's NEXT burst
+    here (that burst has its own id and its own answer)."""
+    thread, last = _reply_thread(b), float(b['last_ts'])
+    nxt = db.execute("SELECT min(CAST(first_ts AS REAL)) FROM intake_bursts WHERE channel=? AND sender=? AND "
+                     "burst_id!=? AND state IN ('open','sealed','waiting','routed') AND CAST(first_ts AS REAL)>? AND "
+                     + ('thread_root=?' if thread else 'thread_root IS NULL'),
+                     (b['channel'], b['sender'], b['burst_id'], last, *([thread] if thread else []))).fetchone()[0]
+    where, args = _conversation(b)
+    out = []
+    for r in db.execute('SELECT e.id, e.ts, s.root FROM events e LEFT JOIN event_sources s ON s.event_id=e.id '
+                        'WHERE e.author=? AND ' + where, (b['sender'], *args)):
+        if TS_RE.fullmatch(str(r['ts'])) and float(r['ts']) > last and (nxt is None or float(r['ts']) < nxt):
+            out.append({'id': r['id'], 'ts': float(r['ts']), 'top': r['root'] in (None, r['ts'])})
+    return sorted(out, key=lambda f: f['ts'])
+
+
+def _own_scope(b, task_id):
+    """The task the burst was handed to (launch / forward / oncall incident) answers on its own: only ITS earlier
+    sends make a repeat, not the triager's ack or reply before the handoff. For everyone else every reply / ack does
+    (None)."""
+    return task_id if task_id and task_id == b['handled_task'] and task_id != b['target_task'] else None
+
+
+def _never_posted(exc):
+    """P38 (F29): the post certainly never reached Slack — Slack refused it (ok:false, HTTP 4xx) or no connection was
+    made (refused, DNS / name resolution, no route). Anything else (timeout, reset, 5xx, a killed run) may have
+    landed."""
+    if re.fullmatch(r'Slack API error: [a-z_]+', str(exc)):
+        return True
+    if isinstance(exc, urllib.error.HTTPError):
+        return 400 <= exc.code < 500
+    # Only a URLError's reason proves the request never left: urllib wraps connect-time failures; the same OSError
+    # raised raw comes while reading the response, after Slack may already have posted.
+    err = exc.reason if isinstance(exc, urllib.error.URLError) else None
+    return isinstance(err, (ConnectionRefusedError, socket.gaierror)) or (
+        isinstance(err, OSError) and err.errno in (errno.ENETUNREACH, errno.EHOSTUNREACH, errno.ENETDOWN))
+
+
+def _bind(rt, db, b, task_id, who, now, want_watch=True, mark_handled=True):
+    """Bind the burst's REQUEST to `task_id` (router rule 1) and close its not-yet-routed siblings in that thread.
+    P39 rule 1: the request's own thread (root = the request message ts for a top-level DM / group-DM / channel
+    message), never the whole DM; replies in it reach the task (a thread watch on it, and this binding once that watch
+    is gone). Other top-level messages of the same person are routed one by one (route_burst) — F12: they are never
+    marked covered here, so none is silently lost. No expiry: released when the task closes (Intake.release_closed)."""
+    key = binding_key(b['conv_type'], b['thread_root'], b['first_ts'], b['sender'])
+    peer = b['sender'] if b['sender'] and USER_RE.fullmatch(str(b['sender'])) else None
+    watch = bool(want_watch and peer and not b['smoke'])
+    with rt.transaction(db):
+        db.execute('INSERT OR REPLACE INTO intake_bindings (channel,thread_root,task_id,burst_id,conv_type,peer,since,'
+                   'want_watch,watch_id,error,created_at,created_by,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                   (b['channel'], key, task_id, b['burst_id'], b['conv_type'], peer, b['last_ts'], int(watch), None, None,
+                    now, who, None))
+        if watch:
+            # Not-yet-routed bursts IN the request thread: the thread watch (since = this burst's last ts) delivers them.
+            db.execute("UPDATE intake_bursts SET state='covered',error='bound_to_'||?,updated_at=? WHERE channel=? AND "
+                       "thread_root=? AND state IN ('open','sealed','waiting') AND burst_id!=?",
+                       (task_id, now, b['channel'], key, b['burst_id']))
+        if mark_handled:
+            db.execute('UPDATE intake_bursts SET handled_task=?,updated_at=? WHERE burst_id=?',
+                       (task_id, now, b['burst_id']))
+    return db.execute('SELECT * FROM intake_bindings WHERE channel=? AND thread_root=?', (b['channel'], key)).fetchone()
+
+
+def _slugify(text):
+    raw = re.sub(r'[^a-z0-9]+', '-', str(text).lower()).strip('-')
+    return '-'.join([w for w in raw.split('-') if w][:10])
+
+
+def _smoke_workspace(rt, title, brief, now):
+    stamp = time.strftime('%Y%m%d-%H%M%S', time.gmtime(now))
+    path = rt.registry.smoke_root() / f'{SMOKE_TASK_PREFIX}{stamp}-{uuid.uuid4().hex[:4]}'
+    path.mkdir(parents=True, mode=0o700)
+    (path / 'history' / 'notes').mkdir(parents=True)
+    (path / 'goal.md').write_text(f'# TEST {title}\n\nThrowaway workspace created by smoke-intake. Nothing here is real '
+                                  'work; never touch anything outside this directory and never send Slack messages.\n\n'
+                                  f'## Brief\n\n{brief}\n', encoding='utf-8')
+    (path / 'status.md').write_text(f'<!-- rev: 1 · last-writer: smoke-intake · at: {rt.task_memory.utc_iso(now)} -->\n'
+                                    '# Status\n\n- TEST workspace created by smoke-intake (intake-launch).\n',
+                                    encoding='utf-8')
+    for name in ('AGENTS.md', 'CLAUDE.md'):
+        (path / name).write_text('# TEST workspace\n\nRead status.md. Only do what the brief asks. Never send Slack '
+                                 'messages. Never touch files outside this directory.\n', encoding='utf-8')
+    return path
+
+
+def _conv_type(rt, db, channel):
+    if str(channel).startswith('D'):
+        return 'im'
+    row = db.execute('SELECT conv_type FROM intake_convs WHERE channel=?', (channel,)).fetchone()
+    return 'mpim' if row and row['conv_type'] == 'mpim' else 'channel'
+
+
+def dm_bindings_migrate(rt, db, apply=False, now=None):
+    """P39 install step: the pre-P39 whole-DM bindings (thread_root '' for a DM, 'u:<sender>' for one person's whole
+    group-DM top level) become bindings of the REQUEST each was made for (its burst's thread, else the request message
+    itself); their whole-DM watches stop when nothing is unhandled on them (stop_reason p39_request_binding — else they
+    are left running: with DM routing on they no longer capture new top-level messages and expire 48 h after their
+    task's last own message). The new request-thread watch starts from the migration time (nothing old is re-read).
+    Other tasks' whole-DM watches are only reported. Dry run unless `apply`; one transaction; idempotent."""
+    now = time.time() if now is None else now
+    legacy = db.execute("SELECT * FROM intake_bindings WHERE (thread_root='' OR thread_root LIKE 'u:%') AND (error IS "
+                        "NULL OR error='p39_whole_dm_binding_run_dm-bindings-migrate') ORDER BY channel, created_at").fetchall()
+    watches = [json.loads(r[0]) for r in db.execute("SELECT data FROM watches WHERE json_extract(data,'$.state')='running'")]
+
+    def occupying():
+        pairs = set()
+        for r in db.execute("SELECT task_id, channel FROM intake_bindings WHERE (thread_root='' OR thread_root LIKE "
+                            "'u:%') AND error IS NULL AND (expires_at IS NULL OR expires_at>?)", (now,)):
+            pairs.add((r['task_id'], r['channel']))
+        for r in db.execute("SELECT data FROM watches WHERE json_extract(data,'$.state')='running'"):
+            w = json.loads(r[0])
+            if w.get('kind', 'peer') == 'peer' and ((str(w.get('channel')).startswith('D') and not w.get('thread')) or
+                                                     w.get('dm')):
+                pairs.add((rt.registry.task_id_for_cwd(w.get('cwd')), w.get('dm') or w.get('channel')))
+        return sorted([t or '-', c] for t, c in pairs)
+    report = {'ok': True, 'dry_run': not apply, 'at': now, 'occupying_before': occupying(), 'bindings': [],
+              'other_whole_dm_watches': []}
+    binding_watches = set()
+    with rt.transaction(db):
+        for r in legacy:
+            b = db.execute('SELECT first_ts, thread_root FROM intake_bursts WHERE burst_id=?', (r['burst_id'],)).fetchone()
+            new_key = (b['thread_root'] or b['first_ts']) if b else None
+            item = {'channel': r['channel'], 'task_id': r['task_id'], 'peer': r['peer'], 'legacy_key': r['thread_root'],
+                    'request_thread': new_key, 'watch_id': r['watch_id'], 'watch_action': None,
+                    'binding_action': 'convert' if new_key else 'expire_no_request_found'}
+            if r['watch_id']:
+                binding_watches.add(r['watch_id'])
+                row = db.execute('SELECT data FROM watches WHERE id=?', (r['watch_id'],)).fetchone()
+                w = json.loads(row[0]) if row else None
+                unhandled = db.execute("SELECT count(*) FROM events WHERE watch_id=? AND status!='handled'",
+                                       (r['watch_id'],)).fetchone()[0] if w else 0
+                item['watch_action'] = ('missing' if w is None else 'already_' + w['state'] if w['state'] != 'running'
+                                        else 'left_running_unhandled_events' if unhandled else 'stop')
+                if apply and item['watch_action'] == 'stop':
+                    w.update(state='stopped', stop_reason='p39_request_binding', stopped_at=now)
+                    rt.save(db, w)
+            if apply:
+                if new_key and not db.execute('SELECT 1 FROM intake_bindings WHERE channel=? AND thread_root=?',
+                                              (r['channel'], new_key)).fetchone():
+                    db.execute('INSERT INTO intake_bindings (channel,thread_root,task_id,burst_id,conv_type,peer,since,'
+                               'want_watch,watch_id,error,created_at,created_by,expires_at) VALUES '
+                               "(?,?,?,?,?,?,?,?,NULL,NULL,?,'p39_migration',NULL)",
+                               (r['channel'], new_key, r['task_id'], r['burst_id'], r['conv_type'], r['peer'],
+                                f'{now:.6f}', int(bool(r['peer']) and (r['expires_at'] is None or r['expires_at'] > now)),
+                                now))
+                db.execute("UPDATE intake_bindings SET expires_at=?,error='p39_migrated_to_request_thread' WHERE "
+                           'channel=? AND thread_root=?', (now, r['channel'], r['thread_root']))
+            report['bindings'].append(item)
+        for w in watches:
+            if w['id'] in binding_watches or w.get('kind', 'peer') != 'peer':
+                continue
+            if (str(w.get('channel')).startswith('D') and not w.get('thread')) or w.get('dm'):
+                report['other_whole_dm_watches'].append({
+                    'watch_id': w['id'], 'task_id': rt.registry.task_id_for_cwd(w.get('cwd')), 'dm': w.get('dm') or
+                    w.get('channel'), 'peers': w.get('peers'), 'lifecycle': w.get('lifecycle'),
+                    'fixed_deadline': w.get('fixed_deadline'), 'action': 'left_running'})
+    report['occupying_after'] = occupying() if apply else None
+    return report
+
+
+def _card_question(b, first, body, limit=1500):
+    """P3.1 copy standard: one plain sentence first (code), then the agent's text; the source link is in the footer."""
+    head = ('🧪 TEST · ' if b['smoke'] else '') + first + '\n'
+    body = str(body).strip()
+    if len(head) + len(body) > limit:
+        raise ValueError(f'card_body_too_long_max_{limit - len(head)}_characters')
+    return head + body
+
+
 class IntakeCore:
     """The owner-bound half of the intake: the owner's Slack user, bot and app, the workspace archive URL, the
     channel names, the ticket pattern and time zone; the owner's private notes and the send guard; the
-    store, the request helpers and the owner-facing hints the engine (Intake, which holds one) uses."""
+    store, the request helpers and the owner-facing hints the engine (Intake, which holds one) uses; the
+    commands in the owner's words and the deployment's workspace hook."""
 
-    def __init__(self, language, *, tz, owner_key, owner_name, owner_slack_user, bot_user, app_id, archive_url, known_channels, ticket_ref_re, agent_event_type, ticket_ref_reason):
+    def __init__(self, language, *, tz, owner_key, owner_name, owner_slack_user, bot_user, app_id, archive_url, known_channels, ticket_ref_re, agent_event_type, ticket_ref_reason, run_id_env, workspace_bootstrap, owner_user, ask_owner):
         self.language = language
         self.tz = tz
         self.owner_slack_user = owner_slack_user
@@ -1629,8 +1900,18 @@ class IntakeCore:
         self.ticket_ref_re = ticket_ref_re
         self.agent_event_type = agent_event_type
         self.ticket_ref_reason = ticket_ref_reason
+        self.run_id_env = run_id_env
+        self.workspace_bootstrap = workspace_bootstrap
+        self.owner_user = owner_user
+        self.ask_owner = ask_owner
         self.key, self.name = owner_key, owner_name
         self.mention_query = f'<@{self.owner_slack_user}>'
+        self.dispositions = ('forward', 'launch', 'answer', 'ask_requester', 'brief', f'card_{self.key}', 'log', 'ignore',
+                             'investigate', 'escalate')
+        self.strategic_only = ('brief', 'log', 'ignore', f'card_{self.key}')     # strategic directives: never auto-execute or reply
+        self.brief_options = [self.msg('intake.brief_options.1'), self.msg('intake.brief_options.2'), self.msg('intake.brief_options.3'), self.msg('intake.brief_options.4')]
+        self.draft_options = [self.msg('intake.draft_options.1'), self.msg('intake.draft_options.2'), self.msg('intake.draft_options.3')]
+        self.incident_options = [self.msg('intake.incident_options.1'), self.msg('intake.incident_options.2'), self.msg('intake.incident_options.3')]
         self.smoke_text = {
                  'request': (self.msg('intake.smoke_text.request')),
                  'strategic': (self.msg('intake.smoke_text.strategic')),
@@ -1695,6 +1976,7 @@ class IntakeCore:
 '''
         self.ask_kind_zh = {'ask_card': self.msg('intake.ask_kind_zh.ask_card'), 'watch': self.msg('intake.ask_kind_zh.watch'), 'mention': self.msg('intake.ask_kind_zh.mention')}
         self.window_why = (f"it reached you only through your conversation window (you posted in this DM in the last minutes) and is not in a thread of yours: it may be {self.name}'s own chat with this person")
+        self.where_zh = {'im': self.msg('intake.where_zh.im'), 'mpim': self.msg('intake.where_zh.mpim'), 'channel': self.msg('intake.where_zh.channel')}
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1827,8 +2109,1057 @@ class IntakeCore:
         names = (cfg or {}).get('delegate_bot_names') or ()
         return name if name and any(fnmatch.fnmatchcase(name.lower(), str(n).lower()) for n in names) else None
 
+    def caller(self, rt, db, b, roles=('target', 'handled'), with_task=False):
+        """'<owner key>' for a manual run (no agent identity), else 'provider:session' of the burst task's current session — or of
+        its running headless run (P38: <owner key>-inbox / <owner key>-oncall run every event in a fresh session that becomes current
+        only when it succeeds). `with_task` also returns the task whose session matched (None for the owner)."""
+        provider, session = rt.claude.actor()
+        if not session:
+            return (self.key, None, None, None) if with_task else (self.key, None, None)
+        tasks = [b['target_task'] if 'target' in roles else None, b['handled_task'] if 'handled' in roles else None]
+        for task_id in [t for t in tasks if t]:
+            row = db.execute('SELECT current_provider,current_session FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+            current = (row['current_provider'], row['current_session']) if row else None
+            if (provider, session) in (current, rt.registry.running_session(db, task_id)):
+                found = (f'{provider}:{session}', provider, session)
+                return (*found, task_id) if with_task else found
+        raise ValueError('caller_must_be_the_current_session_of_the_burst_task')
+
+    def _verified_card(self, db, card_event, burst_id, kind):
+        """(option_id, brief row) of the owner's verified decision on an intake card of this burst."""
+        if not EVENT_ID_RE.fullmatch(str(card_event or '')):
+            raise ValueError('decision_event_must_be_a_card_event_id')
+        brief = db.execute('SELECT * FROM intake_briefs WHERE card_event=?', (card_event,)).fetchone()
+        if brief is None or brief['burst_id'] != burst_id or brief['kind'] != kind:
+            raise ValueError(f'decision_event_is_not_a_{kind}_card_of_this_burst')
+        decision = db.execute('SELECT choice FROM decisions WHERE event_id=?', (card_event,)).fetchone()
+        if decision is None:
+            raise ValueError(f'{self.key}_has_not_decided_this_card_yet')
+        choice = str(decision['choice'])
+        return (choice[4:] if choice.startswith('opt:') else choice), brief
+
+    @_owner_kwargs
+    def record_triage(self, rt, db, b, *, intent, clarity, disposition, target_task=None, confidence=None, basis=None,
+                      needs_owner=False, note=None, recorded_by=_OWNER_DEFAULT, now=None, enforce=True):
+        recorded_by = self.key if recorded_by is _OWNER_DEFAULT else recorded_by
+        now = time.time() if now is None else now
+        if intent not in INTENTS:
+            raise ValueError('intent_must_be_one_of_' + '_'.join(INTENTS))
+        if clarity not in CLARITIES:
+            raise ValueError('clarity_must_be_clear_partial_or_vague')
+        if disposition not in self.dispositions:
+            raise ValueError('disposition_must_be_one_of_' + '_'.join(self.dispositions))
+        if confidence is not None:
+            confidence = float(confidence)
+            if not 0 <= confidence <= 1:
+                raise ValueError('confidence_must_be_between_0_and_1')
+        for value, name, limit in ((basis, 'basis', 200), (note, 'note', 300)):
+            if value is not None and (len(str(value)) > limit or any(ord(c) < 32 and c not in '\t' for c in str(value))):
+                raise ValueError(f'{name}_must_be_one_line_of_at_most_{limit}_characters')
+        rt.asks.check_secret_free(basis, note)
+        if target_task is not None and not rt.worker_config.TASK_ID_RE.fullmatch(str(target_task)):
+            raise ValueError('target_task_must_be_a_task_id')
+        style, _, g = _handling(rt, b)
+        if enforce and g['strategic'] and disposition not in self.strategic_only:
+            raise ValueError(f'strategic_directive_only_brief_log_ignore_or_card_{self.key}_until_{self.key}_decides')
+        if enforce and not g['may_auto_execute'] and disposition in NO_AUTO_REFUSED:
+            raise ValueError(f'auto_execute_false_requires_a_{self.key}_decision_before_launch')
+        record_id = 'tr' + uuid.uuid4().hex[:14]
+        with rt.transaction(db):
+            db.execute(f'INSERT INTO triage_records (id,burst_id,event_id,sender,channel,intent,clarity,disposition,target_task,confidence,basis,needs_{self.key},person_style,note,recorded_by,created_at,smoke) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (record_id, b['burst_id'], b['event_id'], b['sender'], b['channel'], intent, clarity, disposition,
+                        target_task, confidence, basis, int(bool(needs_owner or disposition in ('brief', f'card_{self.key}', 'escalate'))),
+                        style, note, recorded_by, now, int(bool(b['smoke']))))
+        return record_id
+
+    def triage_record_cli(self, rt, db, ident, **kw):
+        b = burst(db, ident)
+        who, _, _ = self.caller(rt, db, b)
+        record_id = self.record_triage(rt, db, b, recorded_by=who, **kw)
+        return {'ok': True, 'record_id': record_id, 'burst_id': b['burst_id'], 'disposition': kw['disposition']}
+
+    def triage_correct(self, rt, db, record_id, disposition=None, note=None, now=None):
+        """the owner's correction of a triage record (never an agent session): kept next to the original."""
+        now = time.time() if now is None else now
+        if rt._agent_session() or os.environ.get(self.run_id_env):
+            raise ValueError(f'only_{self.key}_corrects_triage_records')
+        if not RECORD_ID_RE.fullmatch(str(record_id)):
+            raise ValueError('invalid_record_id')
+        if disposition is not None and disposition not in self.dispositions:
+            raise ValueError('disposition_must_be_one_of_' + '_'.join(self.dispositions))
+        if note is not None and len(note) > 300:
+            raise ValueError('note_must_be_at_most_300_characters')
+        rt.asks.check_secret_free(note)
+        with rt.transaction(db):
+            if db.execute('SELECT 1 FROM triage_records WHERE id=?', (record_id,)).fetchone() is None:
+                raise ValueError('unknown_triage_record')
+            db.execute(f"UPDATE triage_records SET correction=?,corrected_by='{self.key}',corrected_at=? WHERE id=?",
+                       (json.dumps({'disposition': disposition, 'note': note}, ensure_ascii=False), now, record_id))
+        return {'ok': True, 'record_id': record_id, 'correction': {'disposition': disposition, 'note': note}}
+
+    def _ask_view(self, rt, item, reads=None):
+        """One open ask as its reader sees it: the task, what was asked (an ask card's question, else the first line of the
+        post, read live while `reads` lasts; never stored), where (link) and since when."""
+        asked, thread = item['asked'], item['thread']
+        if not asked and reads and reads[0] > 0:
+            reads[0] -= 1
+            try:
+                found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
+                    'channel': item['channel'], 'ts': item['ts'], 'oldest': item['ts'], 'latest': item['ts'],
+                    'inclusive': 'true', 'limit': 2})
+                m = next((x for x in found.get('messages') or [] if isinstance(x, dict) and x.get('ts') == item['ts']), None)
+            except Exception:  # noqa: BLE001 - unreadable: the link still says where
+                m = None
+            if m:
+                asked, thread = first_line(message_text(m)), m.get('thread_ts') or thread
+        return {'task_id': item['task_id'], 'kind': item['kind'], 'asked': asked,
+                'link': self.permalink(item['channel'], item['ts'], thread), 'since': self.local_iso(item['since'])}
+
+    def open_asks_view(self, rt, db, sender, now, task_id=None):
+        reads = [OPEN_ASK_READS]
+        return [self._ask_view(rt, a, reads) for a in Intake(db, rt.DEFAULT_DB, rt, core=self).open_asks(sender, now)
+                if task_id in (None, a['task_id'])]
+
     def handed_as_answer(self, rt, db, b, task_id, cfg, now, route=None, reason=None):
         """P46.3 (R-0013): handed over by an intake task to a task that has an open ask to the sender — a candidate answer
         (a P39 continuation hand-over, with no ask, is not)."""
         return bool(task_id) and handed_by_intake(route or b['route'], reason or b['route_reason'], cfg) and any(
             a['task_id'] == task_id for a in Intake(db, rt.DEFAULT_DB, rt, core=self).open_asks(b['sender'], now))
+
+    def why_you_got_it(self, rt, db, b, task_id, cfg, now, card=None):
+        """P46.3 (R-0013): why a task got this message — <owner key>-inbox handed it over as a possible answer to the task's ask, it
+        is a reply in the thread of the task's ask card (`card`), or it came only through the task's conversation window
+        (by_window) — the ask(s) it may answer, the task's own post there, and the check. None else."""
+        rule = rt.rule_registry.active('send.relevance_ack')
+        handed = b is not None and self.handed_as_answer(rt, db, b, task_id, cfg, now)
+        window = b is not None and not handed and b['target_task'] == task_id and by_window(db, b)
+        if b is not None and str(b['route_reason'] or '').startswith('ask_thread:'):
+            card = db.execute('SELECT * FROM ask_cards WHERE id=?', (b['route_reason'][len('ask_thread:'):],)).fetchone()
+        if not rule or not task_id or task_id in (cfg['inbox_task'], cfg['oncall_task']) or not (handed or card or window):
+            return None
+        asks = self.open_asks_view(rt, db, b['sender'], now, task_id) if handed or window else [self._ask_view(rt, {
+            'task_id': task_id, 'kind': 'ask_card', 'channel': card['channel'], 'ts': card['ts'], 'thread': card['thread'],
+            'since': card['created_at'], 'asked': first_line(card['question'])})]
+        post = window and db.execute('SELECT last_ts, last_at FROM dm_windows WHERE channel=? AND task_id=?',
+                                     (b['channel'], task_id)).fetchone()
+        return {'why': (f'{self.key}-inbox handed this message to you as a possible answer to your ask' if handed else
+                        self.window_why if window else 'a reply in the thread of your ask card'), 'your_asks': asks,
+                **({'your_post': {'link': self.permalink(b['channel'], post['last_ts']), 'at': self.local_iso(post['last_at'])}}
+                   if post else {}),
+                'check': f'{rule["statement"]} {rule["enforcement"]["hint"]}',
+                **({'intake_reply': 'needs --relevant (you checked that it is for you)'} if handed or window else {})}
+
+    def intake_context(self, rt, db, ident, now=None):
+        """The burst's messages read live from Slack (never stored), plus handling guards and allowed actions."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, _, _, acting = self.caller(rt, db, b, with_task=True)
+        style, auto, g = _handling(rt, b)
+        handling = load_handling(rt.envelopes.people_path()).get(b['sender'], {}) if b['sender'] else {}
+        refs = json.loads(b['refs'] or '[]')
+        out = {'ok': True, 'burst_id': b['burst_id'], 'event_id': b['event_id'], 'smoke': bool(b['smoke']),
+               'conversation': {'channel': b['channel'], 'type': b['conv_type'], 'thread_root': b['thread_root'],
+                                'reply_thread': _reply_thread(b)},
+               'sender': {'id': b['sender'], 'kind': b['sender_kind'], 'request_style': style, 'auto_execute': auto,
+                          'tone_hint': handling.get('tone_hint'), 'via': json.loads(b['envelope'] or '{}').get('via')},
+               'guards': g, 'route': {'route': b['route'], 'reason': b['route_reason'], 'target_task': b['target_task'],
+                                      'handled_task': b['handled_task']},
+               'alert': {'fingerprint': b['alert_fp'], 'service': b['alert_service'], 'status': b['alert_state'],
+                         'repeats': b['dup_count']} if b['alert_fp'] else None,
+               'envelope': json.loads(b['envelope']) if b['envelope'] else None, 'reader': who, 'messages': [],
+               # P38 (F29): what an earlier run already posted AS THE OWNER for this burst (a fresh session has no memory of it).
+               f'replied_as_{self.key}': _public_sends(self._sends(db, b))}
+        if b['route'] == 'inbox' and b['conv_type'] in ('im', 'mpim') and b['route_reason'] in INBOX_DM_REASONS:
+            # P39: a new top-level DM routed to <owner key>-inbox — the person's current tasks, to decide `handoff` vs new request.
+            out['related_tasks'] = Intake(db, rt.DEFAULT_DB, rt, core=self).person_tasks(b['channel'], b['sender'], time.time())
+            out['handoff'] = 'handoff --event <this event> --task T (a continuation of one of them; the message refs travel)'
+        if b['smoke']:
+            out['messages'] = [{'ts': ts, 'user': b['sender'], 'origin': 'burst', 'text': self.smoke_text.get(b['smoke_scenario'] or
+                                                                                                      'request', '')}
+                               for ts in refs[:1]]
+        else:
+            token = rt.api_identity()
+            collected, cfg = {}, _cfg(rt)['intake']
+
+            def add(messages, origin):
+                for m in messages or []:
+                    if isinstance(m, dict) and m.get('ts') and m['ts'] not in collected:
+                        via = self.delegate_app(m, cfg) if m.get('user') == b['sender'] else None  # P42.1: the person
+                        collected[m['ts']] = {'ts': m['ts'], 'user': m.get('user'), 'bot': bool(m.get('bot_id')) and not via,
+                                              'via': via,
+                                              'origin': 'burst' if m['ts'] in refs else origin,
+                                              'text': message_text(m)[:4000],
+                                              'files': [f.get('id') for f in m.get('files') or [] if isinstance(f, dict)]}
+            if b['thread_root']:
+                replies = rt.slack.api_call('conversations.replies', token, params={
+                    'channel': b['channel'], 'ts': b['thread_root'], 'limit': 60, 'include_all_metadata': 'true'})
+                add(replies.get('messages'), 'thread')
+            else:
+                span = rt.slack.api_call('conversations.history', token, params={
+                    'channel': b['channel'], 'oldest': b['first_ts'], 'latest': b['last_ts'], 'inclusive': 'true',
+                    'limit': min(100, len(refs) + 20)})
+                add(span.get('messages'), 'between')
+                before = rt.slack.api_call('conversations.history', token, params={
+                    'channel': b['channel'], 'latest': b['first_ts'], 'limit': 5})
+                add(before.get('messages'), 'before')
+            out['messages'] = sorted(collected.values(), key=lambda m: float(m['ts']))[-80:]
+            out['missing'] = [ts for ts in refs if ts not in collected]
+            self._note_read(rt, db, b, who, out['messages'], time.time())  # P38 (F29): what this session has now seen
+            if b['sender_kind'] == 'human':  # P46.2: the language to reply in, shown before anyone writes to them
+                out['reply_language'] = reply_line(rt, db, b['sender'], [m['text'] for m in reversed(out['messages'])
+                                                                        if m['user'] == b['sender']])
+        notes = self.notes_line(rt, b['sender']) if b['sender_kind'] == 'human' else None
+        if notes:  # P47 (R-0011): background, never quoted
+            out[f'{self.key}_notes'] = notes
+        cfg = _cfg(rt)['intake']
+        asks_rule = rt.rule_registry.active('inbox.open_asks')
+        if b['sender_kind'] == 'human' and not b['smoke']:  # P46.3: who is waiting on this person (R-0012 / R-0013)
+            if acting in (None, cfg['inbox_task'], cfg['oncall_task']) and asks_rule:
+                out['open_asks'] = {'person': person_name(rt, db, b['sender']) or b['sender'],
+                                    'asks': self.open_asks_view(rt, db, b['sender'], now), 'how': asks_rule['statement']}
+            why = self.why_you_got_it(rt, db, b, acting, cfg, now)
+            if why:
+                out['why_you_got_it'] = why
+        out['next'] = self._next_steps(b, g, self._unanswered(db, b, _own_scope(b, acting)))
+        return out
+
+    def _next_steps(self, b, g, unanswered=()):
+        # P38 (F29): a fresh session re-handling an already answered burst reads this before it tries to answer again.
+        again = self._answered_note(unanswered)
+        if g['strategic']:
+            return (f'Strategic directive: brief {self.name} only (`intake-brief`). No launch, no reply, no ack until {self.name} picks a button; then follow goal.md (research -> intake-launch --decision-event; draft -> intake-draft then intake-reply --decision-event).') + again
+        steps = ['triage-record', 'intake-forward', 'intake-reply', 'intake-follow + ask', 'intake-brief', f'ask-{self.key}']
+        if g['may_auto_execute']:
+            steps.insert(1, 'intake-launch')
+        if b['alert_fp']:
+            steps.append('oncall-incident')
+        return 'Allowed: ' + ', '.join(steps) + '. Resolve the event after recording the triage.' + again
+
+    def _author_role(self, rt, db, channel, m, sender):
+        """P3.3 reconcile role of one live message: our_agent (our post as the owner) / <owner key> / bot / requester / other."""
+        user = str(m.get('user') or '')
+        meta = m.get('metadata') if isinstance(m.get('metadata'), dict) else {}
+        profile = m.get('bot_profile') if isinstance(m.get('bot_profile'), dict) else {}
+        ledger = db.execute('SELECT 1 FROM agent_sends WHERE channel=? AND ts=?', (channel, m.get('ts'))).fetchone() is not None
+        if meta.get('event_type') == self.agent_event_type or m.get('app_id') == self.app_id or profile.get('app_id') == self.app_id \
+                or user == self.bot_user or ledger:
+            return 'our_agent'   # a message our runtime sent as the owner (or our bot) — never treated as the owner himself
+        if user == self.owner_slack_user:
+            return self.key
+        if m.get('bot_id') or m.get('subtype') == 'bot_message' or not USER_RE.fullmatch(user):
+            return 'bot'
+        return 'requester' if sender and user == str(sender) else 'other'
+
+    def reconcile(self, rt, db, ident, now=None):
+        """P3.3 deterministic 're-read before acting': what has happened in the burst's conversation since the trigger, read
+        live from Slack (never stored). Before the inbox / task session replies AS THE OWNER or cards the owner about an incoming
+        message, it must call this so it never acts on something the owner or the recipient already handled. Returns every message
+        since the trigger with its author role (<owner key> / requester / our_agent / bot / other) and the flags the session judges
+        on; the 'is it already resolved?' judgement is the session's (goal.md), this step is only the re-read."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, _, _, acting = self.caller(rt, db, b, with_task=True)
+        refs = set(json.loads(b['refs'] or '[]'))
+        trigger_ts = b['last_ts']
+        out = {'ok': True, 'burst_id': b['burst_id'], 'event_id': b['event_id'], 'smoke': bool(b['smoke']), 'reader': who,
+               'conversation': {'channel': b['channel'], 'type': b['conv_type'], 'thread_root': b['thread_root'],
+                                'reply_thread': _reply_thread(b)}, 'sender': b['sender'], 'trigger_ts': trigger_ts,
+               f'replied_as_{self.key}': _public_sends(self._sends(db, b))}  # P38 (F29): the send ledger, incl. unknown deliveries
+        if b['smoke']:
+            return {**out, 'messages': [], 'since_trigger': [], f'{self.key}_replied_since': False, 'requester_replied_since': False,
+                    'our_agent_replied_since': False, 'latest_author': None, 'guidance': 'Smoke burst: nothing to reconcile.'}
+        token = rt.api_identity()
+        collected = {}
+
+        def add(messages):
+            for m in messages or []:
+                if isinstance(m, dict) and m.get('ts') and m['ts'] not in collected:
+                    collected[m['ts']] = m
+        thread = b['thread_root'] or (b['first_ts'] if b['conv_type'] == 'channel' else None)
+        if thread:  # a thread reply watch already catches later replies, but re-read live so the owner's own reply is seen now
+            add(rt.slack.api_call('conversations.replies', token, params={
+                'channel': b['channel'], 'ts': thread, 'limit': 80, 'include_all_metadata': 'true'}).get('messages'))
+        else:  # a DM / group-DM top level: history from the first message onward catches the owner's and the sender's later ones
+            add(rt.slack.api_call('conversations.history', token, params={
+                'channel': b['channel'], 'oldest': b['first_ts'], 'inclusive': 'true', 'limit': 80,
+                'include_all_metadata': 'true'}).get('messages'))
+            add(rt.slack.api_call('conversations.history', token, params={
+                'channel': b['channel'], 'latest': b['first_ts'], 'limit': 3}).get('messages'))
+        # P38 (F29): our own answer found in the conversation settles an unknown delivery; the read is this session's
+        # horizon (what it has now seen).
+        self._settle_landed(rt, db, b, collected.values(), now)
+        self._note_read(rt, db, b, who, collected.values(), now)
+        messages = []
+        for m in sorted(collected.values(), key=lambda m: float(m['ts'])):
+            messages.append({'ts': m['ts'], 'role': self._author_role(rt, db, b['channel'], m, b['sender']), 'user': m.get('user'),
+                             'origin': 'trigger' if m['ts'] in refs else
+                                       'since' if float(m['ts']) > float(trigger_ts) else 'before',
+                             'text': message_text(m)[:4000]})
+        since = [m for m in messages if m['origin'] == 'since']
+        ours = any(m['role'] == 'our_agent' for m in since)
+        again = self._answered_note(self._unanswered(db, b, _own_scope(b, acting)), reconciled=True)
+        if ours and not again:  # an answer as the owner after the trigger that a newer requester message (or another task) owns
+            again = (f' Our agent already posted as {self.name} after the trigger (our_agent_replied_since, replied_as_{self.key}): read it and answer only what is still open — never repeat it.')
+        return {**out, f'replied_as_{self.key}': _public_sends(self._sends(db, b)), 'messages': messages[-80:], 'since_trigger': since,
+                f'{self.key}_replied_since': any(m['role'] == self.key for m in since),
+                'requester_replied_since': any(m['role'] == 'requester' for m in since),
+                'our_agent_replied_since': ours,
+                'latest_author': messages[-1]['role'] if messages else None,
+                'guidance': (self.msg('intake.reconcile.1', owner=self.name)) + again}
+
+    def _sends(self, db, b, kinds=SEND_KINDS):
+        """What this runtime already posted AS THE OWNER for the burst, oldest first: intake_sends (in-flight and unknown
+        deliveries too) plus agent_sends ledger rows written by older code. Metadata only, never a body. `horizon`: what the
+        sending session had read live (_horizon); a row without one (older code) is taken to have seen only the burst."""
+        marks = ','.join('?' * len(kinds))
+        last = float(b['last_ts'])
+        out, known = [], set()
+        for r in db.execute(f'SELECT * FROM intake_sends WHERE burst_id=? AND kind IN ({marks})', (b['burst_id'], *kinds)):
+            known.add((r['channel'], r['ts']))
+            horizon = r['horizon'] if r['horizon'] is not None else last
+            out.append({'kind': r['kind'], 'state': r['state'], 'at': self.local_iso(r['created_at']), 'ts': r['ts'],
+                        'by': r['task_id'] or r['actor'], 'task': r['task_id'], 'created': r['created_at'],
+                        'horizon': horizon, 'actor': r['actor']})
+        for r in db.execute(f'SELECT * FROM agent_sends WHERE ref=? AND kind IN ({marks})', (b['burst_id'], *kinds)):
+            if (r['channel'], r['ts']) not in known:
+                out.append({'kind': r['kind'], 'state': 'sent', 'at': self.local_iso(r['created']), 'ts': r['ts'], 'by': None,
+                            'task': None, 'created': r['created'], 'horizon': last, 'actor': None})
+        return sorted(out, key=lambda s: s['created'])
+
+    def _horizon(self, db, b, actor, task_id, now):
+        """P38 (F29): how far the sending session had READ the burst's conversation live when it answered (its own
+        intake-context / intake-reconcile reads, else just the burst); the owner by hand sees Slack (the send time). What its
+        runs were handed is checked per message (_seen_by), so a follow-up neither read nor handed stays answerable."""
+        if not actor or actor == self.key:
+            return now
+        read = db.execute('SELECT seen_ts FROM intake_reads WHERE burst_id=? AND actor=?',
+                          (b['burst_id'], actor)).fetchone()
+        return max([float(b['last_ts'])] + ([float(read[0])] if read else []))
+
+    def _seen_by(self, db, b, send, f):
+        """P38 (F29): had the session behind `send` seen follow-up `f` when it answered? Read live up to its horizon — a
+        thread read covers the thread, a DM / group-DM top-level read only top-level messages (thread replies arrive by
+        watch, maybe out of order) — or handed to one of its runs before the answer."""
+        by_hand = send['actor'] in (None, self.key)
+        if f['ts'] <= send['horizon'] and (by_hand or _reply_thread(b) or f['top']):
+            return True
+        if by_hand or ':' not in str(send['actor']):
+            return False
+        provider, _, session = send['actor'].partition(':')
+        return db.execute("SELECT 1 FROM consumer_runs r JOIN json_each(CASE WHEN json_valid(r.event_ids) THEN r.event_ids "
+                          "ELSE '[]' END) j WHERE r.provider=? AND r.session=? AND j.value=? AND r.started_at<=? LIMIT 1",
+                          (provider, session, f['id'], send['created'])).fetchone() is not None
+
+    def _note_read(self, rt, db, b, who, messages, now):
+        """P38 (F29): remember the newest message `who` read live for the burst (see _horizon). the owner by hand: not needed."""
+        stamps = [float(m['ts']) for m in messages if TS_RE.fullmatch(str(m.get('ts') or ''))]
+        if who == self.key or not stamps:
+            return
+        with rt.transaction(db):
+            db.execute('INSERT INTO intake_reads (burst_id,actor,seen_ts,read_at) VALUES (?,?,?,?) ON CONFLICT(burst_id,'
+                       'actor) DO UPDATE SET seen_ts=max(seen_ts,excluded.seen_ts),read_at=excluded.read_at',
+                       (b['burst_id'], who, max(stamps), now))
+
+    def _unanswered(self, db, b, own=None):
+        """The earlier sends that make a new one a repeat: those whose session had seen EVERY follow-up of the requester
+        so far (_seen_by). A new burst has its own id, and a follow-up an answer had not seen is answered without --again.
+        `own`: only that task's sends count (_own_scope)."""
+        followups = _followups(db, b)
+        return [s for s in self._sends(db, b) if (own is None or s['task'] == own) and
+                all(self._seen_by(db, b, s, f) for f in followups)]
+
+    def _answered_note(self, unanswered, reconciled=False):
+        """P38 (F29): the guidance intake-context and intake-reconcile give for an already answered burst."""
+        if not unanswered:
+            return ''
+        note = (f' Already answered as {self.name} (replied_as_{self.key}) and nothing newer came from the requester: do not reply or ack again; intake-reply refuses and intake-launch skips the ack unless --again (a deliberate NEW message only).')
+        if any(s['state'] != 'sent' for s in unanswered):
+            note += (' A sending / delivery_unknown answer was not found among these messages: if it is really not in the '
+                     'conversation, resend it with --again.' if reconciled else
+                     ' A sending / delivery_unknown answer may not have landed: intake-reconcile marks it sent when it '
+                     'finds it; resend with --again only if it is not in the conversation.')
+        return note
+
+    def _settle_landed(self, rt, db, b, messages, now):
+        """P38 (F29): a `sending` / `delivery_unknown` answer whose post intake-reconcile finds in the conversation (our
+        hidden metadata carrying this burst id) did land: mark it sent with that ts. Never releases anything."""
+        for m in messages:
+            meta = m.get('metadata') if isinstance(m.get('metadata'), dict) else {}
+            payload = meta.get('event_payload') if isinstance(meta.get('event_payload'), dict) else {}
+            if meta.get('event_type') != self.agent_event_type or payload.get('burst_id') != b['burst_id'] or \
+                    payload.get('kind') not in SEND_KINDS or not TS_RE.fullmatch(str(m.get('ts') or '')):
+                continue
+            with rt.transaction(db):
+                if db.execute('SELECT 1 FROM intake_sends WHERE burst_id=? AND ts=? UNION ALL SELECT 1 FROM agent_sends '
+                              'WHERE channel=? AND ts=?', (b['burst_id'], m['ts'], b['channel'], m['ts'])).fetchone():
+                    continue  # already accounted for
+                row = db.execute("SELECT id FROM intake_sends WHERE burst_id=? AND kind=? AND state IN ('sending',"
+                                 "'delivery_unknown') ORDER BY created_at LIMIT 1", (b['burst_id'], payload['kind'])
+                                 ).fetchone()
+                if row:
+                    db.execute("UPDATE intake_sends SET state='sent',ts=?,updated_at=? WHERE id=?",
+                               (m['ts'], now, row['id']))
+                    rt._ledger(db, b['channel'], m['ts'], payload['kind'], b['burst_id'], payload.get('session'))
+
+    def _reserve_send(self, rt, db, b, kind, *, actor, task_id, horizon, now, again=False, own=None):
+        """One IMMEDIATE transaction: refuse a repeat (AlreadyReplied) unless `again`, else record the send as `sending`
+        BEFORE the post, so a crash or an unknown delivery counts for the next (fresh) session too."""
+        send_id = 'is' + uuid.uuid4().hex[:14]
+        with rt.transaction(db):
+            prior = [] if again else self._unanswered(db, b, own)
+            if prior:
+                raise AlreadyReplied(prior)
+            db.execute('INSERT INTO intake_sends (id,burst_id,kind,task_id,actor,channel,ts,state,created_at,updated_at,'
+                       "horizon) VALUES (?,?,?,?,?,?,NULL,'sending',?,?,?)",
+                       (send_id, b['burst_id'], kind, task_id, actor, b['channel'], now, now, horizon))
+        return send_id
+
+    def _post_as_owner(self, rt, db, b, text, kind, owner, now, *, again=False, own=None, actor=None, task_id=None,
+                      window_task=None, words=None):
+        """Conversation plane: the owner's user token, no visible marker, hidden agent metadata, ledger entry. P38 (F29): never a
+        second answer to the same burst unless `again` — see _reserve_send / _unanswered. P39: a post into a DM / group DM
+        opens the conversation window of the task it speaks for (`window_task`, default the acting task)."""
+        if b['smoke']:
+            raise ValueError('smoke_burst_has_no_slack_conversation')
+        text = str(text or '').strip()
+        if not text or len(text) > 3000:
+            raise ValueError('text_must_be_1_to_3000_characters')
+        rt.asks.check_secret_free(text)
+        if rt.asks.BROADCAST_RE.search(text):
+            raise ValueError('text_must_not_broadcast')
+        if b['sender_kind'] == 'human':  # P46.2: in the language the requester wrote in
+            self.require_language(rt, db, b['sender'], [text], words=_burst_words(rt, b) if words is None else words)
+        body = {'channel': b['channel'], 'text': text, 'unfurl_links': False, 'unfurl_media': False,
+                'metadata': rt.agent_metadata(kind, owner, burst_id=b['burst_id'])}
+        thread = _reply_thread(b)
+        if thread:
+            body['thread_ts'] = thread
+        prior = [] if again else self._unanswered(db, b, own)
+        if prior:  # refused before any Slack call; _reserve_send re-checks inside its transaction
+            raise AlreadyReplied(prior)
+        token = rt.api_identity()
+        send_id = self._reserve_send(rt, db, b, kind, actor=actor, task_id=task_id, horizon=self._horizon(db, b, actor, task_id, now),
+                                now=now, again=again, own=own)
+        try:
+            sent = rt.slack.api_call('chat.postMessage', token, json_body=body)
+        except Exception as exc:
+            # P38 (F29): a post that never reached Slack frees the reservation, so a retry may send; one that may have
+            # landed stays delivery_unknown and the next session checks the conversation (intake-reconcile) before --again.
+            with rt.transaction(db):
+                if _never_posted(exc):
+                    db.execute("DELETE FROM intake_sends WHERE id=? AND state='sending'", (send_id,))
+                else:  # intake-reconcile may already have found it in the conversation (sent): keep that
+                    db.execute("UPDATE intake_sends SET state='delivery_unknown',updated_at=? WHERE id=? AND "
+                               "state='sending'", (now, send_id))
+            raise
+        ts = (sent or {}).get('ts')
+        speaks_for = window_task or task_id or rt.registry.task_id_for_cwd(owner.get('cwd'))
+        with rt.transaction(db):
+            rt._ledger(db, b['channel'], ts, kind, b['burst_id'], owner.get('session'),
+                       rt.schedule.mentions(rt.asks.MENTION_RE.findall(text), speaks_for))  # P46.3: open asks
+            db.execute("UPDATE intake_sends SET state='sent',ts=?,updated_at=? WHERE id=?", (ts, now, send_id))
+            rt.schedule.note_window(db, b['channel'], ts, speaks_for, kind,
+                                    b['sender'] if USER_RE.fullmatch(str(b['sender'] or '')) else None, now, b['conv_type'])
+        # P3.3 conversation-plane reply receipt: the agent just answered this person as the owner, so react ✅ (handled) then the
+        # provider emoji on the message(s) it is replying to (the burst's refs). Best effort; never blocks the send.
+        # Only on a person's message: on an alert bot's post a ✅ reads as "handled" to the whole oncall channel (audit F10).
+        if b['sender_kind'] == 'human':
+            rt.reply_receipt(db, [(b['channel'], ts) for ts in json.loads(b['refs'] or '[]')],
+                             owner.get('provider') or 'codex', now)
+        return ts
+
+    def launch_prompt(self, rt, db_path, b, task_id, brief, *, acked, decision, incident, replied=False):
+        cli = f'python3 {Path(rt.__file__).resolve()} --db {db_path}'
+        where = {'im': self.msg('intake.launch_prompt.im'), 'mpim': self.msg('intake.launch_prompt.mpim'), 'channel': self.msg('intake.launch_prompt.channel')}.get(b['conv_type'], b['conv_type'])
+        lines = [self.msg('intake.launch_prompt.3', task_id=task_id, value=self.msg('intake.launch_prompt.1', owner_key=self.key) if incident else self.msg('intake.launch_prompt.2', owner_key=self.key)),
+                 self.msg('intake.launch_prompt.4', where=where, channel=b['channel']) + (f' thread `{b["thread_root"]}`' if b['thread_root'] else '') +
+                 self.msg('intake.launch_prompt.5', sender=b['sender'], burst_id=b['burst_id']) + (self.msg('intake.launch_prompt.6') if b['smoke'] else ''),
+                 self.msg('intake.launch_prompt.7', cli=cli, burst_id=b['burst_id']),
+                 self.msg('intake.launch_prompt.8', owner=self.name)]
+        if b['smoke']:
+            lines.append(self.msg('intake.launch_prompt.9'))
+        elif acked == 'earlier':  # P38 (F29): no second "收到" — an earlier run already answered this burst as the owner
+            lines.append(self.msg('intake.launch_prompt.10', owner=self.name, owner_key=self.key))
+        elif acked:
+            lines.append(self.msg('intake.launch_prompt.11', owner=self.name))
+        else:  # P38 (F29): `replied` = an earlier run already posted as the owner for this burst (--no-ack, incident, strategic)
+            lines.append((self.msg('intake.launch_prompt.12', owner=self.name, owner_key=self.key)
+                          if replied else self.msg('intake.launch_prompt.13')) + self.msg('intake.launch_prompt.14', owner=self.name))
+        if decision:
+            lines.append(self.msg('intake.launch_prompt.15', owner=self.name, decision=decision, owner_key=self.key))  # P42: the label; the authority is unchanged
+        lines.append(self.msg('intake.launch_prompt.16', owner=self.name))
+        lines += ['', self.msg('intake.launch_prompt.17'), brief.strip()]
+        return '\n'.join(lines)
+
+    def intake_launch(self, rt, db, db_path, ident, title, brief, *, provider='auto', category=None, important=False,
+                      linear=False, ack=True, ack_text=None, decision_event=None, parent=None, slug=None,
+                      incident=False, again=False, wait_seconds=90.0, now=None, runner=None):
+        """§6: bootstrap a new task workspace (--no-launch), bind the source conversation, launch the first session
+        headless (run card = the assistant-bot notification), ack the requester as the owner (unless strategic / --no-ack, or —
+        P38 (F29) — the burst was already answered as the owner: `ack_skipped`, unless `again`)."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, _, _, acting = self.caller(rt, db, b, with_task=True)
+        if b['handled_task'] and b['handled_task'] != b['target_task'] and not incident:
+            raise ValueError(f'burst_already_handled_by_{b["handled_task"]}')
+        style, _, g = _handling(rt, b)
+        basis = None
+        if decision_event:
+            option, _ = self._verified_card(db, decision_event, b['burst_id'], 'brief')
+            if option != 'research':
+                raise ValueError(f'{self.key}_did_not_choose_research_on_the_brief_card')
+            basis = f'{self.key}_decision:{decision_event}'
+        elif not g['may_auto_execute'] and not incident:
+            raise ValueError(f'strategic_or_no_auto_requester_needs_{self.key}_research_decision_on_an_intake_brief')
+        if not g['may_reply'] or b['smoke'] or b['sender_kind'] == 'bot':
+            ack = False  # strategic directives never get an automatic reply; bots and TEST bursts have nobody to ack
+        # P38 (F29): the ack is one-per-burst too. A fresh session re-handling a burst an earlier run already answered as
+        # the owner (a reply or ack nothing newer from the requester followed) launches without a second "收到".
+        earlier = self._unanswered(db, b) if ack and not again else []
+        if earlier:
+            ack = False
+        title = ' '.join(str(title or '').split())
+        if not 3 <= len(title) <= 120:
+            raise ValueError('title_must_be_3_to_120_characters')
+        brief = rt.task_memory.clean_text(brief)
+        rt.asks.check_secret_free(title, brief, ack_text)
+        if linear and (rt.CJK_RE.search(title) or rt.CJK_RE.search(brief)):
+            raise ValueError('linear_title_and_brief_must_be_english')
+        if ack_text is not None and (not ack_text.strip() or len(ack_text) > 200):
+            raise ValueError('ack_text_must_be_1_to_200_characters')
+        words = None
+        if ack and b['sender_kind'] == 'human':  # P46.2: checked before any workspace or session, like the length above
+            words = list(_burst_words(rt, b))
+            langs, share = self.require_language(rt, db, b['sender'], [ack_text], words=words, what='ack', lookup=True)
+            ack_text = ack_text or default_ack(langs, share)
+        config = _cfg(rt)
+        choice = provider if provider != 'auto' else rt.worker_config.provider_order(config, category)[0]
+        reused = False
+        if b['smoke']:
+            path = _smoke_workspace(rt, title, brief, now)
+        else:
+            slug = slug or _slugify(title)
+            if not slug or slug == 'infra-task':
+                raise ValueError('title_has_no_ascii_words_pass_--slug')
+            if not linear:
+                expected = rt.registry.root() / f'local-task-{time.strftime("%Y%m%d", time.localtime(now))}-{slug}'
+                if expected.exists():
+                    raise ValueError('workspace_exists_choose_another_--slug')
+            context = '\n'.join([f'Created by intake from Slack burst {b["burst_id"]} ({b["conv_type"]} {b["channel"]}, '
+                                 f'sender {b["sender"]}).', f"Source: {self.permalink(b['channel'], b['first_ts'], b['thread_root'])}",
+                                 'Message bodies are not stored here; read them with intake-context.'])
+            report = self.workspace_bootstrap(title, brief, context, linear=linear, agent=choice, root=rt.registry.root(), slug=slug,
+                                   runner=runner)
+            path = Path(report['workspace'])
+            reused = bool(report.get('reused_workspace'))
+        task_id = rt.registry.task_id_for_cwd(str(path))
+        if not task_id:
+            raise ValueError('bootstrapped_workspace_is_not_under_the_tasks_root')
+        binding = _bind(rt, db, b, task_id, who, now)
+        row = db.execute('SELECT current_session FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+        result = {'ok': True, 'burst_id': b['burst_id'], 'task_id': task_id, 'workspace': str(path), 'reused': reused,
+                  'binding': {'channel': binding['channel'], 'thread_root': binding['thread_root']}, 'ack_ts': None}
+        if reused and row and row['current_session']:
+            sent = rt.send_to_task(db, db_path, task_id, '\n'.join([
+                f'intake: Slack burst {b["burst_id"]} belongs to this task (reused workspace).',
+                f'Read it: intake-context --burst {b["burst_id"]}', '', brief]), from_task=b['target_task'])
+            result.update(launched=None, forwarded_event=sent.get('event'))
+        else:
+            prompt = self.launch_prompt(rt, db_path, b, task_id, brief, acked='earlier' if earlier else ack,
+                                   decision=decision_event, incident=incident,
+                                   replied=bool(not b['smoke'] and self._sends(db, b)))
+            # P3.2: a research task launched from a brief card joins that card's approvals thread.
+            # P39: the RAW provider, so `auto` is never recorded as a pin (the bootstrap above got the concrete choice).
+            launched = rt.launch_task(db, db_path, str(path), provider, prompt, important=important, category=category,
+                                      parent=parent, allow_existing=reused, wait_seconds=wait_seconds, now=now,
+                                      from_card=decision_event, persist=True)
+            result['launched'] = {k: launched.get(k) for k in ('dispatch_id', 'run_id', 'provider', 'session', 'state')}
+            task = db.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+            if task['current_session'] and binding['want_watch']:
+                result['watch_id'] = Intake(db, db_path, rt, core=self).bind_watch(binding, task['current_provider'],
+                                                                         task['current_session'], task['path'], now)
+        if ack:
+            owner = {'session': (result.get('launched') or {}).get('session'),
+                     'provider': (result.get('launched') or {}).get('provider') or choice, 'cwd': str(path)}
+            try:
+                result['ack_ts'] = self._post_as_owner(rt, db, b, ack_text or DEFAULT_ACK, 'intake_ack', owner, now,
+                                                 again=again, actor=who, task_id=acting, window_task=task_id, words=words)
+            except AlreadyReplied as exc:  # a reply landed after the check above (another session): still no second ack
+                earlier = exc.prior
+        if earlier:
+            result['ack_skipped'] = str(AlreadyReplied(earlier))
+        result['triage_record'] = self.record_triage(
+            rt, db, b, intent='alert' if incident else 'request', clarity='clear',
+            disposition='escalate' if incident else 'launch', target_task=task_id,
+            basis=basis or ('oncall_incident' if incident else 'intake_launch'), recorded_by=who, now=now,
+            enforce=not (decision_event or incident))
+        rt.start(db_path)
+        return result
+
+    def intake_forward(self, rt, db, db_path, ident, task, text=None, *, bind=True, decision_event=None, now=None):
+        """Hand the burst to an existing task (send-to-task semantics: agent message, never authority)."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, _, _ = self.caller(rt, db, b)
+        _, _, g = _handling(rt, b)
+        basis = 'intake_forward'
+        if decision_event:
+            option, _ = self._verified_card(db, decision_event, b['burst_id'], 'brief')
+            if option != 'research':
+                raise ValueError(f'{self.key}_did_not_choose_research_on_the_brief_card')
+            basis = f'{self.key}_decision:{decision_event}'
+        elif not g['may_auto_execute']:
+            raise ValueError(f'strategic_or_no_auto_requester_needs_{self.key}_decision_before_handing_it_to_a_task')
+        row = rt._resolve_task_arg(db, task)
+        if row['task_id'] == b['target_task']:
+            raise ValueError('burst_is_already_in_this_task')
+        body = [f'intake: Slack burst {b["burst_id"]} ({b["conv_type"]} {b["channel"]}, sender {b["sender"]}) was forwarded to '
+                f'this task by {b["target_task"] or "intake"}.', f'Read the messages: intake-context --burst {b["burst_id"]}',
+                'Source: ' + (self.permalink(b['channel'], b['first_ts'], b['thread_root']) if not b['smoke'] else '(TEST)')]
+        if text:
+            body += ['', 'Note from the inbox:', str(text).strip()]
+        sent = rt.send_to_task(db, db_path, row['task_id'], '\n'.join(body), from_task=b['target_task'])
+        if bind:
+            _bind(rt, db, b, row['task_id'], who, now)
+        else:
+            with rt.transaction(db):
+                db.execute('UPDATE intake_bursts SET handled_task=?,updated_at=? WHERE burst_id=?', (row['task_id'], now,
+                                                                                                   b['burst_id']))
+        record = self.record_triage(rt, db, b, intent='follow_up', clarity='clear', disposition='forward',
+                               target_task=row['task_id'], basis=basis, recorded_by=who, now=now,
+                               enforce=not decision_event)
+        return {'ok': True, 'burst_id': b['burst_id'], 'task_id': row['task_id'], 'event': sent.get('event'),
+                'reason': sent.get('reason'), 'bound': bool(bind), 'triage_record': record}
+
+    def handoff(self, rt, db, db_path, event_id, task, note=None, now=None):
+        """P39 (F07): the first-class hand-over of ONE received message to the task it belongs to — <owner key>-inbox giving a
+        continuation to its task, a bound task giving an off-topic new request back to <owner key>-inbox (or straight to the right
+        task). The ORIGINAL Slack refs travel, never a re-typed summary: an intake burst is re-delivered as an intake event
+        of the target (which may then intake-context / intake-reply on it) and its request thread is re-bound to the target;
+        a message a watch delivered becomes a one-message burst first; the owner's reply in a card thread reaches the target as a
+        card reply. The handed event is resolved (disposition handed_off) in the same step. Carries no authority."""
+        now = time.time() if now is None else now
+        if not EVENT_ID_RE.fullmatch(str(event_id or '')):
+            raise ValueError('event_must_be_an_event_id')
+        e = db.execute('SELECT * FROM events WHERE id=?', (event_id,)).fetchone()
+        if e is None:
+            raise ValueError('unknown_event')
+        w = rt.load(db, e['watch_id'])
+        provider, session = rt.claude.actor()
+        if session:
+            rt.require_event_owner(db, e, w)  # the session holding it (watch owner, or the run of its dispatch)
+        who = f'{provider}:{session}' if session else self.key
+        if e['status'] == 'handled':
+            raise ValueError('event_already_handled')
+        source_task = w.get('task_id') or rt.registry.task_id_for_cwd(w.get('cwd'))
+        target = rt._resolve_task_arg(db, task)['task_id']
+        if target == source_task:
+            raise ValueError('event_already_belongs_to_this_task')
+        if note is not None:
+            note = ' '.join(str(note).split())
+            if not note or len(note) > 300:
+                raise ValueError('note_must_be_one_line_of_at_most_300_characters')
+            rt.asks.check_secret_free(note)
+        trow = db.execute('SELECT * FROM tasks WHERE task_id=?', (target,)).fetchone()
+        if trow is None or not trow['current_session']:
+            raise ValueError('target_task_has_no_session_yet_use_intake-forward_or_intake-launch')
+        config = _cfg(rt)
+        cfg = config['intake']
+        local = rt.local_message(db, event_id)
+        source = db.execute('SELECT root FROM event_sources WHERE event_id=?', (event_id,)).fetchone()
+        root = source[0] if source else e['ts']
+        out = {'ok': True, 'from_event': event_id, 'from_task': source_task, 'task_id': target, 'event': None,
+               'burst_id': None, 'kind': None}
+        if local and local['kind'] == 'intake':
+            b = db.execute('SELECT * FROM intake_bursts WHERE event_id=?', (event_id,)).fetchone()
+            if b is None:
+                raise ValueError('intake_event_without_burst')
+            out['kind'] = 'burst'
+        elif local:
+            raise ValueError('only_slack_messages_can_be_handed_off_use_send-to-task')
+        elif e['channel'] in rt.card_threads.decision_channels(rt):
+            out['kind'] = 'card_reply'
+            found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
+                'channel': e['channel'], 'ts': root, 'oldest': e['ts'], 'latest': e['ts'], 'inclusive': 'true', 'limit': 2,
+                'include_all_metadata': 'true'})
+            m = next((x for x in found.get('messages') or [] if isinstance(x, dict) and x.get('ts') == e['ts']), None)
+            if m is None:
+                raise ValueError('source_message_not_found')
+            consumer = rt.registry.task_consumer(db, target)
+            with rt.transaction(db):
+                inbox = rt.ensure_inbox_watch(db, target, trow['path'], consumer[0] or 'codex', consumer[1], now)
+                new = hashlib.sha256(f'{inbox["id"]}/{e["channel"]}/{e["ts"]}/{e["digest"]}'.encode()).hexdigest()[:24]
+                db.execute('INSERT OR IGNORE INTO events (id,watch_id,channel,ts,author,digest,received,status) VALUES '
+                           '(?,?,?,?,?,?,?,?)', (new, inbox['id'], e['channel'], e['ts'], e['author'], e['digest'], now,
+                                                 'pending'))
+                db.execute('INSERT OR IGNORE INTO event_sources VALUES (?,?)', (new, root))
+                rt.envelopes.store(db, new, rt.envelopes.lookup(db, event_id) or rt.message_envelope(inbox, m, root), now)
+                db.execute("INSERT INTO card_reply_targets (channel,reply_ts,task_id,source,reason,event_id,at) VALUES "
+                           "(?,?,?,'handoff','handoff',?,?) ON CONFLICT(channel,reply_ts) DO UPDATE SET task_id=excluded.task_id,"
+                           "reason='handoff',event_id=excluded.event_id", (e['channel'], e['ts'], target, new, now))
+                db.execute("UPDATE events SET status='handled',disposition='handed_off' WHERE id=? AND status!='handled'",
+                           (event_id,))
+                rt.claude.settle_claims(db, [event_id], 'handed_off', now)
+            out['event'] = new
+            rt.start(db_path)
+            return out
+        else:
+            if not USER_RE.fullmatch(str(e['author'] or '')):
+                raise ValueError('only_a_persons_message_can_be_handed_off')
+            out['kind'] = 'message'
+            conv_type = _conv_type(rt, db, e['channel'])
+            thread_root = root if root and root != e['ts'] else None
+            burst_id = 'in' + uuid.uuid4().hex[:14]
+            env = rt.envelopes.lookup(db, event_id) or rt.envelopes.envelope('slack_message', 'human', 'colleague', 'none',
+                                                                             'intake_default', thread_root or e['ts'])
+            env['burst_id'] = burst_id
+            handling = load_handling(rt.envelopes.people_path()).get(e['author'], {})
+            auto = handling.get('auto_execute')
+            if not guards(handling.get('request_style') or 'standard', None if auto is None else bool(auto))[
+                    'may_auto_execute'] and target != cfg['inbox_task']:
+                raise ValueError(f'strategic_or_no_auto_requester_hand_it_to_{self.key}-inbox_only')  # before any write
+            with rt.transaction(db):
+                db.execute('INSERT INTO intake_bursts (burst_id,conv_key,channel,conv_type,thread_root,sender,sender_kind,'
+                           'first_ts,last_ts,msg_count,refs,task_refs,pr_refs,envelope,person_style,auto_execute,state,'
+                           'route,route_reason,created_at,sealed_at,updated_at) VALUES '
+                           "(?,?,?,?,?,?,'human',?,?,1,?,'[]','[]',?,?,?,'sealed','handoff',?,?,?,?)",
+                           (burst_id, f'{e["author"]}|{e["channel"]}:{thread_root or ""}', e['channel'], conv_type,
+                            thread_root, e['author'], e['ts'], e['ts'], json.dumps([e['ts']]),
+                            json.dumps(env, ensure_ascii=False), handling.get('request_style') or 'standard',
+                            None if auto is None else int(bool(auto)), 'handoff_of_event:' + event_id, now, now, now))
+            b = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (burst_id,)).fetchone()
+        _, _, g = _handling(rt, b)
+        if not g['may_auto_execute'] and target != cfg['inbox_task']:
+            raise ValueError(f'strategic_or_no_auto_requester_hand_it_to_{self.key}-inbox_only')
+        delivered = Intake(db, db_path, rt, core=self).deliver(b, target, 'handoff', 'handoff_from:' + str(source_task or 'session'),
+                                                    cfg, now)
+        if delivered != 'routed':
+            raise ValueError('handoff_not_delivered:' + str(delivered))
+        b = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (b['burst_id'],)).fetchone()
+        engine = Intake(db, db_path, rt, core=self)
+        holder = engine.bound_task(b['channel'], b['thread_root'], b['conv_type'], now, b['sender']) if b['thread_root'] \
+            else None
+        if not b['smoke'] and (holder is None or holder[0] in (target, cfg['inbox_task']) or not engine._live_task(holder[0])):
+            # One message travels; a live task's OWN request thread is never taken from it by handing off one reply in it.
+            _bind(rt, db, b, target, who, now, mark_handled=False)  # its request thread now belongs to the target
+        with rt.transaction(db):
+            db.execute("UPDATE events SET status='handled',disposition='handed_off' WHERE id=? AND status!='handled'",
+                       (event_id,))
+            rt.claude.settle_claims(db, [event_id], 'handed_off', now)
+        out.update(event=b['event_id'], burst_id=b['burst_id'], triage_record=self.record_triage(
+            rt, db, b, intent='follow_up', clarity='clear', disposition='forward', target_task=target, basis='handoff',
+            note=note, recorded_by=who, now=now, enforce=False))
+        rt.start(db_path)
+        return out
+
+    def _source_footer(self, b, extra=None):
+        link = self.msg('intake._source_footer.1') if b['smoke'] else self.msg('intake._source_footer.2', permalink=self.permalink(b['channel'], b['first_ts'], b['thread_root']))
+        return link + (f' · {extra}' if extra else '')
+
+    def _post_card(self, rt, db, db_path, b, kind, first, body, options, now, priority='normal', never_auto=True, footer=None,
+                   task_thread=False, cwd=None):
+        # P3.2: brief / draft cards are each a fresh top-level root (task_thread=False), so a task launched from one joins its
+        # own thread, not a shared inbox thread. An incident card is posted for the incident task (cwd) and establishes its
+        # root (task_thread=True), so that task's later cards thread under the incident card.
+        provider, session = rt.claude.actor()
+        if not session:
+            raise ValueError('cards_are_posted_by_the_inbox_or_oncall_session_itself')
+        self.caller(rt, db, b)
+        rt.buttons.check_copy(body, 'card_body', first_line_max=None)  # agent text: no ids, hashes or jargon
+        if cwd is None:
+            task = db.execute('SELECT path FROM tasks WHERE task_id=?', (b['target_task'],)).fetchone()
+            cwd = task['path'] if task else os.getcwd()
+        question = _card_question(b, first, body)
+        card = self.ask_owner(rt)(db, db_path, session, provider, cwd, question, options, never_auto=never_auto, now=now,
+                           priority=priority, footer=footer or self._source_footer(b), task_thread=task_thread)
+        with rt.transaction(db):
+            db.execute('INSERT INTO intake_briefs (card_event,burst_id,kind,digest,session,task_id,created_at) VALUES '
+                       '(?,?,?,?,?,?,?)', (card['event_id'], b['burst_id'], kind, digest_text(body) if kind == 'draft' else None,
+                                           f'{provider}:{session}', b['target_task'], now))
+        return card
+
+    def intake_brief(self, rt, db, db_path, ident, body, now=None):
+        """Strategic / vague directive: an assistant-bot brief card to the owner ONLY (no external post of any kind)."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        body = rt.task_memory.clean_text(body)
+        rt.asks.check_secret_free(body)
+        who = person_name(rt, db, b['sender'])
+        who = (who + (' ' if who[-1].isascii() else '')) if who else self.msg('intake.intake_brief.1')
+        card = self._post_card(rt, db, db_path, b, 'brief',
+                          self.msg('intake.intake_brief.3', who=who, get=self.where_zh.get(b['conv_type'], self.msg('intake.intake_brief.2'))), body,
+                          self.brief_options, now, footer=self._source_footer(b, self.msg('intake.intake_brief.4')))
+        who, _, _ = self.caller(rt, db, b)
+        record = self.record_triage(rt, db, b, intent='directive', clarity='vague', disposition='brief', **{f'needs_{self.key}': True}, basis='person:request_style=' + _handling(rt, b)[0], recorded_by=who, now=now)
+        return {'ok': True, 'burst_id': b['burst_id'], 'card_event': card['event_id'], 'card_ts': card['thread_ts'],
+                'options': ['self', 'draft', 'research', 'ignore'], 'triage_record': record,
+                'next': (f"Resolve the intake event as decision. {self.name}'s click arrives as a decision event: research -> intake-launch --decision-event CARD; draft -> intake-draft, then intake-reply --decision-event DRAFT_CARD; self / ignore -> triage-record --disposition log.")}
+
+    def intake_draft(self, rt, db, db_path, ident, text, now=None):
+        """A draft reply shown to the owner on a card; only an approved draft (same text) may be sent with intake-reply."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        if b['smoke']:
+            raise ValueError('smoke_burst_has_no_slack_conversation')
+        text = str(text or '').strip()
+        if not text or len(text) > 1100:
+            raise ValueError('draft_must_be_1_to_1100_characters')
+        rt.asks.check_secret_free(text)
+        if b['sender_kind'] == 'human':  # P46.2: never ask the owner to approve a draft intake-reply would refuse
+            self.require_language(rt, db, b['sender'], [text], words=_burst_words(rt, b), what='draft')
+        who = person_name(rt, db, b['sender']) or self.msg('intake.intake_draft.1')
+        card = self._post_card(rt, db, db_path, b, 'draft', self.msg('intake.intake_draft.2', who=who), text,
+                          self.draft_options, now, footer=self._source_footer(b, self.msg('intake.intake_draft.3')))
+        return {'ok': True, 'burst_id': b['burst_id'], 'card_event': card['event_id'], 'digest': digest_text(text),
+                'next': self.msg('intake.intake_draft.next', owner=self.name)}
+
+    def intake_reply(self, rt, db, db_path, ident, text, decision_event=None, now=None, *, again=False, relevant=False):
+        """Answer as the owner in the burst's conversation. Strategic requesters: only a the owner-approved draft, verbatim.
+        P38 (F29): refused with AGAIN_ERROR when the burst was already answered and the requester wrote nothing the earlier
+        answer could not see (a retry, a crash, an unknown delivery, a fresh re-dispatch), unless `again` (a deliberate
+        further message). The task the burst was handed to is held only to its own earlier answers (_own_scope).
+        P46.3 (R-0013): a task that <owner key>-inbox / <owner key>-oncall handed this burst to as a possible answer to its ask, or that
+        got it only through its conversation window (by_window), replies only with `relevant` (it checked that the message is
+        for it), before anything is posted or recorded."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, provider, session, acting = self.caller(rt, db, b, with_task=True)
+        cfg = _cfg(rt)['intake']
+        if acting and acting not in (cfg['inbox_task'], cfg['oncall_task']) and not relevant and \
+                rt.rule_registry.active('send.relevance_ack'):
+            if self.handed_as_answer(rt, db, b, acting, cfg, now):
+                rt.rule_registry.refuse('send.relevance_ack', f'handed_off_message_needs_--relevant: {cfg["inbox_task"]} '
+                                        f'handed this message to {acting} as a possible answer to its ask; check that it '
+                                        'answers it')
+            if acting == b['target_task'] and by_window(db, b):  # the orchestrator's decision on Needs the owner 3
+                rt.rule_registry.refuse('send.relevance_ack', f"window_message_needs_--relevant: this message reached {acting} only through its conversation window and is not in a thread of its own; it may be {self.name}'s own chat with this person, check that it is for you")
+        _, _, g = _handling(rt, b)
+        basis = 'intake_reply'
+        if decision_event:
+            option, brief = self._verified_card(db, decision_event, b['burst_id'], 'draft')
+            if option != 'send':
+                raise ValueError(f'{self.key}_did_not_approve_sending_this_draft')
+            if brief['digest'] != digest_text(text):
+                raise ValueError('reply_text_differs_from_the_approved_draft')
+            basis = f'{self.key}_decision:{decision_event}'
+        elif not g['may_reply']:
+            raise ValueError(f'strategic_directive_reply_requires_a_{self.key}_approved_draft')
+        task = db.execute('SELECT path FROM tasks WHERE task_id=?', (b['handled_task'] or b['target_task'],)).fetchone()
+        owner = {'session': session, 'provider': provider or 'codex', 'cwd': task['path'] if task else os.getcwd()}
+        ts = self._post_as_owner(rt, db, b, text, 'intake_reply', owner, now, again=again, own=_own_scope(b, acting), actor=who,
+                           task_id=acting)
+        record = self.record_triage(rt, db, b, intent='question', clarity='clear', disposition='answer', basis=basis,
+                               recorded_by=who, now=now, enforce=False)
+        return {'ok': True, 'burst_id': b['burst_id'], 'ts': ts, 'thread': _reply_thread(b), 'triage_record': record}
+
+    def intake_follow(self, rt, db, db_path, ident, now=None):
+        """Watch the burst's conversation from the calling inbox/oncall session (follow-ups + `ask` cards)."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        who, provider, session = self.caller(rt, db, b, roles=('target',))
+        if not session:
+            raise ValueError('intake_follow_is_for_the_inbox_or_oncall_session')
+        if not _handling(rt, b)[2]['may_reply']:
+            raise ValueError(f'strategic_directive_never_follow_or_ask_the_requester_without_{self.key}')
+        if b['smoke']:
+            raise ValueError('smoke_burst_has_no_slack_conversation')
+        binding = _bind(rt, db, b, b['target_task'], who, now, mark_handled=False)
+        task = db.execute('SELECT path FROM tasks WHERE task_id=?', (b['target_task'],)).fetchone()
+        wid = Intake(db, db_path, rt, core=self).bind_watch(binding, provider, session, task['path'], now)
+        if wid is None:
+            error = db.execute('SELECT error FROM intake_bindings WHERE channel=? AND thread_root=?',
+                               (binding['channel'], binding['thread_root'])).fetchone()[0]
+            raise ValueError('follow_watch_failed: ' + str(error))
+        hint = (f'ask --dm {b["sender"]} …' if b['conv_type'] == 'im' else
+                f'ask --channel {b["channel"]} --thread {_reply_thread(b) or b["first_ts"]} …')
+        rt.start(db_path)
+        return {'ok': True, 'burst_id': b['burst_id'], 'watch_id': wid, 'ask': hint}
+
+    def oncall_incident(self, rt, db, db_path, ident, title, brief, summary, *, provider='auto', category='infra', slug=None,
+                        wait_seconds=90.0, now=None, runner=None):
+        """Big incident: an incident task (child of <owner key>-oncall) plus a HIGH-PRIORITY ask-<owner key> card."""
+        now = time.time() if now is None else now
+        b = burst(db, ident)
+        if not b['alert_fp'] and b['route'] != 'oncall':
+            raise ValueError('oncall_incident_needs_an_oncall_burst')
+        summary = str(summary or '').strip()
+        if not summary or len(summary) > 800:
+            raise ValueError('summary_must_be_1_to_800_characters')
+        # The card text is checked before the task is launched, so a refused card never leaves a second task behind.
+        rt.buttons.check_copy(summary, 'summary', first_line_max=None)
+        rt.buttons.check_copy(title, 'title', first_line_max=None)
+        # P38 (F49): so is the card's destination (Slack-verified private, cached): a refused card leaves no running incident
+        # task behind, and a retry never launches a second one. ask_<owner key> re-checks it from the cache.
+        decisions = rt.buttons.load_config()
+        rt.buttons.require_private_destination(rt, db, rt.buttons.card_route(decisions, now)['channel'], 'incident_card',
+                                               config=decisions)
+        config = _cfg(rt)
+        launched = self.intake_launch(rt, db, db_path, ident, title, brief, provider=provider, category=category, important=True,
+                                 ack=False, parent=config['intake']['oncall_task'] if rt.registry.task_dir(
+                                     config['intake']['oncall_task']).is_dir() else None, slug=slug, incident=True,
+                                 wait_seconds=wait_seconds, now=now, runner=runner)
+        short = ' '.join(str(title).split())
+        short = short if len(short) <= 60 else short[:59] + '…'
+        extra = self.msg('intake.oncall_incident.1', task_id=launched['task_id']) + (self.msg('intake.oncall_incident.2', alert_service=b['alert_service'], dup_count=b['dup_count']) if b['alert_fp'] else '')
+        # P3.2: the incident card belongs to the incident task and establishes its approvals-thread root (the task's own
+        # headless cards thread under it); high priority, so if it ever threads it also broadcasts to the channel.
+        card = self._post_card(rt, db, db_path, b, 'incident', self.msg('intake.oncall_incident.3', short=short),
+                          summary, self.incident_options, now, priority='high', never_auto=False, footer=self._source_footer(b, extra),
+                          task_thread=True, cwd=str(launched['workspace']))
+        return {**launched, 'incident_card_event': card['event_id'], 'incident_card_ts': card['thread_ts']}
+
+    def intake_status(self, rt, db, now=None):
+        now = time.time() if now is None else now
+        engine = Intake(db, rt.DEFAULT_DB, rt, core=self)
+        state = engine.load_state()
+        try:
+            cfg = _cfg(rt)['intake']
+            config_error = None
+        except ValueError as exc:
+            cfg, config_error = None, str(exc)
+        counts = {r[0]: r[1] for r in db.execute('SELECT state, count(*) FROM intake_bursts GROUP BY state')}
+        filtered = {r[0]: r[1] for r in db.execute('SELECT reason, count(*) FROM intake_seen WHERE seen_at>? GROUP BY reason',
+                                                   (now - 86400,))}
+        tasks = {}
+        if cfg:
+            for role in ('inbox', 'oncall'):
+                row = db.execute('SELECT current_provider,current_session FROM tasks WHERE task_id=?',
+                                 (cfg[f'{role}_task'],)).fetchone()
+                tasks[role] = {'task_id': cfg[f'{role}_task'], 'exists': rt.registry.task_dir(cfg[f'{role}_task']).is_dir(),
+                               'current': dict(row) if row else None}
+        hour = sum(c for at, c in state.get('calls_last_hour') or [] if at > now - 3600)
+        return {'ok': True, 'enabled': bool(cfg and cfg['enabled']), 'config_error': config_error,
+                'bootstrapped': bool(cfg and tasks['inbox']['exists']), 'tasks': tasks, 'status': state.get('status'),
+                'baseline': state.get('baseline'), 'next_cycle_at': state.get('next_cycle_at'),
+                'covered_until': state.get('covered_until'), 'last_cycle': state.get('last_cycle'),
+                'api_calls_last_hour': hour, 'backoff': state.get('backoff') or {},
+                'unresolved_channels': state.get('unresolved_channels') or [], 'errors': state.get('errors'),
+                'last_error': state.get('last_error'), 'bursts_by_state': counts, 'messages_last_24h_by_reason': filtered,
+                'fetch_queue': db.execute('SELECT count(*) FROM intake_fetch_queue').fetchone()[0]}
+
+    def intake_probe(self, rt, queries=None):
+        """Read-only: run each discovery query once (page 1) and report counts by conversation type; no text."""
+        cfg = _cfg(rt)['intake']
+        queries = list(queries or []) or [*cfg['dm_queries'], self.mention_query]
+        if len(queries) > 6:
+            raise ValueError('at_most_6_queries')
+        token = rt.api_identity()
+        out = []
+        for query in queries:
+            try:
+                response = rt.slack.api_call('search.messages', token, params={'query': query, 'count': 20,
+                                                                               'sort': 'timestamp', 'sort_dir': 'desc'})
+            except Exception as exc:  # noqa: BLE001
+                out.append({'query': query, 'ok': False, 'error': _slack_code(exc)})
+                continue
+            block = response.get('messages') if isinstance(response.get('messages'), dict) else {}
+            matches = [m for m in block.get('matches') or [] if isinstance(m, dict)]
+            types = {}
+            replies = mentions = 0
+            for match in matches:
+                kind = match_conv_type(match)
+                types[kind] = types.get(kind, 0) + 1
+                root = parse_permalink_thread(match.get('permalink'))
+                replies += bool(root and root != match.get('ts'))
+                mentions += self.mention_query in str(match.get('text') or '')
+            newest = max((float(m['ts']) for m in matches if TS_RE.fullmatch(str(m.get('ts')))), default=None)
+            out.append({'query': query, 'ok': True, 'total': (block.get('paging') or {}).get('total', block.get('total')),
+                        'page_matches': len(matches), 'by_conversation_type': types, 'thread_replies': replies,
+                        f'mentioning_{self.key}': mentions, 'newest_age_seconds': round(time.time() - newest) if newest else None})
+        return {'ok': True, 'queries': out,
+                'hint': 'A DM-discovery query should return mostly im/mpim matches; adjust intake.dm_queries otherwise.'}
+
+    def smoke_intake(self, rt, db, db_path, scenario='request', wait=True, timeout=900.0, poll=3.0, now=None):
+        """Post-install E2E with a SYNTHETIC burst (no Slack read): through the real filter -> burst -> router ->
+        delivery path into the live <owner key>-inbox (request / strategic) or <owner key>-oncall (alert) session."""
+        if scenario not in ('request', 'strategic', 'alert'):
+            raise ValueError('scenario_must_be_request_strategic_or_alert')
+        now = time.time() if now is None else now
+        config = _cfg(rt)
+        cfg = config['intake']
+        role = 'oncall' if scenario == 'alert' else 'inbox'
+        task_id = cfg[f'{role}_task']
+        row = db.execute('SELECT current_session FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+        if not rt.registry.task_dir(task_id).is_dir() or not row or not row['current_session']:
+            raise ValueError(f'run_intake-bootstrap_first_{role}_task_has_no_current_session')
+        engine = Intake(db, db_path, rt, core=self)
+        state = engine.load_state()
+        baseline = min(float(state.get('baseline') or now), now - 1)
+        ctx = {'subscribed': set(), 'oncall': {SMOKE_ONCALL}, 'now': now, 'cfg': cfg, 'baseline': baseline,
+               'stats': {'processed': 0, 'accepted': 0, 'filtered': {}}, 'state': state}
+        if scenario == 'alert':
+            # A per-run service name (letters only: digits/hex are volatile in the fingerprint) keeps runs apart.
+            nonce = ''.join(chr(ord('g') + int(c, 16)) for c in uuid.uuid4().hex[:6])
+            text = self.smoke_text['alert'].replace('smoke-intake-test', f'smoke-intake-{nonce}')
+            messages = [{'ts': f'{now - 2:.6f}', 'bot_id': 'BSMOKE', 'username': 'smoke-alerts', 'subtype': 'bot_message',
+                         'text': text},
+                        {'ts': f'{now - 1:.6f}', 'bot_id': 'BSMOKE', 'username': 'smoke-alerts', 'subtype': 'bot_message',
+                         'text': text.replace('[Triggered]', '[Re-Triggered]')}]
+            channel, conv_type = SMOKE_ONCALL, 'channel'
+        else:
+            messages = [{'ts': f'{now - 1:.6f}', 'user': SMOKE_USER, 'text': '(synthetic)'}]
+            channel, conv_type = SMOKE_DM, 'im'
+        def ingest_one(m):
+            with rt.transaction(db):
+                db.execute("INSERT OR IGNORE INTO intake_seen (channel,ts,source,conv_type,user,sender_kind,digest,reason,"
+                           "seen_at) VALUES (?,?,'smoke',?,?,?,?,'pending',?)",
+                           (channel, m['ts'], conv_type, m.get('user'), 'bot' if m.get('bot_id') else 'human',
+                            digest_message(m), now))
+                verdict = engine.verdict(m, channel, conv_type, None, ctx)
+                if verdict != 'accept':
+                    raise ValueError('smoke_message_was_filtered_' + verdict)
+                burst_id, how = engine.add_to_burst(m, channel, conv_type, None, 'bot' if m.get('bot_id') else 'human', ctx,
+                                                    smoke_scenario=scenario)
+                db.execute('UPDATE intake_seen SET reason=?,burst_id=? WHERE channel=? AND ts=?',
+                           (how, burst_id, channel, m['ts']))
+            return burst_id, how
+
+        burst_id, _ = ingest_one(messages[0])
+        with rt.transaction(db):  # a synthetic burst is complete: seal it now instead of waiting for the window
+            db.execute("UPDATE intake_bursts SET state='sealed',sealed_at=?,updated_at=? WHERE burst_id=? AND state='open'",
+                       (now, now, burst_id))
+        b = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (burst_id,)).fetchone()
+        outcome = engine.route_one(b, now, config)[1]
+        for m in messages[1:]:  # alert: the repeat arrives after routing and must be merged, not delivered again
+            _, how = ingest_one(m)
+            if how != 'alert_duplicate':
+                raise ValueError('smoke_alert_repeat_was_not_deduplicated')
+        b = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (burst_id,)).fetchone()
+        report = {'ok': outcome == 'routed', 'test': True, 'scenario': scenario, 'burst_id': burst_id, 'route': b['route'],
+                  'target_task': b['target_task'], 'event_id': b['event_id'], 'msg_count': b['msg_count'],
+                  'dup_count': b['dup_count'], 'delivery': outcome}
+        rt.start(db_path)
+        if not wait or outcome != 'routed':
+            return {**report, 'next': f'slack_followup.py intake-status; dispatch-status --task {task_id}'}
+        end = time.time() + timeout
+        while time.time() < end:
+            e = db.execute('SELECT status FROM events WHERE id=?', (b['event_id'],)).fetchone()
+            child = db.execute('SELECT handled_task FROM intake_bursts WHERE burst_id=?', (burst_id,)).fetchone()['handled_task']
+            busy = child and db.execute("SELECT count(*) FROM dispatches WHERE task_key=? AND state IN ('waiting','running')",
+                                        (child,)).fetchone()[0]
+            if e and e['status'] == 'handled' and not busy:
+                break
+            time.sleep(poll)
+        b = db.execute('SELECT * FROM intake_bursts WHERE burst_id=?', (burst_id,)).fetchone()
+        records = [dict(r) for r in db.execute(f'SELECT id,intent,clarity,disposition,target_task,needs_{self.key} FROM triage_records WHERE burst_id=? ORDER BY created_at', (burst_id,))]
+        briefs = [dict(r) for r in db.execute('SELECT card_event,kind FROM intake_briefs WHERE burst_id=?', (burst_id,))]
+        report.update(event_status=(db.execute('SELECT status FROM events WHERE id=?', (b['event_id'],)).fetchone() or [None])[0],
+                      triage=records, briefs=briefs, handled_task=b['handled_task'],
+                      external_posts=db.execute("SELECT count(*) FROM agent_sends WHERE ref=? AND kind IN "
+                                                "('intake_ack','intake_reply')", (burst_id,)).fetchone()[0])
+        if b['handled_task']:
+            path = rt.registry.task_dir(b['handled_task'])
+            status_md = path / 'status.md'
+            report['child'] = {'task_id': b['handled_task'], 'workspace': str(path),
+                               'status_md_line': status_md.exists() and '- smoke-intake ok' in status_md.read_text(encoding='utf-8'),
+                               'dispatches': [dict(r) for r in db.execute(
+                                   'SELECT dispatch_id,state,outcome,card_ts FROM dispatches WHERE task_key=?',
+                                   (b['handled_task'],))]}
+        if scenario == 'request':
+            report['ok'] = bool(report['event_status'] == 'handled' and report.get('child', {}).get('status_md_line'))
+        elif scenario == 'strategic':
+            report['ok'] = bool(report['event_status'] == 'handled' and any(x['kind'] == 'brief' for x in briefs)
+                                and not b['handled_task'] and not report['external_posts'])
+        else:
+            report['ok'] = bool(report['event_status'] == 'handled' and b['dup_count'] >= 1)
+        return report
