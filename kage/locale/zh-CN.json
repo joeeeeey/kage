@@ -107,7 +107,15 @@
     "decision.proposal.meaning": "我理解你的意思是：{meaning}。\n确认后按「{picked}」处理。",
     "decision.proposal.yes": "✅ 对，就这样",
     "decision.proposal.no": "✏️ 不是",
-    "decision.proposal.confirmed": "✅ 已确认"
+    "decision.proposal.confirmed": "✅ 已确认",
+    "receiver.not_authorized": "只有 {owner}（或休假期间的代理人）可以处理这张卡片。",
+    "receiver.not_proposal_author": "只有发出这条决定的人或 {owner} 可以确认。",
+    "receiver.stale": "这条确认已失效，请以 thread 里最新的确认消息为准。",
+    "receiver.ask_fallback": "没记上，直接在 thread 里回复就行 · Didn't catch that, just reply in the thread",
+    "receiver.button_failed": "没能处理这个按钮（{code}）。请稍后再点一次。",
+    "receiver.already_decided": "这张卡片已经处理过了：{label}{by}。如需补充，请在 thread 里回复。",
+    "receiver.decided_by": "（{mention}）",
+    "receiver.choice_failed": "没能记录这个选择（{code}）。请稍后再点一次，或直接在 thread 里回复。"
   },
   "words": {
     "decision.approve_phrases": [

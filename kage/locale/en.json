@@ -107,7 +107,15 @@
     "decision.proposal.meaning": "I read your reply as: {meaning}.\nOn yes it is recorded as \"{picked}\".",
     "decision.proposal.yes": "✅ Yes, that's it",
     "decision.proposal.no": "✏️ No",
-    "decision.proposal.confirmed": "✅ Confirmed"
+    "decision.proposal.confirmed": "✅ Confirmed",
+    "receiver.not_authorized": "Only {owner} (or an out-of-office delegate) can act on this card.",
+    "receiver.not_proposal_author": "Only the person who proposed this decision or {owner} can confirm it.",
+    "receiver.stale": "This confirmation is out of date; use the latest confirmation in the thread.",
+    "receiver.ask_fallback": "Didn't catch that, just reply in the thread",
+    "receiver.button_failed": "Could not handle this button ({code}). Please press it again in a moment.",
+    "receiver.already_decided": "This card was already handled: {label}{by}. Reply in the thread to add anything.",
+    "receiver.decided_by": " ({mention})",
+    "receiver.choice_failed": "Could not record this choice ({code}). Press it again in a moment, or reply in the thread."
   },
   "words": {
     "decision.approve_phrases": [
