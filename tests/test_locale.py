@@ -21,6 +21,8 @@ class CatalogTest(unittest.TestCase):
                 self.assertEqual(cat['language'], language)
                 self.assertEqual(sorted(cat['patterns']), sorted(base['patterns']))
                 self.assertEqual(sorted(cat['messages']), sorted(base['messages']))
+                self.assertEqual(sorted(cat['words']), sorted(base['words']))
+                self.assertTrue(all(isinstance(w, str) and w for ws in cat['words'].values() for w in ws))
                 for key, template in cat['messages'].items():
                     self.assertEqual(fields(template), fields(base['messages'][key]), key)
 
@@ -37,7 +39,8 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(locale.message('en', 'you'), 'you')
 
     def test_unknown_language_or_key(self):
-        for call in (lambda: locale.catalog('fr'), lambda: locale.catalog('../en'),
+        self.assertIn('批准', locale.words('zh-CN', 'decision.approve_phrases'))
+        for call in (lambda: locale.catalog('fr'), lambda: locale.catalog('../en'), lambda: locale.words('en', 'nope'),
                      lambda: locale.pattern('en', 'nope'), lambda: locale.message('zh-CN', 'nope')):
             with self.assertRaises(locale.LocaleError):
                 call()

@@ -9,7 +9,11 @@
     "card.failure": "(?i)unauthori[sz]ed|forbidden|\\b40[13]\\b|permission denied|access denied|not authori[sz]ed|timed?[ -]?out|invalid[_ ]token|token (?:expired|invalid)",
     "card.infra_apply": "(?i)apply-approved|make\\s+apply|(?:terraform|tofu|terragrunt)\\s+apply|saved[- ]?plan|apply.{0,24}(?:plan|terraform|tofu|root)|(?:plan|terraform|tofu|root).{0,24}apply",
     "registry.title_script": "[A-Za-z]",
-    "secret.labelled": "(?i)\\b(?:password|passwd|pwd|secret|api[_-]?key|token)\\s*[:=]\\s*[^\\s<]{6,}"
+    "secret.labelled": "(?i)\\b(?:password|passwd|pwd|secret|api[_-]?key|token)\\s*[:=]\\s*[^\\s<]{6,}",
+    "decision.condition": "(?i)^(?:but|except|only|unless|however|instead)(?![a-z])",
+    "decision.question": "[?]",
+    "decision.plan_change": "(?i)\\b(?:change (?:it )?to|switch to|instead|cancel|stop|hold off|pause|only do|wait (?:until|for))\\b",
+    "decision.asking": "(?i)[?]|\\b(?:what|why|how|whether|should|can we|could we)\\b"
   },
   "messages": {
     "you": "you",
@@ -60,6 +64,30 @@
     "ask.confirmed": "✅ Confirmed · {clock}",
     "ask.confirm_cancelled": "OK, could you add a bit more detail in the thread?",
     "ask.echo": "Got it, going with {label}. Let me know if that's not right",
-    "ask.closed": "(Already handled)"
+    "ask.closed": "(Already handled)",
+    "decision.separators": " \t\n,.!?;:~—…)]\"'“”",
+    "decision.approve_label": "Approve",
+    "decision.reject_label": "Reject"
+  },
+  "words": {
+    "decision.approve_phrases": [
+      "as recommended",
+      "approved",
+      "approve",
+      "okay",
+      "ok",
+      "yes",
+      "lgtm",
+      "go"
+    ],
+    "decision.reject_phrases": [
+      "not approved",
+      "don't",
+      "reject",
+      "no"
+    ],
+    "decision.recommended_phrases": [
+      "as recommended"
+    ]
   }
 }

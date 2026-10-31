@@ -9,7 +9,11 @@
     "card.failure": "(?i)unauthori[sz]ed|forbidden|\\b40[13]\\b|permission denied|access denied|not authori[sz]ed|timed?[ -]?out|invalid[_ ]token|token (?:expired|invalid)|认证失败|鉴权|未授权|无权限|没有权限|权限不[足够]|拒绝访问|超时|登录失效|凭证失效|token ?失效",
     "card.infra_apply": "(?i)apply-approved|make\\s+apply|(?:terraform|tofu|terragrunt)\\s+apply|saved[- ]?plan|(?:apply|执行|应用).{0,24}(?:plan|terraform|tofu|root)|(?:plan|terraform|tofu|root).{0,24}(?:apply|执行|应用)",
     "registry.title_script": "[一-鿿]",
-    "secret.labelled": "(?:密码|口令|密钥)\\s*[:=：]\\s*[^\\s<]{6,}"
+    "secret.labelled": "(?:密码|口令|密钥)\\s*[:=：]\\s*[^\\s<]{6,}",
+    "decision.condition": "(?i)^(?:但是|但|不过|可是|只要|只能|只给|只开|只|除了|除非|前提是|条件是|先别|别|改成|改为|换成|(?:but|except|only|unless|however)(?![a-z]))",
+    "decision.question": "[?？]|吗\\s*$",
+    "decision.plan_change": "改成|改为|换成|先别|别做|不要|取消|停掉|停下|停止|^\\s*停|暂停|等[^，,。.！!？?\\n]{0,20}再|只做",
+    "decision.asking": "[?？]|吗|呢|啥|什么|为什么|怎么|是否|要不要|能不能"
   },
   "messages": {
     "you": "你",
@@ -60,6 +64,42 @@
     "ask.confirmed": "✅ 已确认 · {clock}",
     "ask.confirm_cancelled": "好的，那你在 thread 里说下具体情况",
     "ask.echo": "好的，按 {label} 处理，有不对的跟我说",
-    "ask.closed": "（这个已经处理过了）"
+    "ask.closed": "（这个已经处理过了）",
+    "decision.separators": " \t\n，,。.！!、;；:：~～—…)）]】」』\"'“”",
+    "decision.approve_label": "批准",
+    "decision.reject_label": "拒绝"
+  },
+  "words": {
+    "decision.approve_phrases": [
+      "按建议",
+      "按推荐",
+      "批准",
+      "同意",
+      "可以",
+      "好的",
+      "行",
+      "approved",
+      "approve",
+      "okay",
+      "ok",
+      "yes",
+      "lgtm",
+      "go"
+    ],
+    "decision.reject_phrases": [
+      "不批准",
+      "不同意",
+      "不可以",
+      "拒绝",
+      "不行",
+      "不要",
+      "先不做",
+      "reject",
+      "no"
+    ],
+    "decision.recommended_phrases": [
+      "按建议",
+      "按推荐"
+    ]
   }
 }

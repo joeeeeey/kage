@@ -1,6 +1,7 @@
 """Language data: the user-facing text (messages) and the patterns guards read, one JSON catalog per language tag.
 
-`kage/locale/<tag>.json` = {"language", "patterns": {key: regex source}, "messages": {key: str.format template}}.
+`kage/locale/<tag>.json` = {"language", "patterns": {key: regex source}, "messages": {key: str.format template},
+"words": {key: [phrase, ...]}}.
 The owner's language (owner.json) picks the catalog. Every catalog carries the same keys; a missing catalog or key is a
 LocaleError, never a silent fallback, so a guard cannot quietly run with the wrong words.
 """
@@ -30,7 +31,8 @@ def catalog(language):
     raw = json.loads(path.read_text(encoding='utf-8'))
     return types.MappingProxyType({'language': raw['language'],
                                    'patterns': types.MappingProxyType(dict(raw['patterns'])),
-                                   'messages': types.MappingProxyType(dict(raw['messages']))})
+                                   'messages': types.MappingProxyType(dict(raw['messages'])),
+                                   'words': types.MappingProxyType({k: tuple(v) for k, v in raw.get('words', {}).items()})})
 
 
 def pattern(language, key):
@@ -39,6 +41,14 @@ def pattern(language, key):
         return catalog(language)['patterns'][key]
     except KeyError:
         raise LocaleError(f'{language}: no pattern {key!r}') from None
+
+
+def words(language, key):
+    """The phrase list for `key`, as a tuple in catalog order."""
+    try:
+        return catalog(language)['words'][key]
+    except KeyError:
+        raise LocaleError(f'{language}: no words {key!r}') from None
 
 
 def message(language, key, **values):
