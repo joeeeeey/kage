@@ -26,6 +26,13 @@ class CatalogTest(unittest.TestCase):
                 for key, template in cat['messages'].items():
                     self.assertEqual(fields(template), fields(base['messages'][key]), key)
 
+    def test_no_field_takes_a_parameter_name_of_message(self):
+        # locale.message(language, key, **values) and every core's msg(key, **values): a field named like one of their
+        # own parameters could never be passed (TypeError: got multiple values for argument 'key').
+        for language in locale.languages():
+            for key, template in locale.catalog(language)['messages'].items():
+                self.assertFalse(set(fields(template)) & {'language', 'key', 'values', 'self'}, (language, key))
+
     def test_every_pattern_compiles(self):
         for language in locale.languages():
             for key, source in locale.catalog(language)['patterns'].items():

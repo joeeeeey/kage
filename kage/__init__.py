@@ -4,4 +4,4 @@ The engine holds no person's or company's data. Who the owner is, which organisa
 where an instance lives come from a deployment profile (see `kage.profile`). Standard library only.
 """
 
-__version__ = '0.37.0'
+__version__ = '0.38.0'
