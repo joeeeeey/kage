@@ -163,7 +163,22 @@
     "health.why_slow": "too slow {n}",
     "health.why_joiner": ", ",
     "health.window": "\n{adverse} of {runs} runs in the last {minutes} minutes had problems ({why}).",
-    "health.notice_context": "provider health · details: {link}"
+    "health.notice_context": "provider health · details: {link}",
+    "stuck.option_requeue": "Redeliver to the session",
+    "stuck.option_settle": "Mark as handled",
+    "stuck.option_later": "Leave it for now",
+    "stuck.reply_requeue": "🔁 Put {n} back in the queue for the session; it will claim them again.",
+    "stuck.reply_settle": "✅ Marked {n} as handled; they are not delivered again, and the messages behind them go on to the session.",
+    "stuck.reply_later": "OK, leaving it. These messages stay claimed and later deliveries stay blocked; handle it on the dashboard's Health page when needed.",
+    "stuck.reply_none": "The session already settled these messages; nothing changed.",
+    "stuck.age_days": "{n} d",
+    "stuck.age_hours": "{n} h",
+    "stuck.age_minutes": "{n} min",
+    "stuck.who_task": "the {task} session",
+    "stuck.who_unknown": "a Claude session",
+    "stuck.card": "Your choice: {who} claimed {claimed} messages and has not finished them after {age}; {behind} newer messages are blocked behind them\nRedeliver = put them back in the queue for the session to claim again; Mark as handled = settle them, no more delivery; Leave it = change nothing this time.",
+    "stuck.footer": "Stuck claim · details: <{url}/health>",
+    "stuck.cleared": "✅ These messages are no longer stuck (the session settled them, or they were handed over); nothing to do"
   },
   "words": {
     "decision.approve_phrases": [

@@ -163,7 +163,22 @@
     "health.why_slow": "运行太慢 {n} 次",
     "health.why_joiner": "、",
     "health.window": "\n近 {minutes} 分钟 {runs} 次运行里 {adverse} 次出问题（{why}）。",
-    "health.notice_context": "provider 健康 · 详情：{link}"
+    "health.notice_context": "provider 健康 · 详情：{link}",
+    "stuck.option_requeue": "重新投递给该会话",
+    "stuck.option_settle": "标记为已处理",
+    "stuck.option_later": "先不管",
+    "stuck.reply_requeue": "🔁 已把 {n} 条重新投递给该会话，它会重新领取。",
+    "stuck.reply_settle": "✅ 已把 {n} 条标记为已处理，不会再投递；排在后面的消息会继续投给该会话。",
+    "stuck.reply_later": "好的，先不管。这些消息还领着，后面的投递仍然堵着；需要时在看板的「健康」页处理。",
+    "stuck.reply_none": "这些消息已经被会话自己结算了，没有改动。",
+    "stuck.age_days": "{n} 天",
+    "stuck.age_hours": "{n} 小时",
+    "stuck.age_minutes": "{n} 分钟",
+    "stuck.who_task": "{task} 会话",
+    "stuck.who_unknown": "一个 Claude 会话",
+    "stuck.card": "要你选：{who}领了 {claimed} 条消息，{age}还没处理完，后面 {behind} 条新消息被堵住了\n重新投递 = 放回队列让会话重新领取；标记为已处理 = 直接结清，不再投递；先不管 = 这次不动。",
+    "stuck.footer": "领取卡住 · 详情：<{url}/health>",
+    "stuck.cleared": "✅ 这些消息已经不再卡着（会话结算了，或已转交），无需处理"
   },
   "words": {
     "decision.approve_phrases": [
