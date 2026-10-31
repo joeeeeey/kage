@@ -153,7 +153,17 @@
     "runlog.skipped_line": "(skipped one oversized output line)",
     "runlog.process_ended": "process ended",
     "runlog.stopped": "stopped",
-    "runlog.took": "took {duration}"
+    "runlog.took": "took {duration}",
+    "health.name": "{model} ({provider})",
+    "health.recovered": "{name} is back to normal; background work has switched back.",
+    "health.degraded_switched": "{name} is overloaded; new background sessions use {alt} for now and switch back on recovery.",
+    "health.degraded_both": "{name} is overloaded and so is the other provider; background work queues and retries as usual.",
+    "health.why_overload": "overload / stream drops {n}",
+    "health.why_failed": "failures {n}",
+    "health.why_slow": "too slow {n}",
+    "health.why_joiner": ", ",
+    "health.window": "\n{adverse} of {runs} runs in the last {minutes} minutes had problems ({why}).",
+    "health.notice_context": "provider health · details: {link}"
   },
   "words": {
     "decision.approve_phrases": [

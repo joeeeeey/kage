@@ -153,7 +153,17 @@
     "runlog.skipped_line": "（跳过一行超长输出）",
     "runlog.process_ended": "进程已结束",
     "runlog.stopped": "已被停止",
-    "runlog.took": "用时 {duration}"
+    "runlog.took": "用时 {duration}",
+    "health.name": "{model}（{provider}）",
+    "health.recovered": "{name} 已恢复正常，后台任务已切回。",
+    "health.degraded_switched": "{name} 过载不稳定，新的后台会话已临时改用 {alt}，恢复后自动切回。",
+    "health.degraded_both": "{name} 过载不稳定，另一个 provider 也不稳定，后台任务照常排队重试。",
+    "health.why_overload": "过载 / 断流 {n} 次",
+    "health.why_failed": "失败 {n} 次",
+    "health.why_slow": "运行太慢 {n} 次",
+    "health.why_joiner": "、",
+    "health.window": "\n近 {minutes} 分钟 {runs} 次运行里 {adverse} 次出问题（{why}）。",
+    "health.notice_context": "provider 健康 · 详情：{link}"
   },
   "words": {
     "decision.approve_phrases": [
