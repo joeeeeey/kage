@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import tempfile
 import types
 import unittest
@@ -15,7 +16,8 @@ OWNER, BOT, APP = 'U0000TEST01', 'U0000BOT001', 'A0000APP001'
 def core(**over):
     args = dict(tz=zoneinfo.ZoneInfo('Asia/Shanghai'), owner_key='owner', owner_name='Mira', owner_slack_user=OWNER,
                 bot_user=BOT, app_id=APP, archive_url='https://example.slack.com/archives',
-                known_channels={'#ops': 'C0000OPS001'}, ticket_ref_re=re.compile(r'\b(TEST-\d{1,6})\b', re.I))
+                known_channels={'#ops': 'C0000OPS001'}, ticket_ref_re=re.compile(r'\b(TEST-\d{1,6})\b', re.I),
+                agent_event_type='test_agent_post', ticket_ref_reason='ticket_ref')
     return I.IntakeCore('en', **{**args, **over})
 
 
@@ -107,6 +109,45 @@ class IntakeCoreTest(unittest.TestCase):
         self.assertEqual((out['old'], out['new']), (False, True))
         with self.assertRaises(ValueError):
             I.people_set_field(self.people, 'ada', 'tone', 'x')
+
+
+class EngineTest(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(':memory:')
+        self.db.row_factory = sqlite3.Row
+        self.core = core()
+        self.core.initialize(self.db)
+        self.db.execute('CREATE TABLE agent_sends (channel TEXT, ts TEXT)')
+        self.engine = I.Intake(self.db, ':memory:', types.SimpleNamespace(), core=self.core)
+
+    def test_the_store_follows_the_owner_key(self):
+        columns = {r[1] for r in self.db.execute('PRAGMA table_info(triage_records)')}
+        self.assertIn('needs_owner', columns)
+        self.assertIn('horizon', {r[1] for r in self.db.execute('PRAGMA table_info(intake_sends)')})
+        self.assertIn('AS MIRA', self.core.ddl)  # the owner's name in the schema comments
+
+    def test_the_filter(self):
+        ctx = {'oncall': {'C0000ONC001'}, 'cfg': {}}
+        verdict = lambda m, ch='D0000DM0001', conv='im', root=None: self.engine.verdict(m, ch, conv, root, ctx)  # noqa: E731
+        self.assertEqual(verdict({'user': OWNER, 'ts': '1.1'}), 'owner_authored')
+        self.assertEqual(verdict({'user': BOT, 'ts': '1.2'}), 'our_agent')
+        self.assertEqual(verdict({'user': 'U0000ADA001', 'ts': '1.3', 'metadata': {'event_type': 'test_agent_post'}}),
+                         'our_agent')
+        self.assertEqual(verdict({'user': 'USLACKBOT', 'ts': '1.4'}), 'system_noise')
+        self.assertEqual(verdict({'bot_id': 'B1', 'ts': '1.5'}), 'bot_outside_oncall')
+        self.assertEqual(verdict({'bot_id': 'B1', 'ts': '1.6'}, 'C0000ONC001', 'channel'), 'accept')
+
+    def test_requests_and_budget(self):
+        self.assertEqual(I.binding_key('im', None, '1.5', 'U1'), '1.5')
+        self.assertEqual(I.binding_key('im', '1.2', '1.5', 'U1'), '1.2')
+        self.assertTrue(I.legacy_whole_dm_key('u:U1') and I.legacy_whole_dm_key(''))
+        budget = I.Budget(2)
+        budget.take('search.messages')
+        budget.take('search.messages')
+        with self.assertRaises(I.BudgetExhausted):
+            budget.take('conversations.history')
+        self.assertEqual(self.core.ask_kind_zh['watch'], 'waiting for their reply')
+        self.assertIn('Mira', self.core.window_why)
 
 
 if __name__ == '__main__':

@@ -559,7 +559,26 @@
     "access.settle_proposals.4": "⚠️ Not applied: the patch no longer fits the current rule file or failed validation (",
     "access.settle_proposals.5": ").",
     "access.smoke_proposal.title_zh": "🧪 TEST smoke: relax the BigQuery named-resource limit",
-    "access.smoke_proposal.rationale_zh": "An end-to-end test; it only changes the rule file in the test directory."
+    "access.smoke_proposal.rationale_zh": "An end-to-end test; it only changes the rule file in the test directory.",
+    "intake.smoke_text.request": "🧪 TEST smoke-intake (end-to-end test, not a real request): please create a test task that appends the line `- smoke-intake ok` to the end of its own status.md (memory-guard check first, then bump), then stops. Do not post to Slack.",
+    "intake.smoke_text.strategic": "🧪 TEST smoke-intake (strategic-request test, not a real request): should we move the whole infra to another cloud? Please assess.",
+    "intake.smoke_text.alert": "🧪 TEST smoke-intake alert: [Triggered] High error rate on service:smoke-intake-test",
+    "intake.ask_kind_zh.ask_card": "question card",
+    "intake.ask_kind_zh.watch": "waiting for their reply",
+    "intake.ask_kind_zh.mention": "@-mentioned them in a message",
+    "intake.Intake.write_refs_file.im": "DM",
+    "intake.Intake.write_refs_file.mpim": "group DM",
+    "intake.Intake.write_refs_file.channel": "channel",
+    "intake.Intake.write_refs_file.dm_new_topic": "a new top-level DM, not in any task's conversation window",
+    "intake.Intake.write_refs_file.dm_conflict": "more than one task could take this (waiting for this person's reply / just talked with them); your call",
+    "intake.Intake.write_refs_file.dm_unresolved_ref": "the ticket it mentions has no task workspace yet",
+    "intake.Intake.write_refs_file.1": "## This person's current tasks (P39 hint: {why})",
+    "intake.Intake.write_refs_file.2": " · closed",
+    "intake.Intake.write_refs_file.3": "- (none)",
+    "intake.Intake.write_refs_file.4": "A continuation of a task in progress → `{cli} handoff --event <this event id> --task T` (the original message refs stay; this request's thread also moves to T); a new request → triage it as usual per goal.md.",
+    "intake.Intake.write_refs_file.5": "## Tasks waiting for this person's reply (R-0012; what was asked: open_asks in intake-context)",
+    "intake.Intake.write_refs_file.6": "- `{task_id}` · {value} · {permalink} · since {local_iso}",
+    "intake.Intake.write_refs_file.7": "Clearly answering one of them (it addresses what was asked, brings what was wanted, or says it is done) → `{cli} handoff --event <this event id> --task T`; otherwise triage it as a new message; never hand over small talk."
   },
   "words": {
     "decision.approve_phrases": [

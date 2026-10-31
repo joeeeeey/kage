@@ -559,7 +559,26 @@
     "access.settle_proposals.4": "⚠️ 没有生效：补丁对当前规则文件不再适用或校验失败（",
     "access.settle_proposals.5": "）。",
     "access.smoke_proposal.title_zh": "🧪 TEST 冒烟：放宽 BigQuery 点名资源上限",
-    "access.smoke_proposal.rationale_zh": "端到端测试，只改测试目录里的规则文件。"
+    "access.smoke_proposal.rationale_zh": "端到端测试，只改测试目录里的规则文件。",
+    "intake.smoke_text.request": "🧪 TEST smoke-intake（端到端测试，不是真实请求）：请新建一个测试任务，让它在自己的 status.md 末尾追加一行 `- smoke-intake ok`（先 memory-guard check，再 bump），然后结束。不要发 Slack。",
+    "intake.smoke_text.strategic": "🧪 TEST smoke-intake（方向性需求测试，不是真实请求）：我们是不是该把整个 infra 迁到另一朵云？你评估一下。",
+    "intake.smoke_text.alert": "🧪 TEST smoke-intake 告警：[Triggered] High error rate on service:smoke-intake-test",
+    "intake.ask_kind_zh.ask_card": "问题卡",
+    "intake.ask_kind_zh.watch": "在等他回复",
+    "intake.ask_kind_zh.mention": "在消息里 @ 了他",
+    "intake.Intake.write_refs_file.im": "私信",
+    "intake.Intake.write_refs_file.mpim": "群私信",
+    "intake.Intake.write_refs_file.channel": "频道",
+    "intake.Intake.write_refs_file.dm_new_topic": "新的顶层私信，不在哪个任务的对话窗口里",
+    "intake.Intake.write_refs_file.dm_conflict": "不止一个任务可能接这条（在等这个人回话 / 刚和他对话过），由你判断",
+    "intake.Intake.write_refs_file.dm_unresolved_ref": "消息里提到的票号还没有对应的任务目录",
+    "intake.Intake.write_refs_file.1": "## 这个人当前关联的任务（P39 提示：{why}）",
+    "intake.Intake.write_refs_file.2": " · 已收尾",
+    "intake.Intake.write_refs_file.3": "- （没有）",
+    "intake.Intake.write_refs_file.4": "是某个在办任务的延续 → `{cli} handoff --event <本事件 id> --task T`（原始消息引用不变，对方这条请求的 thread 也转给 T）；是新请求 → 按 goal.md 正常分诊。",
+    "intake.Intake.write_refs_file.5": "## 有任务在等这个人回话（R-0012；问的是什么见 intake-context 的 open_asks）",
+    "intake.Intake.write_refs_file.6": "- `{task_id}` · {value} · {permalink} · 从 {local_iso}",
+    "intake.Intake.write_refs_file.7": "明显是在回答其中一个（说到了问的那件事、带着要的东西、或说做好了）→ `{cli} handoff --event <本事件 id> --task T`；否则照常当新消息分诊；闲聊绝不转。"
   },
   "words": {
     "decision.approve_phrases": [
