@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#eaf8ff">
+<title>Slack Followup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body data-motion="on">
+<a class="skip" href="#scene">跳到Slack Followup场景</a>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand" aria-label="Slack Followup">
+      <svg class="brand-mark" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
+        <defs>
+          <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#12cfe0"/><stop offset=".55" stop-color="#2f5bff"/><stop offset="1" stop-color="#ff5a6a"/>
+          </linearGradient>
+        </defs>
+        <circle class="bm-ring" cx="20" cy="20" r="16" fill="none" stroke="url(#bm-g)" stroke-width="2.6" stroke-dasharray="6 5" stroke-linecap="round"/>
+        <circle cx="20" cy="20" r="10.5" fill="#fff" stroke="url(#bm-g)" stroke-width="2"/>
+        <path class="bm-star" d="M20 11.5l2.2 6.3 6.3 2.2-6.3 2.2-2.2 6.3-2.2-6.3-6.3-2.2 6.3-2.2z" fill="url(#bm-g)"/>
+      </svg>
+      <div class="brand-text">
+        <h1>Slack Followup</h1>
+        <p>AGENT × SLACK</p>
+      </div>
+    </div>
+
+    <div class="scope" role="group" aria-label="显示范围 Scope">
+      <button type="button" id="scope-running" class="scope-btn" aria-pressed="true">
+        <i class="scope-led" aria-hidden="true"></i><span>运行中</span><small>RUNNING</small>
+      </button>
+      <button type="button" id="scope-all" class="scope-btn" aria-pressed="false">
+        <span>历史记录 · 全部</span><small>ALL</small>
+      </button>
+    </div>
+    <label class="field compact" id="state-field" hidden>
+      <span class="sr">历史状态 State</span>
+      <select id="state-filter" aria-label="历史状态筛选">
+        <option value="all">全部状态</option>
+        <option value="running">运行中</option>
+        <option value="stopped">已停止</option>
+        <option value="expired">已过期</option>
+        <option value="other">其他</option>
+      </select>
+    </label>
+
+    <label class="field search">
+      <span class="sr">搜索 Search</span>
+      <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input type="search" id="search" placeholder="搜索会话 / 频道 / 同事" autocomplete="off" spellcheck="false">
+    </label>
+    <label class="field compact">
+      <span class="sr">服务方 Provider</span>
+      <select id="provider-filter" aria-label="服务方筛选"><option value="all">全部服务方</option></select>
+    </label>
+
+    <div class="status-cluster">
+      <div class="chip" id="conn-chip" data-state="loading" role="status" aria-live="polite">
+        <span class="led" aria-hidden="true"></span>
+        <span class="chip-text"><b id="conn-label">连接中</b><small id="conn-sub">LOCAL · CONNECTING</small></span>
+      </div>
+      <div class="chip" id="sup-chip" data-state="unknown">
+        <span class="led" aria-hidden="true"></span>
+        <span class="chip-text"><b id="sup-label">守护进程 未知</b><small id="sup-sub">SUPERVISOR</small></span>
+      </div>
+      <span class="sync" title="最近同步 · 每 2 秒"><small>SYNC</small> <b id="sync-label">—</b></span>
+    </div>
+
+    <div class="tools">
+      <button type="button" class="btn ghost" id="motion-toggle" aria-pressed="true">
+        <span class="mt-ico" aria-hidden="true"></span><span id="motion-label">动效 开</span>
+      </button>
+      <button type="button" class="btn ghost" id="refresh-btn" aria-label="立即刷新">
+        <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+        <span class="lbl">刷新</span>
+      </button>
+      <button type="button" class="btn primary" id="drawer-toggle" aria-expanded="false" aria-controls="drawer">
+        <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg>
+        <span class="lbl">面板</span><span class="badge" id="drawer-badge" hidden>0</span>
+      </button>
+    </div>
+  </header>
+
+  <main id="main" class="stage">
+    <section id="scene" class="scene" tabindex="0" role="region"
+             aria-label="Slack Followup场景：AI 会话与 Slack 同事的联动。触控板左右滑动平移，上下滑动缩放，拖拽移动；方向键平移，加号减号缩放，0 适配全景，Esc 返回。">
+      <div class="scene-bg" aria-hidden="true">
+        <i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i><i class="orb o4"></i><i class="orb o5"></i>
+      </div>
+      <div class="scene-grid" id="grid" aria-hidden="true"></div>
+
+      <div class="world" id="world">
+        <div id="zones" class="zones" aria-hidden="true"></div>
+        <svg id="routes" class="routes" aria-hidden="true" focusable="false">
+          <g id="g-routes"></g>
+          <g id="g-fx"></g>
+        </svg>
+        <div id="nodes" class="nodes"></div>
+      </div>
+
+      <div class="hud hud-tl">
+        <p class="hud-eyebrow">LIVE · 当前跟进</p>
+        <p class="hud-title" id="hud-title">运行中</p>
+        <p class="hud-counts" id="hud-counts" aria-live="polite">正在加载…</p>
+        <div class="hud-key" id="hud-key" role="group"
+             aria-label="图例：卡片边框与圆点使用同一种颜色，表示轮询间隔（1、2、5、10、15 分钟；已停止或已过期为灰色），不代表消息新旧或错误；底色表示当前 48 小时窗口已过进度，新消息会刷新窗口"
+             title="卡片边框与圆点颜色相同，只表示轮询间隔（越久没有新消息，轮询越慢），并非错误；已停止或已过期显示灰色。底色宽度是当前 48 小时窗口已过进度，新消息会刷新窗口。悬停卡片或打开详情可查看百分比。">
+          <p class="hk-row"><span class="hk-lbl">边框·圆点颜色=轮询间隔</span>
+            <span class="hk-dots">
+              <span class="hk-dot" data-k="fresh" title="轮询间隔 1 分钟"><i aria-hidden="true"></i>1m</span>
+              <span class="hk-dot" data-k="warm" title="轮询间隔 2 分钟"><i aria-hidden="true"></i>2m</span>
+              <span class="hk-dot" data-k="steady" title="轮询间隔 5 分钟"><i aria-hidden="true"></i>5m</span>
+              <span class="hk-dot" data-k="quiet" title="轮询间隔 10 分钟"><i aria-hidden="true"></i>10m</span>
+              <span class="hk-dot" data-k="cold" title="轮询间隔 15 分钟"><i aria-hidden="true"></i>15m</span>
+            </span>
+          </p>
+          <p class="hk-row"><i class="hk-sw" aria-hidden="true"></i><span>底色=48h窗口已过进度；新消息刷新</span></p>
+        </div>
+        <nav class="hud-links" aria-label="数字员工：后台运行与设置">
+          <a id="nav-runs" href="/runs" title="数字员工的后台运行、实时日志">运行记录</a>
+          <a id="nav-intake" href="/intake" title="收件处：私信、@{{owner_name}}、订阅频道的连发与分诊记录（只读）">收件</a>
+          <a id="nav-rules" href="/rules" title="经验法则引擎：每周结论分布、批准耗时、{{owner_name}} 推翻、规则提议和回测（只读）">规则</a>
+          <a id="nav-routines" href="/routines" title="各任务的定时任务：下次 / 上次触发、来源和状态（只读）">定时</a>
+          <a id="nav-gaps" href="/gaps" title="能力阻塞与自动化缺口：按系统 / 类型统计、未解决的阻塞、最常见路径、skill 提议（只读）">缺口</a>
+          <a id="nav-learning" href="/learning" title="从卡片反馈学规则：按 shape 统计、{{owner_name}} 推翻率、「要不要固化成规则」卡片与采纳（只读，无原文）">学习</a>
+          <a id="nav-design" href="/design" title="架构设计文档：本地生成的评审页（只读，沙箱里展示，不联网）">设计</a>
+          <a id="nav-backlog" href="/backlog" title="不会被自动唤醒的旧事件（只读）">旧积压</a>
+          <a id="nav-settings" href="/settings" title="数字员工配置：模型、路由、调度开关">设置</a>
+        </nav>
+      </div>
+
+      <div class="hud hud-top" id="hud-top">
+        <div class="pill-bar" id="focus-bar" hidden>
+          <span class="pb-tag">聚焦 FOCUS</span>
+          <b id="focus-label"></b>
+          <button type="button" class="btn sm" id="clear-focus">返回全景</button>
+        </div>
+        <div class="pill-bar person" id="person-bar" hidden>
+          <span class="pb-tag">高亮 HIGHLIGHT</span>
+          <b id="person-label"></b>
+          <button type="button" class="btn sm" id="clear-person" aria-label="取消高亮同事">取消</button>
+        </div>
+        <div class="banner" id="stale-banner" role="alert" hidden></div>
+      </div>
+
+      <div class="hud hud-tr cam" role="group" aria-label="视图控制 Camera" title="左右滑动平移，上下滑动缩放，拖拽移动">
+        <button type="button" class="btn icon" id="cam-in" aria-label="放大" title="放大 +">
+          <svg viewBox="0 0 24 24" width="18" height="18" class="ico" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button type="button" class="btn icon" id="cam-out" aria-label="缩小" title="缩小 −">
+          <svg viewBox="0 0 24 24" width="18" height="18" class="ico" aria-hidden="true"><path d="M5 12h14"/></svg>
+        </button>
+        <button type="button" class="btn icon" id="cam-fit" aria-label="适配全景" title="适配全景 0">
+          <svg viewBox="0 0 24 24" width="18" height="18" class="ico" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+        <button type="button" class="btn icon" id="cam-reset" aria-label="复位视角" title="复位视角">
+          <svg viewBox="0 0 24 24" width="18" height="18" class="ico" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+        </button>
+      </div>
+
+      <div class="hud hud-bl legend" id="legend" aria-label="图例 Legend"></div>
+
+      <nav class="hud hud-bc dock-rail" id="dock-rail" aria-label="会话快速聚焦" hidden></nav>
+
+      <div class="hud hud-br">
+        <button type="button" class="btn sm" id="more-btn" hidden>显示更多会话</button>
+        <span class="mini-pill" id="avatar-pill" hidden></span>
+      </div>
+
+      <div class="scene-empty" id="scene-empty" hidden></div>
+    </section>
+
+    <aside id="drawer" class="drawer" aria-label="面板：监听、活动与概览">
+      <header class="drawer-head">
+        <div class="tabs" role="tablist" aria-label="面板分区">
+          <button type="button" role="tab" id="tab-watches" class="tab" aria-selected="true" aria-controls="panel-watches" data-tab="watches">
+            监听<small>WATCH</small><span class="count" id="watch-count">0</span>
+          </button>
+          <button type="button" role="tab" id="tab-events" class="tab" aria-selected="false" aria-controls="panel-events" tabindex="-1" data-tab="events">
+            活动<small>EVENT</small><span class="count" id="event-count">0</span>
+          </button>
+          <button type="button" role="tab" id="tab-summary" class="tab" aria-selected="false" aria-controls="panel-summary" tabindex="-1" data-tab="summary">
+            概览<small>STATS</small>
+          </button>
+        </div>
+        <button type="button" class="btn icon" id="drawer-close" aria-label="收起面板">×</button>
+      </header>
+      <div class="drawer-body">
+        <section id="panel-watches" role="tabpanel" aria-labelledby="tab-watches" tabindex="-1">
+          <p class="note" id="inv-note"></p>
+          <div class="watch-list" id="watch-list"></div>
+          <div class="empty" id="watch-empty" hidden></div>
+        </section>
+        <section id="panel-events" role="tabpanel" aria-labelledby="tab-events" tabindex="-1" hidden>
+          <p class="note" id="act-note"></p>
+          <ol class="timeline" id="timeline"></ol>
+          <div class="empty" id="event-empty" hidden></div>
+        </section>
+        <section id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" tabindex="-1" hidden>
+          <div id="summary-body"></div>
+        </section>
+      </div>
+      <footer class="drawer-foot">
+        <p>列表仅展示元数据；消息正文只在打开线程详情时按需读取，且仅缓存在内存。“已排队（待会话确认）”与“已领取（待处理完成）”都不等于“已处理”；守护进程在线不代表会话在线。</p>
+      </footer>
+    </aside>
+  </main>
+</div>
+
+<dialog id="detail" aria-labelledby="detail-title" class="sheet side">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">THREAD INSPECTOR · 线程详情</p>
+        <h2 id="detail-title">监听详情</h2>
+      </div>
+      <button type="button" class="btn icon" id="detail-close" aria-label="关闭详情">×</button>
+    </header>
+    <div id="detail-body" class="sheet-body">
+      <div id="detail-top" class="detail-part"></div>
+      <section id="preview" class="ins-block preview" aria-labelledby="pv-title" aria-busy="false" hidden>
+        <div class="pv-head">
+          <h3 id="pv-title">最近消息 · 按需读取</h3>
+          <span class="pv-when" id="pv-when"></span>
+          <button type="button" class="btn sm" id="pv-refresh">刷新</button>
+        </div>
+        <p class="pv-note" id="pv-note"></p>
+        <div class="pv-alert" id="pv-alert" role="status" hidden></div>
+        <ol class="pv-list" id="pv-list" tabindex="0" aria-label="最近 Slack 消息（只读预览）"></ol>
+        <p class="sr" id="pv-live" role="status" aria-live="polite"></p>
+      </section>
+      <div id="detail-rest" class="detail-part"></div>
+    </div>
+    <footer class="sheet-foot">
+      <a class="btn ghost" id="detail-slack" target="_blank" rel="noopener noreferrer" hidden>在 Slack 打开 ↗</a>
+      <button type="button" class="btn danger" id="detail-stop">停止此监听…</button>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="session" aria-labelledby="session-title" class="sheet side">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">SESSION INSPECTOR · 会话详情</p>
+        <h2 id="session-title">会话详情</h2>
+      </div>
+      <button type="button" class="btn icon" id="session-close" aria-label="关闭会话详情">×</button>
+    </header>
+    <div id="session-body" class="sheet-body"></div>
+    <footer class="sheet-foot">
+      <p class="copy-status" id="session-copy-status" role="status" aria-live="polite"></p>
+      <div class="copy-fallback" id="session-copy-fallback" hidden>
+        <label><span>手动复制：</span><textarea readonly rows="3" spellcheck="false"></textarea></label>
+      </div>
+      <button type="button" class="btn ghost" id="session-copy-all">复制完整摘要</button>
+      <button type="button" class="btn primary" id="session-focus">聚焦会话</button>
+      <div class="sess-danger" role="group" aria-label="危险操作：停止此会话全部跟进">
+        <p class="sess-danger-note" id="session-stop-note"></p>
+        <button type="button" class="btn danger" id="session-stop-all" aria-describedby="session-stop-note" aria-haspopup="dialog" disabled>停止此会话全部跟进</button>
+      </div>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="people" aria-labelledby="people-title" class="sheet small">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">CREW LIST · 参与者</p>
+        <h2 id="people-title">参与者</h2>
+      </div>
+      <button type="button" class="btn icon" id="people-close" aria-label="关闭参与者列表">×</button>
+    </header>
+    <div id="people-body" class="sheet-body"></div>
+    <footer class="sheet-foot">
+      <button type="button" class="btn ghost" id="people-done">关闭</button>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-desc" class="sheet small">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">CONFIRM STOP</p>
+        <h2 id="confirm-title">确认停止监听</h2>
+      </div>
+    </header>
+    <div class="sheet-body" id="confirm-desc"></div>
+    <footer class="sheet-foot">
+      <button type="button" class="btn ghost" id="confirm-cancel">取消</button>
+      <button type="button" class="btn danger" id="confirm-ok">确认停止</button>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="session-stop" aria-labelledby="session-stop-title" aria-describedby="session-stop-desc" class="sheet small bulk">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">BULK STOP · 批量停止整个会话</p>
+        <h2 id="session-stop-title">确认停止此会话全部跟进</h2>
+      </div>
+    </header>
+    <div class="sheet-body" id="session-stop-desc" tabindex="-1"></div>
+    <footer class="sheet-foot">
+      <button type="button" class="btn ghost" id="session-stop-cancel">取消</button>
+      <button type="button" class="btn danger" id="session-stop-ok">确认停止全部跟进</button>
+    </footer>
+  </div>
+</dialog>
+
+<div class="tip" id="tip" role="tooltip" aria-hidden="true" hidden></div>
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<script src="/app.js"></script>
+</body>
+</html>

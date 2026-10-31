@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#eaf8ff">
+<title>Slack Followup · 运行</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/ops.css">
+<link rel="stylesheet" href="/trace.css">
+</head>
+<body class="ops" data-motion="on">
+<a class="skip" href="#ops-main">跳到正文</a>
+<div class="ops-app">
+  <header class="topbar">
+    <a class="brand ops-brand" href="/" aria-label="返回 Slack Followup 场景">
+      <svg class="brand-mark" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
+        <defs>
+          <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#12cfe0"/><stop offset=".55" stop-color="#2f5bff"/><stop offset="1" stop-color="#ff5a6a"/>
+          </linearGradient>
+        </defs>
+        <circle class="bm-ring" cx="20" cy="20" r="16" fill="none" stroke="url(#bm-g)" stroke-width="2.6" stroke-dasharray="6 5" stroke-linecap="round"/>
+        <circle cx="20" cy="20" r="10.5" fill="#fff" stroke="url(#bm-g)" stroke-width="2"/>
+        <path class="bm-star" d="M20 11.5l2.2 6.3 6.3 2.2-6.3 2.2-2.2 6.3-2.2-6.3-6.3-2.2 6.3-2.2z" fill="url(#bm-g)"/>
+      </svg>
+      <div class="brand-text">
+        <h1>Slack Followup</h1>
+        <p>数字员工 · 后台运行</p>
+      </div>
+    </a>
+    <nav class="ops-nav" aria-label="页面">
+      <a class="scope-btn" href="/"><span>联动场景</span><small>SCENE</small></a>
+      <a class="scope-btn" href="/runs" data-nav="runs"><span>运行记录</span><small>RUNS</small></a>
+      <a class="scope-btn" href="/intake" data-nav="intake"><span>收件</span><small>INTAKE</small></a>
+      <a class="scope-btn" href="/rules" data-nav="rules"><span>规则</span><small>RULES</small></a>
+      <a class="scope-btn" href="/routines" data-nav="routines"><span>定时</span><small>ROUTINES</small></a>
+      <a class="scope-btn" href="/gaps" data-nav="gaps"><span>缺口</span><small>GAPS</small></a>
+      <a class="scope-btn" href="/learning" data-nav="learning"><span>学习</span><small>LEARNING</small></a>
+      <a class="scope-btn" href="/health" data-nav="health"><span>健康</span><small>HEALTH</small></a>
+      <a class="scope-btn" href="/design" data-nav="design"><span>设计</span><small>DESIGN</small></a>
+      <a class="scope-btn" href="/backlog" data-nav="backlog"><span>旧积压</span><small>BACKLOG</small></a>
+      <a class="scope-btn" href="/settings" data-nav="settings"><span>设置</span><small>SETTINGS</small></a>
+    </nav>
+    <div class="status-cluster">
+      <div class="chip" id="ops-chip" data-state="loading" role="status" aria-live="polite">
+        <span class="led" aria-hidden="true"></span>
+        <span class="chip-text"><b id="ops-chip-label">连接中</b><small>LOCAL</small></span>
+      </div>
+      <span class="sync" title="最近同步"><small>SYNC</small> <b id="ops-sync">—</b></span>
+    </div>
+  </header>
+  <main id="ops-main" class="ops-main" tabindex="-1"></main>
+</div>
+
+<dialog id="ops-confirm" class="sheet" aria-labelledby="ops-confirm-title">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">CONFIRM · 确认修改</p>
+        <h2 id="ops-confirm-title">确认保存设置</h2>
+      </div>
+    </header>
+    <div class="sheet-body" id="ops-confirm-body"></div>
+    <footer class="sheet-foot">
+      <button type="button" class="btn ghost" id="ops-confirm-cancel">取消</button>
+      <button type="button" class="btn primary" id="ops-confirm-ok">确认保存</button>
+    </footer>
+  </div>
+</dialog>
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<script src="/trace.js"></script>
+<script src="/ops.js"></script>
+</body>
+</html>
