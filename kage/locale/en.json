@@ -13,7 +13,8 @@
     "decision.condition": "(?i)^(?:but|except|only|unless|however|instead)(?![a-z])",
     "decision.question": "[?]",
     "decision.plan_change": "(?i)\\b(?:change (?:it )?to|switch to|instead|cancel|stop|hold off|pause|only do|wait (?:until|for))\\b",
-    "decision.asking": "(?i)[?]|\\b(?:what|why|how|whether|should|can we|could we)\\b"
+    "decision.asking": "(?i)[?]|\\b(?:what|why|how|whether|should|can we|could we)\\b",
+    "copy.card_ref": "(?i)\\b(?:the|that|an?|another|previous|earlier|old|original)\\s+(?:(?:approval|decision|confirmation|reminder|release|merge)\\s+)?card\\b"
   },
   "messages": {
     "you": "you",
@@ -67,7 +68,46 @@
     "ask.closed": "(Already handled)",
     "decision.separators": " \t\n,.!?;:~—…)]\"'“”",
     "decision.approve_label": "Approve",
-    "decision.reject_label": "Reject"
+    "decision.reject_label": "Reject",
+    "decision.card.hint": "💬 You can also reply in the thread: the buttons fold away and your reply is followed",
+    "decision.card.keep_hint": "💬 You can also reply in the thread: start with \"approve\", \"no\" or an option name to decide; a question keeps the buttons, a change of plan folds them and brings a new proposal",
+    "decision.card.cancelled": "Cancelled, please add the details in the thread",
+    "decision.card.code_owned_hint": "💬 You can also reply in the thread with {choices}",
+    "decision.superseded.newer_proposal": "(superseded by a newer reading)",
+    "decision.superseded.card_decision": "(superseded: the card was decided directly)",
+    "decision.superseded.smoke_cleanup": "(superseded: test cleaned up)",
+    "decision.recommended": " (recommended)",
+    "decision.note": " ({what}: {note})",
+    "decision.note.remark": "note",
+    "decision.note.condition": "condition",
+    "decision.choice": "\"{label}\"",
+    "decision.choice_joiner": " or ",
+    "decision.rule.header": "📐 Rule proposal · {title}",
+    "decision.rule.intro": "{mention} I would like to turn how you just handled this into a rule. Is this right? 👇",
+    "decision.rule.scenario": "Scenario (when)",
+    "decision.rule.default": "What happens now",
+    "decision.rule.override": "What you did",
+    "decision.rule.rule": "Proposed rule (plain words)",
+    "decision.rule.impact": "What it affects",
+    "decision.rule.fallback": "Rule proposal · {title} — make this a rule?",
+    "decision.receipt.reply": "Recorded from {actor}'s reply in the thread: {icon} {label}",
+    "decision.receipt.guidance": "; the rest of the reply went to the agent to follow",
+    "decision.receipt.chose": "{actor} chose: {label}{note}",
+    "decision.outcome.approve": "✅ Approved",
+    "decision.outcome.reject": "❌ Rejected",
+    "decision.outcome.chose": "{icon} Chose: {label}",
+    "decision.outcome.replied": " (you replied in the thread: \"{excerpt}\")",
+    "decision.outcome.by_reply": " (by your reply in the thread)",
+    "decision.reply.hidden": " (not shown here)",
+    "decision.reply.quoted": ": \"{excerpt}\"",
+    "decision.reply.code_owned": "💬 You replied in the thread{quoted}. To decide, press a button or reply {choices}; anything else went to the session in charge of this",
+    "decision.reply.plan_change": "💬 You replied in the thread{quoted}. You changed the plan; the agent will propose again",
+    "decision.reply.handled": "💬 You replied in the thread{quoted}; your reply is followed",
+    "decision.proposal.picked": "I read your reply as: {picked}.",
+    "decision.proposal.meaning": "I read your reply as: {meaning}.\nOn yes it is recorded as \"{picked}\".",
+    "decision.proposal.yes": "✅ Yes, that's it",
+    "decision.proposal.no": "✏️ No",
+    "decision.proposal.confirmed": "✅ Confirmed"
   },
   "words": {
     "decision.approve_phrases": [
@@ -88,6 +128,17 @@
     ],
     "decision.recommended_phrases": [
       "as recommended"
+    ],
+    "copy.ask_verbs": [
+      "Please",
+      "Approve",
+      "Merge",
+      "Confirm",
+      "Reply",
+      "Decide",
+      "Choose",
+      "Review",
+      "Check"
     ]
   }
 }

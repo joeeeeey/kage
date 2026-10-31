@@ -13,7 +13,8 @@
     "decision.condition": "(?i)^(?:但是|但|不过|可是|只要|只能|只给|只开|只|除了|除非|前提是|条件是|先别|别|改成|改为|换成|(?:but|except|only|unless|however)(?![a-z]))",
     "decision.question": "[?？]|吗\\s*$",
     "decision.plan_change": "改成|改为|换成|先别|别做|不要|取消|停掉|停下|停止|^\\s*停|暂停|等[^，,。.！!？?\\n]{0,20}再|只做",
-    "decision.asking": "[?？]|吗|呢|啥|什么|为什么|怎么|是否|要不要|能不能"
+    "decision.asking": "[?？]|吗|呢|啥|什么|为什么|怎么|是否|要不要|能不能",
+    "copy.card_ref": "(?:某一?|原|旧|那|上一|另一)(?:的|那)?(?:张|个)?(?:上线|发布|合并)?(?:审批|确认|决策|提醒)?卡片?(?![顿住死号位了壳车槽])|(?:原来|原先|之前|先前|前面|刚才|早先)的?那?(?:(?:张|个)(?:上线|发布|合并)?(?:审批|确认|决策|提醒)?卡片?|(?:上线|发布|合并)?(?:审批|确认|决策|提醒)卡片?|卡片)(?![顿住死号位了壳车槽])|(?:上线|发布|合并)审批卡"
   },
   "messages": {
     "you": "你",
@@ -67,7 +68,46 @@
     "ask.closed": "（这个已经处理过了）",
     "decision.separators": " \t\n，,。.！!、;；:：~～—…)）]】」』\"'“”",
     "decision.approve_label": "批准",
-    "decision.reject_label": "拒绝"
+    "decision.reject_label": "拒绝",
+    "decision.card.hint": "💬 也可以直接在 thread 里回复：回复后按钮会收起，按你的回复处理",
+    "decision.card.keep_hint": "💬 也可以在 thread 里回复：开头写“批准”“不行”或选项名就算决定；提问时按钮留着，改方案会收起按钮、重新提案",
+    "decision.card.cancelled": "已取消，请在 thread 里补充说明",
+    "decision.card.code_owned_hint": "💬 也可以在 thread 里直接回复{choices}",
+    "decision.superseded.newer_proposal": "（已有更新的理解，此条作废）",
+    "decision.superseded.card_decision": "（卡片已直接决定，此条作废）",
+    "decision.superseded.smoke_cleanup": "（测试已清理，此条作废）",
+    "decision.recommended": "（推荐）",
+    "decision.note": "（{what}：{note}）",
+    "decision.note.remark": "备注",
+    "decision.note.condition": "附条件",
+    "decision.choice": "“{label}”",
+    "decision.choice_joiner": "或",
+    "decision.rule.header": "📐 规则提炼 · {title}",
+    "decision.rule.intro": "{mention} 我想把你刚才的一个处理固化成规则，你看这条对不对 👇",
+    "decision.rule.scenario": "场景（什么时候）",
+    "decision.rule.default": "现在怎么处理",
+    "decision.rule.override": "你的做法",
+    "decision.rule.rule": "建议的规则（人话）",
+    "decision.rule.impact": "会影响什么",
+    "decision.rule.fallback": "规则提炼 · {title} — 要不要按这条固化成规则？",
+    "decision.receipt.reply": "已按 {actor} 在 thread 里的回复记为：{icon} {label}",
+    "decision.receipt.guidance": "；后面补充的话已交给 agent 照着办",
+    "decision.receipt.chose": "{actor} 选择了：{label}{note}",
+    "decision.outcome.approve": "✅ 已批准",
+    "decision.outcome.reject": "❌ 已拒绝",
+    "decision.outcome.chose": "{icon} 已选择：{label}",
+    "decision.outcome.replied": "（你在 thread 里回复了「{excerpt}」）",
+    "decision.outcome.by_reply": "（按你在 thread 里的回复）",
+    "decision.reply.hidden": "（内容不在这里显示）",
+    "decision.reply.quoted": "：「{excerpt}」",
+    "decision.reply.code_owned": "💬 你在 thread 里回复了{quoted}。要决定请点按钮或回复（{choices}）；其他内容已转给负责这件事的会话",
+    "decision.reply.plan_change": "💬 你在 thread 里回复了{quoted}。你改了方案，agent 会按新意思重新提案",
+    "decision.reply.handled": "💬 你在 thread 里回复了{quoted}，按你的回复处理",
+    "decision.proposal.picked": "我理解你的意思是：{picked}。",
+    "decision.proposal.meaning": "我理解你的意思是：{meaning}。\n确认后按「{picked}」处理。",
+    "decision.proposal.yes": "✅ 对，就这样",
+    "decision.proposal.no": "✏️ 不是",
+    "decision.proposal.confirmed": "✅ 已确认"
   },
   "words": {
     "decision.approve_phrases": [
@@ -100,6 +140,17 @@
     "decision.recommended_phrases": [
       "按建议",
       "按推荐"
+    ],
+    "copy.ask_verbs": [
+      "要你",
+      "请你",
+      "批准",
+      "合并",
+      "确认",
+      "回复",
+      "决定",
+      "选择",
+      "查看"
     ]
   }
 }
