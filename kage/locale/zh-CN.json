@@ -1225,7 +1225,18 @@
     "dashboard.watch_visuals.5": "冷却",
     "dashboard.watch_visuals.6": "已关闭",
     "dashboard.watch_visuals.7": "{label} · {minutes}分钟",
-    "dashboard.Handler.design_doc.1": "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>设计文档不可用</title><p>设计文档不可用（{code}）。生成方法见看板的「设计」页。</p></html>"
+    "dashboard.Handler.design_doc.1": "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>设计文档不可用</title><p>设计文档不可用（{code}）。生成方法见看板的「设计」页。</p></html>",
+    "escalation.ask_owner_closed_line.1": "⏹ 已关闭，无需处理 · {clock} (",
+    "escalation.superseded_line.1": "⏭ 已由新卡接替",
+    "escalation.ask_owner_proposal_closed.1": "（卡片已关闭，此条作废）",
+    "escalation._ensure_approvals_watch.1": "审批 thread（任务级）",
+    "escalation.escalation.1": "\n{owner} 休假期间，",
+    "escalation.escalation.2": " 也可以点按钮决定。",
+    "escalation.escalation.3": "会话 ",
+    "escalation.escalation.4": "{escape} · 原消息：<{link}|查看消息>",
+    "escalation.smoke_escalation.1": "smoke-escalation · 端到端测试，不是真实业务消息：点按钮或在 thread 里回复都行",
+    "escalation.ask_owner.1": "接着这张卡：<{link}|查看>",
+    "escalation.ask_owner.next": "Wait for the decision event on this watch (context.decision non-null). A clear typed reply (批准 / 不行 / an option label) is recorded by code as the decision (via=thread_reply); other thread text is conversation: answer as the bot in the card thread, map a typed decision with propose-decision --meaning '<一句话>'."
   },
   "words": {
     "decision.approve_phrases": [

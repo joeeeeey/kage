@@ -1225,7 +1225,18 @@
     "dashboard.watch_visuals.5": "cold",
     "dashboard.watch_visuals.6": "closed",
     "dashboard.watch_visuals.7": "{label} · {minutes} min",
-    "dashboard.Handler.design_doc.1": "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Design document unavailable</title><p>The design document is unavailable ({code}). The dashboard's \"Design\" page says how to generate it.</p></html>"
+    "dashboard.Handler.design_doc.1": "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Design document unavailable</title><p>The design document is unavailable ({code}). The dashboard's \"Design\" page says how to generate it.</p></html>",
+    "escalation.ask_owner_closed_line.1": "⏹ Closed, nothing to do · {clock} (",
+    "escalation.superseded_line.1": "⏭ Taken over by a newer card",
+    "escalation.ask_owner_proposal_closed.1": "(The card is closed; this no longer applies)",
+    "escalation._ensure_approvals_watch.1": "approvals thread (task level)",
+    "escalation.escalation.1": "\nWhile {owner} is away, ",
+    "escalation.escalation.2": " can also decide with the buttons.",
+    "escalation.escalation.3": "session ",
+    "escalation.escalation.4": "{escape} · original message: <{link}|view message>",
+    "escalation.smoke_escalation.1": "smoke-escalation · end-to-end test, not a real request: click a button or reply in the thread",
+    "escalation.ask_owner.1": "Continuing this card: <{link}|view>",
+    "escalation.ask_owner.next": "Wait for the decision event on this watch (context.decision non-null). A clear typed reply (approve / no / an option label) is recorded by code as the decision (via=thread_reply); other thread text is conversation: answer as the bot in the card thread, map a typed decision with propose-decision --meaning '<one sentence>'."
   },
   "words": {
     "decision.approve_phrases": [
