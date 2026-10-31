@@ -3163,3 +3163,32 @@ class IntakeCore:
         else:
             report['ok'] = bool(report['event_status'] == 'handled' and b['dup_count'] >= 1)
         return report
+
+
+# The owner's intake playbook (K14p): what an owner pack provides for the long-lived inbox / oncall tasks.
+PLAYBOOK_NAMES = ('POLICY_BEGIN', 'POLICY_END', 'ADDENDA_HEADING', 'ADDENDA_BEGIN', 'ADDENDA_END', 'BLOCKERS_BEGIN',
+                  'BLOCKERS_END', 'CARDS_BEGIN', 'CARDS_END', 'INTERACTION_BEGIN', 'INTERACTION_END', 'LIFECYCLE_BEGIN',
+                  'LIFECYCLE_END', 'FEEDBACK_BEGIN', 'FEEDBACK_END', 'HANDOFF_BEGIN', 'HANDOFF_END', 'ROLE_TITLE',
+                  'rules_policy_block', 'blockers_policy_block', 'cards_policy_block', 'interaction_policy_block',
+                  'lifecycle_policy_block', 'feedback_policy_block', 'handoff_policy_block', 'inbox_goal', 'oncall_goal',
+                  'role_status', 'role_launch_prompt', 'intake_bootstrap')
+PLAYBOOK_CONTEXT = ('references', 'rules_path', 'bootstrap_key', 'read_config', 'run_bootstrap', 'default_inbox')
+
+
+def intake_playbook(pack, **context):
+    """The owner's intake playbook from an owner pack: `pack.intake_playbook(**context)` — the code-managed goal.md
+    markers (BEGIN / END pairs: a file-format contract with the goal.md files on disk and with the access policy's
+    inbox sync) and the 7 policy blocks of the long-lived inbox / oncall tasks, their goal templates, titles, first
+    status and launch prompt, and intake_bootstrap. The deployment passes its references directory, inbox rules file,
+    workspace bootstrap and default inbox task, and the engine's bootstrap key and config reader (PLAYBOOK_CONTEXT).
+    None when there is no pack or it has no intake playbook; a playbook without one of PLAYBOOK_NAMES is refused."""
+    make = getattr(pack, 'intake_playbook', None)
+    if make is None:
+        return None
+    if sorted(context) != sorted(PLAYBOOK_CONTEXT):
+        raise TypeError('intake_playbook needs exactly: ' + ', '.join(PLAYBOOK_CONTEXT))
+    playbook = make(**context)
+    missing = [name for name in PLAYBOOK_NAMES if not hasattr(playbook, name)]
+    if missing:
+        raise ValueError('intake_playbook_incomplete: ' + ', '.join(missing))
+    return playbook

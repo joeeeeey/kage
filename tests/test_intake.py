@@ -201,5 +201,30 @@ class CommandsTest(unittest.TestCase):
         self.assertTrue(all(len(o.split('=')[1].rsplit(':', 1)[0]) <= 30 for o in self.core.brief_options))
 
 
+class PlaybookSeamTest(unittest.TestCase):
+    CONTEXT = dict(references=Path('/nonexistent/references'), rules_path='/nonexistent/rules.md',
+                   bootstrap_key=I.BOOTSTRAP_KEY, read_config=lambda rt: {}, run_bootstrap=lambda *a, **kw: {},
+                   default_inbox=lambda: 'owner-inbox')
+
+    def pack(self, drop=()):
+        def intake_playbook(**context):
+            values = {name: (lambda *a, _name=name, **kw: _name) for name in I.PLAYBOOK_NAMES if name not in drop}
+            return types.SimpleNamespace(**values, context=context)
+        return types.SimpleNamespace(intake_playbook=intake_playbook)
+
+    def test_a_pack_provides_the_playbook(self):
+        playbook = I.intake_playbook(self.pack(), **self.CONTEXT)
+        self.assertEqual(playbook.inbox_goal('cli', {}), 'inbox_goal')
+        self.assertIs(playbook.context['read_config'], self.CONTEXT['read_config'])
+
+    def test_no_pack_or_no_playbook_and_refusals(self):
+        self.assertIsNone(I.intake_playbook(None, **self.CONTEXT))
+        self.assertIsNone(I.intake_playbook(types.SimpleNamespace(dispatch_rules=None), **self.CONTEXT))
+        with self.assertRaisesRegex(ValueError, 'intake_playbook_incomplete: oncall_goal'):
+            I.intake_playbook(self.pack(drop=('oncall_goal',)), **self.CONTEXT)
+        with self.assertRaises(TypeError):
+            I.intake_playbook(self.pack(), references='/x')
+
+
 if __name__ == '__main__':
     unittest.main()
