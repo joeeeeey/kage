@@ -81,6 +81,57 @@ OPTIONAL_SECTIONS = ('dispatch', 'rules', 'routines', 'blockers', 'cards', 'task
 RETIRED_KEYS = {'blockers': ('guard_enabled',)}  # the P3.1 run-end guard
 
 
+# Phase 2 C1: sections the config may carry that are validated when present and never filled in from the defaults
+# (a config without one reads and prints exactly as before); readers merge their own defaults (`control_settings`).
+SPARSE_SECTIONS = ('control',)
+
+
+# The control entry (kage.core.control): off unless the config turns it on. `task` None = `<owner key>-control`;
+# `model` / `effort` None = the provider's defaults (`model_for`).
+CONTROL_DEFAULTS = {'enabled': False, 'task': None, 'provider': 'claude', 'model': None, 'effort': None,
+                    'retention_days': 30, 'answer_timeout_minutes': 15, 'allow_launch': True, 'messages_per_hour': 30,
+                    'relays_per_hour': 20, 'launches_per_day': 10, 'history_turns': 8}
+CONTROL_RANGES = {'retention_days': (1, 365), 'answer_timeout_minutes': (2, 240), 'messages_per_hour': (1, 600),
+                  'relays_per_hour': (1, 200), 'launches_per_day': (0, 100), 'history_turns': (0, 40)}
+
+
+def control_settings(config, owner_key):
+    """The control section of a loaded config with its defaults (the task named by the owner key when not set)."""
+    raw = (config or {}).get('control') if isinstance(config, dict) else None
+    out = {**CONTROL_DEFAULTS, **(raw if isinstance(raw, dict) else {})}
+    out['task'] = out['task'] or f'{owner_key}-control'
+    return out
+
+
+def _validate_control(spec):
+    _keys(spec, CONTROL_DEFAULTS, 'control')
+    for key, value in spec.items():
+        field = f'control_{key}'
+        if key in ('enabled', 'allow_launch'):
+            _bool(value, field)
+        elif key == 'task':
+            if value is not None and (not isinstance(value, str) or not TASK_ID_RE.fullmatch(value)):
+                _fail(field, 'must_be_a_task_id')
+        elif key == 'provider':
+            if value not in PROVIDERS:
+                _fail(field, 'must_be_one_of_' + '_'.join(PROVIDERS))
+        elif key == 'model':
+            if value is not None and (not isinstance(value, str) or not MODEL_RE.fullmatch(value)):
+                _fail(field, 'must_be_a_model_id')
+        elif key == 'effort':
+            if value is not None and value not in EFFORTS:
+                _fail(field, 'must_be_one_of_' + '_'.join(EFFORTS))
+        else:
+            _int(value, field, *CONTROL_RANGES[key])
+
+
+def _open_sparse(config, key):
+    """Before a `control.*` key is set on a config without that section: an empty section to set it in."""
+    head = str(key).split('.', 1)[0]
+    if head in SPARSE_SECTIONS and head not in config:
+        config[head] = {}
+
+
 OPEN_POLL_MIN = 15
 
 
@@ -361,7 +412,7 @@ class WorkerConfig:
 
     def validate(self, raw):
         """Full validation of a complete config object; returns it unchanged or raises ValueError."""
-        _keys(raw, self.defaults, 'top_level')
+        _keys(raw, (*self.defaults, *SPARSE_SECTIONS), 'top_level')
         if raw.get('schema_version') != SCHEMA_VERSION:
             _fail('schema_version', f'must_be_{SCHEMA_VERSION}')
         for key in self.defaults:
@@ -383,6 +434,8 @@ class WorkerConfig:
             self._validate_section(raw['tasks'], 'tasks')
         if 'feedback_learning' in raw:
             self._validate_section(raw['feedback_learning'], 'feedback_learning')
+        if 'control' in raw:
+            _validate_control(raw['control'])
         providers = raw['providers']
         _keys(providers, PROVIDERS, 'providers')
         for name in PROVIDERS:
@@ -610,17 +663,31 @@ class WorkerConfig:
         return self.with_optional_defaults(self.validate(_drop_retired(_read(path)))), str(path)
 
     def intake_role(self, config, task_id):
-        """'inbox' / 'oncall' when `task_id` is one of the long-lived intake tasks, else None."""
+        """'inbox' / 'oncall' when `task_id` is one of the long-lived intake tasks, 'control' for the control task while
+        the control entry is on, else None."""
         intake = {**self.defaults['intake'], **(config.get('intake') or {})}
         for role in ('inbox', 'oncall'):
             if task_id and task_id == intake[f'{role}_task']:
                 return role
+        if task_id and 'control' in config:
+            control = self.control_settings(config)
+            if control['enabled'] and task_id == control['task']:
+                return 'control'
         return None
+
+    def control_settings(self, config):
+        """The control section of a loaded config with its defaults (`control_settings`)."""
+        return control_settings(config, self.key)
 
     def long_lived_ids(self, config):
         """P38: the long-lived tasks — the intake inbox / oncall tasks plus dispatch.long_lived_tasks (a loaded config)."""
         intake = {**self.defaults['intake'], **(config.get('intake') or {})}
-        return {intake['inbox_task'], intake['oncall_task'], *config['dispatch']['long_lived_tasks']}
+        ids = {intake['inbox_task'], intake['oncall_task'], *config['dispatch']['long_lived_tasks']}
+        if 'control' in config:
+            control = self.control_settings(config)
+            if control['enabled']:
+                ids.add(control['task'])
+        return ids
 
     def long_lived_task(self, config, task_id):
         return bool(task_id) and task_id in self.long_lived_ids(config)
@@ -634,7 +701,7 @@ class WorkerConfig:
         without the section) gives LEAN_OFF, i.e. a run exactly as before P40."""
         name = self.task_class(config, task_id)
         lean = (config.get('dispatch') or {}).get('lean_context') or {}
-        spec = lean.get(name) if lean.get('enabled') else None
+        spec = lean.get('inbox' if name == 'control' else name) if lean.get('enabled') else None  # control: the inbox's
         return {**copy.deepcopy(LEAN_OFF), **copy.deepcopy(spec or {}), 'class': name, 'enabled': bool(spec)}
 
     def keep_warm_spec(self, config):
@@ -667,6 +734,8 @@ class WorkerConfig:
         the primary provider of its routing category. A task on another provider only because of a fallback or a
         provider-health reroute returns here once it is healthy."""
         role = self.intake_role(config, task_id)
+        if role == 'control':
+            return self.control_settings(config)['provider']
         if role:
             return {**self.defaults['intake'], **(config.get('intake') or {})}[f'{role}_provider']
         return provider_order(config, category)[0]
@@ -676,6 +745,12 @@ class WorkerConfig:
         their configured provider (a fallback to the other provider uses that provider's defaults)."""
         role = self.intake_role(config, task_id)
         intake = {**self.defaults['intake'], **(config.get('intake') or {})}
+        if role == 'control':
+            control = self.control_settings(config)
+            if provider == control['provider']:
+                model, effort, yolo = model_for(config, provider, important)
+                return control['model'] or model, control['effort'] or effort, yolo
+            return model_for(config, provider, important)
         if role and provider == intake[f'{role}_provider']:
             return intake[f'{role}_model'], intake[f'{role}_effort'], list(config['providers'][provider]['yolo_args'])
         return model_for(config, provider, important)
@@ -689,6 +764,7 @@ class WorkerConfig:
             config, _ = self.load(path)
             new = _parse_value(value_text)
             updated = copy.deepcopy(config)
+            _open_sparse(updated, key)
             found, old = _apply(updated, key, new)
             self.validate(updated)
             _atomic_write(path, updated)
@@ -715,6 +791,7 @@ class WorkerConfig:
             updated = copy.deepcopy(config)
             records = []
             for key, value in changes:
+                _open_sparse(updated, key)
                 found, old = _apply(updated, key, value)
                 if found and old == value:
                     continue

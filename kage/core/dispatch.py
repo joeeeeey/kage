@@ -40,6 +40,7 @@ STOP_GRACE_SECONDS = 15
 
 
 PROGRESS_INTERVAL_SECONDS = 60
+CONTROL_QUIET = ('running', 'success', 'retrying', 'fallback', 'resumed', 'handed_back')  # Phase 2 C1
 
 
 PROGRESS_BACKOFF_SECONDS = (60, 900)  # 429: Retry-After or 60s doubling up to 15 min
@@ -364,6 +365,13 @@ class Dispatcher:
     def config(self):
         config, _ = self.rt.worker_config.load()
         return config
+
+    def _control_task(self, d):
+        """True for a dispatch of the control task while the control entry is on."""
+        try:
+            return self.rt.worker_config.intake_role(self.config(), d['task_id'] or d['task_key']) == 'control'
+        except Exception:  # noqa: BLE001 - a malformed config: the cards as before
+            return False
 
     def _cfg_value(self, key, default):
         try:
@@ -2240,6 +2248,8 @@ class Dispatcher:
         d = self._dispatch(dispatch_id)
         if d is None:
             return None
+        if status in CONTROL_QUIET and self._control_task(d):
+            return None  # Phase 2 C1: a control run's answer is its result; only a failure / pause / wait gets a card
         rt = self.rt
         text = self._card_text(d)
         line = self._status_line(d, status, error_class, actor)

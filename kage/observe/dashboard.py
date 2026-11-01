@@ -65,6 +65,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from kage import locale
+from kage.core import control as _control
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -157,6 +158,10 @@ OPS_PAGES = ('/runs', '/backlog', '/settings', '/intake', '/rules', '/routines',
 
 PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
+
+CONTROL_BODY_LIMIT = 8192  # Phase 2 C1: one control POST (a message of at most kage.core.control.MAX_TEXT characters)
+CONTROL_EDITABLE = ('enabled', 'provider', 'model', 'effort')  # what the /control page may set (control.<key>)
 
 
 DESIGN_MAX_BYTES = 16 * 1024 * 1024
@@ -433,6 +438,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/state':
                 return self.respond(200, self.server.state())
             query = parse_qs(urlsplit(self.path).query)
+            if path == '/api/control':  # Phase 2 C1: the control entry (a page token only when the page asks for one)
+                conversation = (query.get('conversation') or [None])[0]
+                token = self.server.issue_page_token() if (query.get('token') or [''])[0] == 'new' else None
+                try:
+                    return self.respond(200, self.server.core.control_state(self.server.db_path, conversation, token))
+                except KeyError:
+                    return self.respond(404, {'error': 'unknown_conversation'})
+            if path == '/control':
+                return self.respond(200, (self.server.web/'control.html').read_bytes(), 'text/html; charset=utf-8')
             if path == '/api/runs':
                 run_filter = (query.get('filter') or ['all'])[0]
                 task = (query.get('task') or [None])[0]
@@ -520,7 +534,9 @@ class Handler(BaseHTTPRequestHandler):
                       '/ops.css': ('ops.css', 'text/css; charset=utf-8'),
                       '/ops.js': ('ops.js', 'text/javascript; charset=utf-8'),
                       '/trace.css': ('trace.css', 'text/css; charset=utf-8'),
-                      '/trace.js': ('trace.js', 'text/javascript; charset=utf-8')}
+                      '/trace.js': ('trace.js', 'text/javascript; charset=utf-8'),
+                      '/control.css': ('control.css', 'text/css; charset=utf-8'),
+                      '/control.js': ('control.js', 'text/javascript; charset=utf-8')}
             if path in assets:
                 name, mime = assets[path]
                 return self.respond(200, (self.server.web/name).read_bytes(), mime)
@@ -545,6 +561,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error': 'same_origin_required'})
         if urlsplit(self.path).path == '/api/settings':
             return self.post_settings()
+        if urlsplit(self.path).path in ('/api/control/messages', '/api/control/retry', '/api/control/settings'):
+            return self.post_control(urlsplit(self.path).path)
         if not secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), self.server.csrf):
             return self.respond(403, {'error': 'invalid_csrf_token'})
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -594,6 +612,45 @@ class Handler(BaseHTTPRequestHandler):
         except (sqlite3.Error, ValueError, OSError):
             return self.respond(503, {'error': 'local_state_unavailable'})
 
+
+    def post_control(self, path):
+        """Phase 2 C1, the control entry's writes: same-origin (checked by the caller), a live page token (a message
+        does not use it up; a settings save does), JSON only, at most CONTROL_BODY_LIMIT bytes. The request's facts
+        (Fetch Metadata headers present or not, user-agent family) are stored with a message and shown with it."""
+        if self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin':
+            return self.respond(403, {'error': 'same_origin_required'})
+        token = self.headers.get('X-Page-Token', '')
+        if not self.server.check_page_token(token):
+            return self.respond(403, {'error': 'invalid_page_token'})
+        if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+            return self.respond(415, {'error': 'json_required'})
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= CONTROL_BODY_LIMIT:
+                raise ValueError()
+            payload = json.loads(self.rfile.read(size))
+            if not isinstance(payload, dict):
+                raise ValueError()
+        except (ValueError, UnicodeError):
+            return self.respond(400, {'error': 'invalid_request_body'})
+        core = self.server.core
+        try:
+            if path == '/api/control/messages':
+                result = core.control_submit(self.server.db_path, payload, _control.console_facts(self.headers))
+            elif path == '/api/control/retry':
+                result = core.control_retry(self.server.db_path, payload)
+            else:
+                result = core.control_save(payload)
+                self.server.check_page_token(token, consume=True)
+                result['page_token'] = self.server.issue_page_token()
+        except ValueError as exc:
+            code = str(exc) if re.fullmatch(r'[a-z0-9_]{1,120}', str(exc)) else 'invalid_request'
+            status = 409 if code in ('control_off', 'worker_config_changed_since_loaded_reload') else \
+                429 if code.endswith('rate_limited') else 400
+            return self.respond(status, {'error': code})
+        except (sqlite3.Error, OSError):
+            return self.respond(503, {'error': 'local_state_unavailable'})
+        return self.respond(200, result)
 
     def post_settings(self):
         """The settings save: same-origin (checked by the caller), a live per-page token, JSON only."""
@@ -1558,6 +1615,72 @@ class DashboardCore:
         """Validate + write through worker_config.set_many (actor "dashboard"); raises ValueError codes."""
         changes, digest, dry_run = _settings_changes(payload)
         return self.worker_config.set_many(changes, 'dashboard', now=now, dry_run=dry_run, expect_digest=digest)
+
+    # ---- Phase 2 C1: the control entry (kage.core.control) -------------------------------------------------------------
+    def _control(self):
+        return _control.Control(self.language, owner_key=self.key, owner_name=self.name)
+
+    def _control_config(self):
+        try:
+            return self.worker_config.load()[0], None
+        except ValueError as exc:
+            return {}, str(exc)
+
+    def control_state(self, path, conversation=None, token=None):
+        """/api/control: the switch, model and limits, the conversations, one conversation's messages (text, state,
+        request facts, relays). Read-only."""
+        config, error = self._control_config()
+        db = read_db(path) if Path(path).is_file() else None
+        try:
+            out = self._control().overview(db, config, conversation)
+        finally:
+            if db is not None:
+                db.close()
+        out.update(config_error=error, digest=self.worker_config.digest(config) if config else None,
+                   enums={'providers': list(self.worker_config.PROVIDERS), 'efforts': list(self.worker_config.EFFORTS)})
+        if token:
+            out['page_token'] = token
+        return out
+
+    def _control_db(self, path):
+        db = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True, timeout=5)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def control_submit(self, path, payload, facts, now=None):
+        """POST /api/control/messages {text, client_id, conversation?}: one owner message (kage.core.control.submit)."""
+        if set(payload) - {'text', 'client_id', 'conversation'} or 'text' not in payload or 'client_id' not in payload:
+            raise ValueError('invalid_request_body')
+        config, error = self._control_config()
+        if error:
+            raise ValueError('control_off')
+        with contextlib.closing(self._control_db(path)) as db:
+            message = self._control().submit(db, config, payload['text'], client_id=payload['client_id'],
+                                             conversation=payload.get('conversation'), facts=facts, now=now)
+        return {'ok': True, 'message': message}
+
+    def control_retry(self, path, payload, now=None):
+        """POST /api/control/retry {message}: a failed owner message queued again."""
+        if set(payload) != {'message'}:
+            raise ValueError('invalid_request_body')
+        config, error = self._control_config()
+        if error:
+            raise ValueError('control_off')
+        with contextlib.closing(self._control_db(path)) as db:
+            return {'ok': True, 'message': self._control().retry(db, config, payload['message'], now=now)}
+
+    def control_save(self, payload, now=None):
+        """POST /api/control/settings {changes: {enabled?, provider?, model?, effort?}, digest}: control.* through
+        worker_config.set_many (actor "dashboard"), like the settings page."""
+        changes, digest = payload.get('changes'), payload.get('digest')
+        if set(payload) != {'changes', 'digest'} or not isinstance(changes, dict) or not changes or \
+                set(changes) - set(CONTROL_EDITABLE) or not isinstance(digest, str) or \
+                not re.fullmatch(r'[0-9a-f]{16}', digest):
+            raise ValueError('invalid_request_body')
+        result = self.worker_config.set_many([(f'control.{k}', v) for k, v in sorted(changes.items())], 'dashboard',
+                                             now=now, expect_digest=digest)
+        config, _ = self._control_config()
+        return {**result, 'digest': self.worker_config.digest(config) if config else None}
 
     def stop_watch(self, path, watch_id):
         # Existing-file mode prevents creating a new database on an incorrect path.

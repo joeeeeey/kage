@@ -13,6 +13,7 @@ import sys
 import time
 
 from kage import locale
+from kage.core import control as _control
 
 
 
@@ -42,6 +43,26 @@ class CliCore:
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
+
+    def control_command(self, args, db, db_path):
+        """Phase 2 C1: the control-* commands (kage.core.control, bound to the owner here)."""
+        control = _control.Control(self.language, owner_key=self.key, owner_name=self.name)
+        rt = self.rt
+        if args.command == 'control-context':
+            return {'ok': True, **control.context(rt, db, hours=args.hours)}
+        if args.command == 'control-status':
+            return control.status(rt, db)
+        if args.command == 'control-bootstrap':
+            return control.bootstrap(rt, db, db_path, launch=not args.no_launch, rewrite_goal=args.rewrite_goal)
+        if args.command == 'control-show':
+            return control.show(rt, db, args.message)
+        if args.command == 'control-reply':
+            text = Path(args.file).read_text(encoding='utf-8') if args.file else args.text
+            return control.reply(rt, db, db_path, args.message, text, needs_answer=args.needs_answer,
+                                 followup=args.followup)
+        if args.command == 'control-relay':
+            return control.relay(rt, db, db_path, args.message, args.task, note=args.note)
+        return control.launch(rt, db, db_path, args.message, args.title, linear=args.linear)
 
     def pattern(self, key):
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
@@ -625,6 +646,30 @@ class CliCore:
         smfl.add_argument('--card', action='store_true', help='Post REAL TEST rule-distillation cards to the private channel')
         smfl.add_argument('--session')
         smfl.add_argument('--provider', choices=self.rt.claude.PROVIDERS)
+        # ---- Phase 2 C1: the owner's control entry (kage.core.control); the run commands refuse outside the control
+        # task's run that holds the message ----
+        cctx = sub.add_parser('control-context', help='Control run: one digest of the work (tasks, runs, cards, blockers, intake)')
+        cctx.add_argument('--hours', type=int, default=24, choices=range(1, 169), metavar='1-168')
+        cshow = sub.add_parser('control-show', help='Control run: the held owner message and its conversation')
+        crep = sub.add_parser('control-reply', help=f'Control run: answer {self.name} (once; --followup after a relay)')
+        crel = sub.add_parser('control-relay', help=f"Control run: pass {self.name}'s message to a task (the runtime "
+                                                    'attaches the stored words and their source)')
+        clau = sub.add_parser('control-launch', help=f"Control run: new work as a new task, {self.name}'s words as its brief")
+        for p in (cshow, crep, crel, clau):
+            p.add_argument('--message', required=True, help='The control message id (cm…)')
+        crep_src = crep.add_mutually_exclusive_group(required=True)
+        crep_src.add_argument('--text')
+        crep_src.add_argument('--file')
+        crep.add_argument('--needs-answer', action='store_true', help=f'The reply asks {self.name} something')
+        crep.add_argument('--followup', action='store_true', help='A later reply (a relay\'s outcome), at most 3')
+        crel.add_argument('--task', required=True, help='Target task id or workspace directory')
+        crel.add_argument('--note', help='One line of your own (no authority): why this task')
+        clau.add_argument('--title', required=True)
+        clau.add_argument('--linear', action='store_true', help='Create a tracker ticket for the new task')
+        sub.add_parser('control-status', help='The control entry: switch, task, messages by state')
+        cboot = sub.add_parser('control-bootstrap', help='Idempotent: create/register the control task and bind it')
+        cboot.add_argument('--no-launch', action='store_true')
+        cboot.add_argument('--rewrite-goal', action='store_true')
         args = parser.parse_args()
         if args.command == 'people-set-field':
             # Never opens the state DB; prints only the changed field, never <owner key>_view.
@@ -710,6 +755,12 @@ class CliCore:
                 code = 2
             sys.exit(code)
         db = self.rt.connect(db_path)
+        if args.command.startswith('control-'):
+            result = self.control_command(args, db, db_path)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if not result.get('ok', True):
+                sys.exit(1)
+            return
         if args.command == 'dispatch-hook':
             self.rt.dispatch_hook(db, db_path, args.run_id)
             return

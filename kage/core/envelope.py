@@ -18,7 +18,8 @@ import json
 from pathlib import Path
 import re
 
-KINDS = ('slack_message', 'decision_answer', 'ask_answer', 'routine', 'agent_message', 'job_result')
+KINDS = ('slack_message', 'decision_answer', 'ask_answer', 'routine', 'agent_message', 'job_result',
+         'control_message', 'owner_relay')  # Phase 2 C1: the owner's control message; its words relayed to a task
 AUTHOR_KINDS = ('human', 'agent', 'system')
 FIELDS = ('kind', 'author_kind', 'trust', 'authority', 'thread_root', 'burst_id', 'hops')
 USER_RE = re.compile(r'[UW][A-Z0-9]+')

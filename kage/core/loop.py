@@ -19,6 +19,7 @@ import uuid
 import urllib.error
 
 from kage import locale
+from kage.core import control as _control
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -146,6 +147,7 @@ class LoopCore:
         self.no_autostart_env = no_autostart_env
         self.rt = rt
         self.key, self.name = owner_key, owner_name
+        self.control = _control.Control(language, owner_key=owner_key, owner_name=owner_name)  # Phase 2 C1
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1058,6 +1060,12 @@ class LoopCore:
                 self.rt._reconcile_approvals_watches(db, time.time(), dispatcher=dispatcher)
             except Exception as exc:  # noqa: BLE001 - never stops delivery
                 self._meta_error(db, 'approvals_watch_error', exc)
+            try:
+                # Phase 2 C1: the owner's control messages -> events on the control task (control.enabled; nothing at all
+                # while the entry has never been used: its tables do not exist).
+                self.control.pump(self.rt, db)
+            except Exception as exc:  # noqa: BLE001 - never stops delivery
+                self._meta_error(db, 'control_error', exc)
             if time.time() >= next_settle:
                 next_settle = time.time() + 10
                 # P3: decided rule / routine proposal and routine confirmation cards are applied by code here, never by
@@ -1078,6 +1086,10 @@ class LoopCore:
                         settle(self.rt, db)
                     except Exception as exc:  # noqa: BLE001
                         self._meta_error(db, 'proposals_settle_error', exc)
+                try:
+                    self.control.sweep(self.rt, db)  # Phase 2 C1: working / no answer / timeout / retention
+                except Exception as exc:  # noqa: BLE001
+                    self._meta_error(db, 'control_error', exc)
             running = self.rt.due_watches(db, time.time())
             self.read_cache.clear()
             for w in running:
