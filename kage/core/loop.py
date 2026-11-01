@@ -39,6 +39,21 @@ def _meta_note(db, key, text):
             pass
 
 
+def _meta_clear(db, key):
+    """Drop a recorded failure once the step it describes succeeded again (same rules as _meta_note)."""
+    if db.in_transaction:
+        return
+    try:
+        if db.execute('SELECT 1 FROM runtime_meta WHERE key=?', (key,)).fetchone():
+            db.execute('DELETE FROM runtime_meta WHERE key=?', (key,))
+            db.commit()
+    except Exception:  # noqa: BLE001
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def save(db, w):
     db.execute('INSERT OR REPLACE INTO watches VALUES (?,?)',
                (w['id'], json.dumps(w, ensure_ascii=False)))
@@ -85,7 +100,11 @@ def discover_owner(session):
         if Path(comm).name == 'codex':
             # Shared app-server / remote frontend liveness isn't thread liveness.
             args = subprocess.run(['ps', '-p', str(pid), '-o', 'args='], capture_output=True, text=True).stdout
-            prefix = shlex.split(args)[:8]
+            try:
+                words = shlex.split(args)
+            except ValueError:  # B1: ps joins argv with spaces, so a quote in the prompt can be left unbalanced
+                words = args.split()
+            prefix = words[:8]
             if any(a in ['app-server', 'exec-server', '--remote'] for a in prefix):
                 return None
             return pid
@@ -1077,6 +1096,8 @@ class LoopCore:
                     # e.g. token/auth failure: back off instead of calling Slack every loop.
                     next_sweep = time.time() + 60
                     db.execute('INSERT OR REPLACE INTO runtime_meta VALUES (?,?)', ('ask_sweep_error', self.rt.safe_error(exc)))
+                else:
+                    _meta_clear(db, 'ask_sweep_error')  # B1: a stale error does not outlive the next good sweep
             if time.time() >= next_task_sweep:
                 # P34 no-orphan sweep (may read Linear) + deadline watchdog: off the 10 s settle cadence.
                 try:
@@ -1097,6 +1118,8 @@ class LoopCore:
                     self.rt.card_threads.sweep(self.rt, db)
                 except Exception as exc:  # noqa: BLE001 - never stops the loop
                     self._meta_error(db, 'card_thread_sweep_error', exc)
+                else:
+                    _meta_clear(db, 'card_thread_sweep_error')  # B1
             if time.time() >= next_keep_warm:
                 next_keep_warm = time.time() + KEEP_WARM_CHECK_SECONDS
                 try:

@@ -89,7 +89,7 @@ class ConfigTest(unittest.TestCase):
 
 class FakeRuntime:
     def __init__(self, answers):
-        self.answers, self.calls, self.notes = answers, [], []
+        self.answers, self.calls, self.notes, self.identity = answers, [], [], None
         self.slack = types.SimpleNamespace(api_call=self.api_call)
 
     def api_call(self, endpoint, token, params=None):
@@ -100,6 +100,8 @@ class FakeRuntime:
         return {'ok': True, 'channel': answer}
 
     def api_identity(self, bot=False):
+        if self.identity:
+            raise self.identity
         return 'xoxb-' + 'fake'
 
     def safe_error(self, exc):
@@ -154,6 +156,53 @@ class DestinationsTest(unittest.TestCase):
         self.assertTrue(destinations.transient_failure(RuntimeError('Slack API error: ratelimited')))
         self.assertFalse(destinations.transient_failure(RuntimeError('Slack API error: channel_not_found')))
 
+    def stored(self, channel):
+        row = self.db.execute('SELECT value FROM runtime_meta WHERE key=?', (destinations.DESTINATION_META + channel,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def test_a_local_failure_is_refused_but_never_cached(self):
+        # B1: no token (auth.test says not_authed), real Slack disabled here, or an unconfirmed identity says nothing
+        # about the channel: this check is refused, the error recorded, and the verdict other processes share is kept.
+        rt = FakeRuntime({PRIVATE: {'is_private': True}})
+        self.dest.check(rt, self.db, PRIVATE, now=1000.0)
+        before = self.stored(PRIVATE)
+        disabled = RuntimeError('real_slack_disabled: KAGE_NO_REAL_SLACK=1 refuses auth.test (tests never reach Slack)')
+        for exc, code in ((disabled, 'real_slack_disabled'), (RuntimeError('Slack API error: not_authed'), 'RuntimeError'),
+                          (RuntimeError('unexpected_slack_identity'), 'RuntimeError')):
+            rt.identity = exc
+            result = self.dest.check(rt, self.db, PRIVATE, now=1100.0, refresh=True)
+            self.assertEqual({k: result[k] for k in ('verdict', 'error', 'cached', 'local', 'kept')},
+                             {'verdict': 'error', 'error': code, 'cached': False, 'local': True, 'kept': 'private'})
+            self.assertEqual(self.stored(PRIVATE), before)
+            self.assertEqual(rt.notes[-1], (destinations.DESTINATION_LOCAL_ERROR, f'{PRIVATE} {code}'))
+        self.assertEqual(rt.calls, [PRIVATE])                                   # conversations.info was never asked
+        with self.assertRaisesRegex(destinations.DestinationRefused, f'{PRIVATE}:real_slack_disabled$'):
+            rt.identity = disabled
+            self.dest.require(rt, self.db, PRIVATE, 'card', self.config)      # still fails closed for this post
+        report = self.dest.report(rt, self.db, refresh=True)
+        self.assertEqual((report['ok'], report['local_error'], self.stored(PRIVATE)), (False, 'real_slack_disabled', before))
+        rt.identity = None
+        self.assertEqual(self.dest.check(rt, self.db, PRIVATE, now=1200.0)['verdict'], 'private')
+        self.assertEqual(self.dest.report(rt, self.db, refresh=True)['local_error'], None)
+
+    def test_real_slack_disabled_on_the_channel_call_and_no_previous_verdict(self):
+        rt = FakeRuntime({PUBLIC: RuntimeError('real_slack_disabled: KAGE_NO_REAL_SLACK=1 refuses conversations.info')})
+        result = self.dest.check(rt, self.db, PUBLIC, now=1000.0)
+        self.assertEqual((result['verdict'], result['error'], result['local'], result['kept']),
+                         ('error', 'real_slack_disabled', True, None))
+        self.assertIsNone(self.stored(PUBLIC))                                 # nothing cached, not even 'error'
+
+    def test_identity_blips_and_answers_about_the_channel_are_unchanged(self):
+        rt = FakeRuntime({PRIVATE: {'is_private': True}, PUBLIC: RuntimeError('Slack API error: channel_not_found')})
+        self.dest.check(rt, self.db, PRIVATE, now=1000.0)
+        rt.identity = urllib.error.URLError('down')                            # transient: the existing rule
+        kept = self.dest.check(rt, self.db, PRIVATE, now=1000.0 + destinations.DESTINATION_TTL + 1)
+        self.assertEqual((kept['verdict'], kept['transient'], 'local' in kept), ('private', 'URLError', False))
+        self.assertEqual(self.stored(PRIVATE)['retry_at'], 1000.0 + destinations.DESTINATION_TTL + 1 + destinations.DESTINATION_ERROR_TTL)
+        rt.identity = None
+        refused = self.dest.check(rt, self.db, PUBLIC, now=1000.0)             # Slack's answer about the channel
+        self.assertEqual((refused['verdict'], self.stored(PUBLIC)['verdict'], 'local' in refused), ('error', 'error', False))
+        self.assertEqual(rt.notes, [])
 
 if __name__ == '__main__':
     unittest.main()

@@ -5,6 +5,8 @@ config), so Slack itself (conversations.info with the assistant's token) must re
 with the owner; public, a group DM, a channel shared with another organization, an IM with someone else, unknown, or a
 failed check refuses the post (fail closed). Verdicts are cached per channel in the runtime's `runtime_meta`, shared by
 every process. A transient failure of a re-check keeps a private verdict for a while instead of refusing everything.
+A local failure (no token, real Slack disabled, the assistant's identity not confirmed) says nothing about the channel:
+that check is refused but never cached, so the verdict other processes share stays as it was (B1).
 
 It reaches Slack and the database only through the runtime handle `rt` (slack.api_call, api_identity, safe_error,
 _meta_note) and the caller's `db`. The runtime passes its own facts: the decisions-config loader, the tables that store
@@ -22,6 +24,7 @@ import urllib.error
 DESTINATION_META = 'card_destination:'            # runtime_meta key prefix: {verdict, error, checked_at} per channel
 DESTINATION_BLOCKED = 'card_destination_blocked'  # runtime_meta: latest refused post "<time> <kind> <channel> <why>"
 DESTINATION_REFUSALS = 'card_destination_refusals'  # runtime_meta: {"total": N, "recent": [epoch, …]} for health
+DESTINATION_LOCAL_ERROR = 'card_destination_local_error'  # runtime_meta: latest local failure "<time> <channel> <code>"
 DESTINATION_TTL = 3600       # a private / public verdict is trusted this long (re-check: one Slack call per channel)
 DESTINATION_ERROR_TTL = 300  # a failed check stays refused this long, then retried; also the transient re-check delay
 DESTINATION_STALE_OK = 86400  # a private verdict this old survives a transient re-check failure
@@ -46,6 +49,12 @@ def transient_failure(exc):
         return True  # (an SSLError while reading the response comes unwrapped)
     match = re.fullmatch(r'Slack API error: ([a-z_]+)', str(exc))
     return bool(match) and match[1] in TRANSIENT_SLACK_ERRORS
+
+
+def local_failure(exc):
+    """True when a check failed on this side before Slack said anything about the channel: real Slack disabled here
+    (no request was made). A failure while confirming the assistant's identity counts too (see Destinations.check)."""
+    return str(exc).startswith('real_slack_disabled')
 
 
 class Destinations:
@@ -114,13 +123,22 @@ class Destinations:
         if hit:
             return {'channel': channel, 'verdict': hit['verdict'], 'error': hit.get('error'),
                     'checked_at': hit['checked_at'], 'cached': True, 'transient': hit.get('transient')}
-        entry = None
+        entry, identity = None, False
         try:
-            info = (rt.slack.api_call('conversations.info', rt.api_identity(bot=True), params={'channel': channel})
-                    or {}).get('channel')
+            token = rt.api_identity(bot=True)
+            identity = True
+            info = (rt.slack.api_call('conversations.info', token, params={'channel': channel}) or {}).get('channel')
             verdict, error = (self.verdict(info), None) if isinstance(info, dict) else ('error', 'no_channel_info')
         except Exception as exc:  # noqa: BLE001 - any failure is a refusal, never a pass ...
             verdict, error = 'error', rt.safe_error(exc)
+            if not transient_failure(exc) and (not identity or local_failure(exc)):
+                # ... and a local one (B1: missing token, real Slack disabled, identity not confirmed) is not an answer
+                # about the channel: refused here, recorded, and the cached verdict is left as it was.
+                error = 'real_slack_disabled' if local_failure(exc) else error
+                rt._meta_note(db, DESTINATION_LOCAL_ERROR, f'{channel} {error}')
+                prev = self.entry(db, channel)
+                return {'channel': channel, 'verdict': 'error', 'error': error, 'checked_at': now, 'cached': False,
+                        'transient': None, 'local': True, 'kept': prev['verdict'] if prev else None}
             prev = self.entry(db, channel) if transient_failure(exc) else None
             if prev and prev['verdict'] in PRIVATE_VERDICTS and 0 <= now - float(prev['checked_at']) < DESTINATION_STALE_OK:
                 # ... except a transient one while Slack said private / IM recently: keep that verdict (and its time),
@@ -215,6 +233,8 @@ class Destinations:
                 'legacy_refused': [c['channel'] for c in legacy if c['verdict'] not in PRIVATE_VERDICTS],
                 'legacy_days': DESTINATION_LEGACY_DAYS, 'last_blocked': blocked[0] if blocked else None,
                 'ttl_seconds': DESTINATION_TTL,
+                # B1: a check that could not ask Slack here (cached verdicts untouched); fix this side, not the channel
+                'local_error': next((c['error'] for c in checked if c.get('local')), None),
                 'next': None if not refused and not config_error else self.report_next}
 
     def overview(self, db, now=None):
