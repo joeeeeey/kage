@@ -58,6 +58,10 @@ class Runtime:
             task_consumer=self._consumer, running_session=self._running, ensure_task=self._ensure_task,
             read_title=lambda path: Path(path).name)
         self.intake = types.SimpleNamespace(run_bootstrap=self._bootstrap)
+        self.OWNER, self.DASHBOARD_URL, self.cards = 'U0000OWNER1', 'http://127.0.0.1:9999', []
+        from kage.core import decisions as Dec
+        self.buttons = types.SimpleNamespace(resolve_choice=Dec.resolve_choice,
+                                             card_model=lambda stored: Dec.card_model(stored, []))
         self.run_log = types.SimpleNamespace(read_state=lambda d: {'last_summary': 'working on it'})
         self.db = sqlite3.connect(str(self.tmp / 'state.sqlite'))
         self.db.row_factory = sqlite3.Row
@@ -72,6 +76,11 @@ class Runtime:
                                       log_dir TEXT, task_path TEXT);
           CREATE TABLE dispatches (dispatch_id TEXT, task_key TEXT, state TEXT, trigger TEXT, wait_reason TEXT,
                                    created_at REAL, updated_at REAL, run_id TEXT);
+          CREATE TABLE escalations (event_id TEXT PRIMARY KEY, stage TEXT, thread_ts TEXT, watch_id TEXT, client_msg_id TEXT);
+          CREATE TABLE escalation_cards (event_id TEXT PRIMARY KEY, channel TEXT, options TEXT, never_auto INTEGER,
+                                         created REAL, task_id TEXT, dry INTEGER DEFAULT 0);
+          CREATE TABLE decisions (event_id TEXT PRIMARY KEY, choice TEXT, actor TEXT, role TEXT, decided_at REAL,
+                                  card_channel TEXT, card_ts TEXT, provenance TEXT, note TEXT);
         ''')
         E.initialize(self.db)
         self.db.commit()
@@ -166,6 +175,28 @@ class Runtime:
 
     def start(self, db_path):
         self.started.append(db_path)
+
+    def supervisor_card(self, db, question, options, *, never_auto=True, kind=None, refs=None, now=None, task_id=None,
+                        first_line_max=None, **kw):
+        """The code-owned card path, recorded: options as escalation_cards stores them."""
+        from kage.core import decisions as Dec
+        eid = hashlib.sha256(f'card/{len(self.cards)}/{question}'.encode()).hexdigest()[:24]
+        model = [dict(zip(('id', 'label', 'kind'), Dec.parse_option(o)), recommended=False) for o in options]
+        with transaction(db):
+            db.execute('INSERT INTO escalations VALUES (?,?,?,?,?)', (eid, 'supervisor', f'{3000 + len(self.cards)}.000001',
+                                                                     None, 'c'))
+            db.execute('INSERT INTO escalation_cards (event_id,channel,options,never_auto,created,task_id) VALUES '
+                       '(?,?,?,?,?,?)', (eid, 'C0TESTCARDS', json.dumps(model), int(never_auto), now, task_id))
+        self.cards.append({'event_id': eid, 'question': question, 'options': options, 'never_auto': never_auto,
+                           'kind': kind, 'task_id': task_id})
+        return {'event_id': eid, 'thread_ts': f'{3000 + len(self.cards)}.000001', 'channel': 'C0TESTCARDS'}
+
+    def click(self, eid, option='confirm', provenance='slack_button', role='approver', actor=None, at=None):
+        """What `decide` (a click) or a typed thread decision records."""
+        with transaction(self.db):
+            self.db.execute('INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?)', (eid, f'opt:{option}', actor or self.OWNER,
+                                                                             role, at or time.time(), 'C0TESTCARDS', '1.1',
+                                                                             provenance, None))
 
 
 class ControlConfigTest(unittest.TestCase):
@@ -372,23 +403,49 @@ class ControlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.c.reply(self.rt, self.db, 'db', m['id'], now=self.T + 1, text='the token is xoxb-1234567890-abcdef', followup=True)
 
-    def test_relay_attaches_the_stored_words_and_their_source(self):
+    def propose_and_confirm(self, m, task, note=None, **click):
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task=task, note=note)
+        self.assertEqual(out['state'], 'proposed')
+        self.rt.click(out['card_event'], **click)
+        settled = self.c.settle(self.rt, self.db, now=self.T + 60)
+        return out, settled
+
+    def test_a_console_relay_waits_for_the_owners_click_then_carries_the_stored_words(self):
         self.bootstrap_control()
         target = self.rt.add_task('release-task', session=TARGET_SESSION)
         m = self.submit('Hold the release until I review it tomorrow.')
         self.pump_and_hold()
         out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task', note='the release is this task')
-        self.assertEqual((out['mode'], out['authority'], out['source']), ('event', 'owner_intent', 'console'))
-        env = E.lookup(self.db, out['event'])
+        self.assertEqual((out['state'], out['mode'], out['task_id']), ('proposed', 'event', 'release-task'))
+        self.assertIn('click', out['next'])
+        card = self.rt.cards[-1]
+        self.assertEqual((card['kind'], card['never_auto'], card['task_id']), ('control_proposal', True, 'owner-control'))
+        self.assertIn('release-task', card['question'])
+        self.assertIn('Hold the release until I review it tomorrow.', card['question'])
+        self.assertIn(f"/control?conversation={m['conversation']}", card['question'])
+        self.assertTrue(C.button_only(self.db, out['card_event']))
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)  # nothing ran yet
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + 60), [])  # no click: still waiting
+        self.rt.click(out['card_event'])
+        settled = self.c.settle(self.rt, self.db, now=self.T + 60)
+        self.assertEqual(settled[0]['state'], 'confirmed')
+        relay = self.db.execute('SELECT * FROM control_relays').fetchone()
+        env = E.lookup(self.db, relay['event_id'])
         self.assertEqual((env['kind'], env['trust'], env['authority'], env['rule']),
                          ('owner_relay', 'owner', 'owner_intent', 'control_relay'))
-        body = Path(out['file']).read_text()
-        self.assertTrue(Path(out['file']).is_relative_to(target / 'history' / 'messages'))
-        self.assertIn('Hold the release until I review it tomorrow.', body)
-        self.assertIn('source: console (console · chrome · browser request', body)
-        self.assertIn("Control task's note (no authority): the release is this task", body)
-        self.assertEqual(self.c.overview(self.db, self.config, m['conversation'])['messages'][0]['relays'][0]['task_id'],
-                         'release-task')
+        body = Path(self.db.execute('SELECT path FROM local_messages WHERE event_id=?', (relay['event_id'],)).fetchone()[0])
+        self.assertTrue(body.is_relative_to(target / 'history' / 'messages'))
+        text = body.read_text()
+        self.assertIn('Hold the release until I review it tomorrow.', text)
+        self.assertIn('source: console (console · chrome · browser request', text)
+        self.assertIn("Control task's note (no authority): the release is this task", text)
+        view = self.c.overview(self.db, self.config, m['conversation'])
+        self.assertEqual(view['messages'][0]['relays'][0]['task_id'], 'release-task')
+        self.assertEqual(view['messages'][0]['proposals'][0]['state'], 'confirmed')
+        self.assertTrue(view['messages'][-1]['runtime'])  # the runtime's note under the message
+        # a second click / settle does nothing
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + 120), [])
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 1)
         with self.assertRaises(ValueError) as caught:
             self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task')
         self.assertEqual(str(caught.exception), 'already_relayed_to_this_task')
@@ -397,39 +454,149 @@ class ControlTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='other', note='two\nlines' + 'x' * 400)
 
-    def test_an_altered_stored_text_is_never_relayed(self):
+    def test_only_the_owners_own_button_click_runs_it(self):
+        write_config(self.tmp, enabled=True, relays_per_hour=10)
+        self.bootstrap_control()
+        for name in ('a-task', 'b-task', 'c-task', 'd-task'):
+            self.rt.add_task(name, session=TARGET_SESSION)
+        m = self.submit('Pause.')
+        self.pump_and_hold()
+        for task, click, state in (('a-task', {'provenance': 'thread_reply'}, 'refused'),
+                                   ('b-task', {'role': 'ooo_delegate'}, 'refused'),
+                                   ('c-task', {'option': 'cancel'}, 'cancelled')):
+            out, settled = self.propose_and_confirm(m, task, **click)
+            self.assertEqual(settled[0]['state'], state, task)
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='d-task')
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + C.PROPOSAL_TTL - 1), [])
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + C.PROPOSAL_TTL + 1)[0]['state'], 'expired')
+        self.rt.click(out['card_event'])  # a click after the expiry runs nothing
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + C.PROPOSAL_TTL + 60), [])
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)
+        states = [x['state'] for x in self.c.overview(self.db, self.config, m['conversation'])['messages'][0]['proposals']]
+        self.assertEqual(states, ['refused', 'refused', 'cancelled', 'expired'])
+
+    def test_the_actor_must_be_the_owner_and_no_owner_id_refuses(self):
+        write_config(self.tmp, enabled=True, relays_per_hour=10)
+        self.bootstrap_control()
+        for name in ('a-task', 'b-task'):
+            self.rt.add_task(name, session=TARGET_SESSION)
+        m = self.submit('Pause.')
+        self.pump_and_hold()
+        out, settled = self.propose_and_confirm(m, 'a-task', actor='U0000OTHER1')  # an approver that is not the owner
+        self.assertEqual(settled[0]['state'], 'refused')
+        self.rt.DEPLOYMENT = types.SimpleNamespace(owner=types.SimpleNamespace(slack_user='U0000OWNER1'))
+        del self.rt.OWNER  # the profile is the source; the hub's name is not needed
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='b-task')
+        self.rt.click(out['card_event'], actor='U0000OWNER1')
+        self.rt.DEPLOYMENT = types.SimpleNamespace(owner=types.SimpleNamespace(slack_user=''))  # no owner id at all
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + 60)[0]['state'], 'refused')
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)
+
+    def test_no_console_address_means_no_link_on_the_card(self):
+        self.bootstrap_control()
+        self.rt.add_task('a-task', session=TARGET_SESSION)
+        m = self.submit('Pause.')
+        self.pump_and_hold()
+        self.rt.add_task('b-task', session=TARGET_SESSION)
+        for task, base in (('a-task', ''), ('b-task', None)):  # an empty address, then none at all
+            if base is None:
+                del self.rt.DASHBOARD_URL
+            else:
+                self.rt.DASHBOARD_URL = base
+            self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task=task)
+            self.assertNotIn('/control?', self.rt.cards[-1]['question'])
+            self.assertIn("console's control page", self.rt.cards[-1]['question'])
+
+    def test_a_proposal_settles_once_even_when_a_second_supervisor_settles_meanwhile(self):
         self.bootstrap_control()
         self.rt.add_task('release-task', session=TARGET_SESSION)
         m = self.submit('Hold the release.')
         self.pump_and_hold()
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task')
+        self.rt.click(out['card_event'])
+        nested = []
+        c, rt, db = self.c, self.rt, self.db
+
+        class Racing:  # another supervisor settles between this one's read of the click and its claim
+            def __init__(self):
+                self.fired = False
+
+            def execute(self, sql, *args):
+                if 'FROM decisions d' in sql and not self.fired:
+                    self.fired = True
+                    nested.append(c.settle(rt, db, now=1800000061.0))
+                return db.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(db, name)
+        first = self.c.settle(self.rt, Racing(), now=self.T + 60)
+        self.assertEqual([x['state'] for x in nested[0]], ['confirmed'])
+        self.assertEqual(first, [])  # the claim was taken: this one runs nothing
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 1)
+
+    def test_the_decision_recorder_refuses_a_typed_reply_on_a_confirm_card(self):
+        from kage.core import escalation as Esc
+        self.bootstrap_control()
+        self.rt.add_task('release-task', session=TARGET_SESSION)
+        m = self.submit('Hold the release.')
+        self.pump_and_hold()
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task')
+        me = types.SimpleNamespace(rt=types.SimpleNamespace(_fail=lambda reason: {'ok': False, 'reason': reason},
+                                                            SUPERVISOR_STAGE='supervisor'))
+        result = Esc.EscalationCore.thread_reply_decision(me, self.db, out['card_event'], '9999.000001')
+        self.assertEqual(result, {'ok': False, 'reason': 'only_a_button_click_decides_this_card'})
+
+    def test_an_altered_or_expired_stored_text_fails_the_proposal(self):
+        self.bootstrap_control()
+        self.rt.add_task('release-task', session=TARGET_SESSION)
+        m = self.submit('Hold the release.')
+        self.pump_and_hold()
+        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task')
         with transaction(self.db):
             self.db.execute("UPDATE control_messages SET text='Delete the release branch.' WHERE message_id=?", (m['id'],))
-        with self.assertRaises(ValueError) as caught:
+        self.rt.click(out['card_event'])
+        settled = self.c.settle(self.rt, self.db, now=self.T + 60)
+        self.assertEqual((settled[0]['state'], settled[0]['error']), ('failed', 'stored_text_does_not_match_its_digest'))
+        self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)
+        notes = [x['text'] for x in self.c.overview(self.db, self.config, m['conversation'])['messages'] if x.get('runtime')]
+        self.assertIn('stored_text_does_not_match_its_digest', notes[-1])
+        with self.assertRaises(ValueError) as caught:  # and the run cannot propose it again
             self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='release-task')
         self.assertEqual(str(caught.exception), 'stored_text_does_not_match_its_digest')
 
-    def test_relay_to_a_task_without_a_session_dispatches_it_and_relays_are_limited(self):
+    def test_relay_to_a_task_without_a_session_dispatches_it_and_proposals_are_limited(self):
         self.bootstrap_control()
         for name in ('a-task', 'b-task', 'c-task', 'd-task'):
             self.rt.add_task(name)
         m = self.submit('Everyone: pause.')
         self.pump_and_hold()
-        out = self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='a-task')
-        self.assertEqual((out['mode'], out['dispatch_id']), ('dispatch', 'd-a-task'))
+        out, settled = self.propose_and_confirm(m, 'a-task')
+        self.assertEqual(out['mode'], 'dispatch')
+        self.assertIn('no session now', self.rt.cards[-1]['question'])
+        self.assertEqual(self.rt.launched[0][0], 'a-task')
         self.assertIn('Everyone: pause.', self.rt.launched[0][2])
         self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='b-task')
         self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='c-task')
-        with self.assertRaises(ValueError) as caught:
+        with self.assertRaises(ValueError) as caught:  # relays_per_hour 3: done + still asking
             self.c.relay(self.rt, self.db, 'db', m['id'], now=self.T, task='d-task')
         self.assertEqual(str(caught.exception), 'relay_rate_limited')
 
-    def test_launch_creates_new_work_once_per_day_here(self):
+    def test_launch_is_a_proposal_and_a_ticket_only_when_asked(self):
         self.bootstrap_control()
-        m = self.submit('Start a task to compare the two vendors.')
+        m = self.submit('Start a task to compare the two vendors, and open a ticket for it.')
         self.pump_and_hold()
-        out = self.c.launch(self.rt, self.db, 'db', m['id'], now=self.T, title='Compare the two vendors')
-        self.assertEqual(out['authority'], 'owner_intent')
-        self.assertIn('Start a task to compare the two vendors.', self.rt.launched[-1][2])
+        out = self.c.launch(self.rt, self.db, 'db', m['id'], now=self.T, title='Compare the two vendors', linear=True)
+        self.assertEqual((out['state'], out['kind'], out['linear']), ('proposed', 'launch', True))
+        self.assertIn('open a ticket', self.rt.cards[-1]['question'])
+        self.assertEqual(self.rt.launched, [])
+        made = []
+        self.rt.intake.run_bootstrap = lambda title, brief, context, **kw: (made.append(kw), self.rt._bootstrap(
+            title, brief, context, **kw))[1]
+        self.rt.click(out['card_event'])
+        self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + 60)[0]['state'], 'confirmed')
+        self.assertEqual(made[0]['linear'], True)
+        self.assertIn('Start a task to compare the two vendors', self.rt.launched[-1][2])
         with self.assertRaises(ValueError) as caught:
             self.c.launch(self.rt, self.db, 'db', m['id'], now=self.T, title='Again')
         self.assertEqual(str(caught.exception), 'launch_rate_limited')
@@ -487,7 +654,8 @@ class ControlTest(unittest.TestCase):
         self.assertEqual(out['tasks'][0]['task_id'], 'release-task')
         self.assertIn('All good.', out['tasks'][0]['status_head'])
         self.assertEqual(out['running_runs'][0]['last_summary'], 'working on it')
-        self.assertEqual(out['open_owner_cards'], {'error': 'OperationalError'})  # a missing table hides nothing else
+        self.assertEqual(out['open_owner_cards'], [])
+        self.assertEqual(out['open_blockers'], {'error': 'OperationalError'})  # a missing table hides nothing else
         self.assertEqual(self.c.context(self.rt, self.db, now=T + 2 * 86400)['tasks'], [])  # outside the 24 h
 
     def test_bootstrap_creates_registers_and_binds(self):

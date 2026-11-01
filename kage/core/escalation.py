@@ -13,6 +13,7 @@ import time
 import uuid
 
 from kage import locale
+from kage.core import control as _control
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -726,6 +727,8 @@ class EscalationCore:
             return self.rt._fail('reply_is_older_than_the_card')
         if db.execute('SELECT 1 FROM decisions WHERE event_id=?', (eid,)).fetchone():
             return self.rt._fail('already_decided')
+        if _control.button_only(db, eid):
+            return self.rt._fail('only_a_button_click_decides_this_card')  # Phase 2 C1b: a control confirm card
         w = None
         if esc['stage'] != self.rt.SUPERVISOR_STAGE:
             if esc['stage'] != 'watching' or not esc['watch_id']:

@@ -5,6 +5,9 @@
   const $ = (id) => document.getElementById(id);
   const STATE_LABEL = { received: '已收到', queued: '排队中', working: '处理中', answered: '已回答', failed: '失败' };
   const OPEN = new Set(['received', 'queued', 'working']);
+  // C1b: a relay / launch from the console waits for the owner's click on a confirm card in Slack
+  const PROPOSAL_LABEL = { proposed: '待你在卡片上点确认', deciding: '处理中', confirmed: '已确认并执行', cancelled: '已取消',
+    expired: '已过期（没有确认）', refused: '没有执行（不是你本人点的按钮）', failed: '失败' };
   const ERROR_LABEL = {
     control_off: '总控还没开启', rate_limited: '一小时内发得太多了，稍后再试', text_empty: '先写点什么',
     text_too_long: '太长了（最多 4000 字）', unknown_conversation: '这个对话不存在了',
@@ -80,7 +83,7 @@
     const mine = m.role === 'owner';
     const li = h('li', { class: 'ctl-msg ' + (mine ? 'is-owner' : 'is-control'), 'data-state': m.state });
     const head = h('div', { class: 'ctl-msg-head' },
-      h('b', { text: mine ? '你' : '总控' }),
+      h('b', { text: mine ? '你' : m.runtime ? '系统' : '总控' }),
       h('time', { datetime: m.created_at, text: clock(m.created_at) }));
     if (mine) {
       head.append(h('span', { class: 'pill', 'data-tone': m.state === 'failed' ? 'bad' : m.state === 'answered' ? 'good' : 'warn',
@@ -100,6 +103,13 @@
         li.append(h('ul', { class: 'ctl-relays' }, m.relays.map((r) => h('li', {},
           h('span', { text: r.mode === 'launch' ? '新开任务 ' : '已转给 ' }), h('code', { text: r.task_id }),
           h('small', { text: ' · ' + clock(r.at) })))));
+      }
+      if (m.proposals && m.proposals.length) {
+        li.append(h('ul', { class: 'ctl-relays ctl-proposals' }, m.proposals.map((p) => h('li', { 'data-state': p.state },
+          h('span', { text: (p.kind === 'launch' ? '新开任务「' + (p.title || '') + '」' + (p.linear ? '（建工单）' : '') : '转给 ')
+            + (p.kind === 'launch' ? '' : '') }),
+          p.kind === 'launch' ? '' : h('code', { text: p.task_id || '' }),
+          h('small', { text: ' · ' + (PROPOSAL_LABEL[p.state] || p.state) + (p.error ? '：' + label(p.error) : '') })))));
       }
       if (m.state === 'failed') {
         li.append(h('div', { class: 'ctl-msg-error' },

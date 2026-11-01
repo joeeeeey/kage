@@ -64,3 +64,5 @@
   .ctl-msg { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .ctl-conv { transition: none; } }
+.ctl-proposals li[data-state=proposed] small { color: var(--warn-d, #8a5a00); font-weight: 600; }
+.ctl-proposals li[data-state=refused] small, .ctl-proposals li[data-state=failed] small { color: var(--bad-d, #b42335); }

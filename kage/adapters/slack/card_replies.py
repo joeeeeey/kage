@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from kage.core import control as _control
 
 DDL = '''
   CREATE TABLE IF NOT EXISTS card_replies (
@@ -201,6 +202,8 @@ def handle(rt, db, row, m, now, cfg, secret=False, code_owned=False, allow_decis
     eid = row['event_id']
     if db.execute('SELECT 1 FROM decisions WHERE event_id=?', (eid,)).fetchone():
         return {'event_id': eid, 'ts': m['ts'], 'action': 'already_decided'}
+    if allow_decision and _control.button_only(db, eid):
+        allow_decision = False  # Phase 2 C1b: only the owner's click decides this card (a control confirm card)
     parsed = rt.buttons.parse_reply(m.get('text'), rt.buttons.card_model(row['options']), strict=strict(db, eid))
     klass = None if secret else 'decided' if parsed['option'] is not None else rt.buttons.reply_class(m.get('text'))
     if parsed['option'] is not None and allow_decision and cfg['thread_reply_decisions']:

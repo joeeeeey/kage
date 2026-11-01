@@ -1088,6 +1088,7 @@ class LoopCore:
                         self._meta_error(db, 'proposals_settle_error', exc)
                 try:
                     self.control.sweep(self.rt, db)  # Phase 2 C1: working / no answer / timeout / retention
+                    self.control.settle(self.rt, db)  # C1b: the owner's click on a confirm card runs the relay / launch
                 except Exception as exc:  # noqa: BLE001
                     self._meta_error(db, 'control_error', exc)
             running = self.rt.due_watches(db, time.time())

@@ -44,6 +44,8 @@ MAX_REPLY = 12000                      # characters of one reply
 MAX_NOTE = 300
 MAX_FOLLOWUPS = 3                      # replies after the answer (a relay's outcome)
 PUMP_BATCH = 10
+PROPOSAL_TTL = 24 * 3600               # a confirm card nobody clicked closes as expired
+CARD_WORDS_MAX = 600                   # the owner's words on a confirm card; the whole text is on the console
 MESSAGE_ID_RE = re.compile(r'cm[0-9a-f]{14}')
 CONVERSATION_ID_RE = re.compile(r'cv[0-9a-f]{14}')
 CLIENT_ID_RE = re.compile(r'[A-Za-z0-9_-]{8,64}')
@@ -69,6 +71,15 @@ DDL = '''
     relay_id TEXT PRIMARY KEY, message_id TEXT NOT NULL, task_id TEXT NOT NULL, mode TEXT NOT NULL, event_id TEXT,
     dispatch_id TEXT, note TEXT, at REAL NOT NULL);
   CREATE INDEX IF NOT EXISTS control_relays_message ON control_relays (message_id);
+  -- C1b: a relay / launch from a console message waits for the owner's button click on a confirm card (code-owned,
+  -- never_auto: no delegate); state proposed -> confirmed (done) | cancelled | expired | refused | failed.
+  CREATE TABLE IF NOT EXISTS control_proposals (
+    proposal_id TEXT PRIMARY KEY, message_id TEXT NOT NULL, kind TEXT NOT NULL, task_id TEXT, title TEXT, note TEXT,
+    linear INTEGER NOT NULL DEFAULT 0, mode TEXT, state TEXT NOT NULL, card_event TEXT, created_at REAL NOT NULL,
+    decided_at REAL, settled_at REAL, relay_id TEXT, error TEXT);
+  CREATE INDEX IF NOT EXISTS control_proposals_state ON control_proposals (state, created_at);
+  -- Cards only a button click decides: a typed thread reply never records their decision (card_replies.handle).
+  CREATE TABLE IF NOT EXISTS button_only_cards (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, at REAL NOT NULL);
 '''
 
 
@@ -366,10 +377,12 @@ class Control:
                 'needs_answer': bool(needs_answer)}
 
     def relay(self, rt, db, db_path, message_id, task, note=None, now=None):
-        """Pass the owner's message on to `task`: the runtime writes the owner's STORED words and their source into the
-        target's history and delivers them as an `owner_relay` event (the owner's trust and intent) to its consumer, or
-        dispatches the task when it has no session yet. The run passes only the ids and an optional one-line note of
-        its own, labelled as carrying no authority."""
+        """Pass the owner's message on to `task`. A Slack message of the owner's (C2) is relayed at once; a console
+        message only proposes it: the owner gets a confirm card and the relay runs on their button click (`settle`),
+        because the console's only proof of the owner is a page token anything running as them could fetch. The relay
+        itself (`_relay`) writes the owner's STORED words and their source into the target's history and delivers them
+        as an `owner_relay` event (the owner's trust and intent), or dispatches the task when it has no session yet. The
+        run passes only the ids and an optional one-line note of its own, labelled as carrying no authority."""
         now = time.time() if now is None else now
         m, _, cfg = self._held(rt, db, message_id)
         row = rt._resolve_task_arg(db, task)
@@ -378,10 +391,19 @@ class Control:
         if note is not None:
             note = _one_line(note, MAX_NOTE)
             _secrets.check_secret_free(note)
-        if db.execute('SELECT count(*) FROM control_relays WHERE at>?', (now - 3600,)).fetchone()[0] >= cfg['relays_per_hour']:
+        if self._count_since(db, now - 3600) >= cfg['relays_per_hour']:
             raise ValueError('relay_rate_limited')
-        if db.execute('SELECT 1 FROM control_relays WHERE message_id=? AND task_id=?', (message_id, row['task_id'])).fetchone():
+        if db.execute('SELECT 1 FROM control_relays WHERE message_id=? AND task_id=?', (message_id, row['task_id'])).fetchone() \
+                or db.execute("SELECT 1 FROM control_proposals WHERE message_id=? AND task_id=? AND kind='relay' AND state "
+                              "IN ('proposed','deciding')", (message_id, row['task_id'])).fetchone():
             raise ValueError('already_relayed_to_this_task')
+        self._original(m)  # the stored words must still be there and match their digest
+        if m['source'] == 'console':
+            mode = 'event' if rt.registry.task_consumer(db, row['task_id']) else 'dispatch'
+            return self._propose(rt, db, m, cfg, 'relay', now, task=row, note=note, mode=mode)
+        return self._relay(rt, db, db_path, m, row, note, now)
+
+    def _relay(self, rt, db, db_path, m, row, note, now):
         original = self._original(m)
         body = self._relay_body(m, original, note, now)
         workspace = Path(row['path'])
@@ -404,33 +426,139 @@ class Control:
             out.update(mode='dispatch', dispatch_id=launched.get('dispatch_id'))
         with _transaction(db):
             db.execute('INSERT INTO control_relays VALUES (?,?,?,?,?,?,?,?)',
-                       (relay_id, message_id, row['task_id'], out['mode'], out['event'], out['dispatch_id'], note, now))
+                       (relay_id, m['message_id'], row['task_id'], out['mode'], out['event'], out['dispatch_id'], note, now))
         return out
 
     def launch(self, rt, db, db_path, message_id, title, *, linear=False, now=None):
         """New work from the owner's message: a new task workspace (the deployment's workspace bootstrap) whose first
-        session gets the owner's words as its brief (control.allow_launch; control.launches_per_day)."""
+        session gets the owner's words as its brief (control.allow_launch; control.launches_per_day). A tracker ticket
+        only with `linear` (only when the owner asked for one). From a console message: a confirm card first."""
         now = time.time() if now is None else now
         m, _, cfg = self._held(rt, db, message_id)
         if not cfg['allow_launch']:
             raise ValueError('control_launch_off')
         title = _one_line(title, 120)
         _secrets.check_secret_free(title)
-        if db.execute("SELECT count(*) FROM control_relays WHERE mode='launch' AND at>?", (now - 86400,)).fetchone()[0] \
-                >= cfg['launches_per_day']:
+        if self._count_since(db, now - 86400, launch=True) >= cfg['launches_per_day']:
             raise ValueError('launch_rate_limited')
-        bootstrap = getattr(rt.intake, 'run_bootstrap', None)
-        if bootstrap is None:
+        if getattr(rt.intake, 'run_bootstrap', None) is None:
             raise ValueError('no_workspace_bootstrap_in_this_deployment')
+        self._original(m)
+        if m['source'] == 'console':
+            return self._propose(rt, db, m, cfg, 'launch', now, title=title, linear=linear)
+        return self._launch(rt, db, db_path, m, cfg, title, linear, now)
+
+    def _launch(self, rt, db, db_path, m, cfg, title, linear, now):
         body = self._relay_body(m, self._original(m), None, now)
-        data = bootstrap(title, title, body, linear=linear, agent=cfg['provider'], root=rt.registry.root())
+        data = rt.intake.run_bootstrap(title, title, body, linear=bool(linear), agent=cfg['provider'], root=rt.registry.root())
         launched = rt.launch_task(db, db_path, data['workspace'], 'auto', body, wait_seconds=0, now=now, persist=False)
         relay_id = _new_id('cr')
         with _transaction(db):
             db.execute('INSERT INTO control_relays VALUES (?,?,?,?,?,?,?,?)',
-                       (relay_id, message_id, launched['task_id'], 'launch', None, launched.get('dispatch_id'), title, now))
+                       (relay_id, m['message_id'], launched['task_id'], 'launch', None, launched.get('dispatch_id'), title,
+                        now))
         return {'ok': True, 'relay_id': relay_id, 'task_id': launched['task_id'], 'workspace': data['workspace'],
-                'dispatch_id': launched.get('dispatch_id'), 'authority': rt.envelopes.ENVELOPES.owner_intent}
+                'dispatch_id': launched.get('dispatch_id'), 'authority': rt.envelopes.ENVELOPES.owner_intent,
+                'linear': bool(linear)}
+
+    def _count_since(self, db, since, launch=False):
+        """Relays (or launches) done plus proposals made since `since`: a run cannot flood the owner with cards."""
+        kind = "mode='launch'" if launch else "mode!='launch'"
+        done = db.execute(f'SELECT count(*) FROM control_relays WHERE {kind} AND at>?', (since,)).fetchone()[0]
+        pkind = "kind='launch'" if launch else "kind='relay'"
+        asked = db.execute(f'SELECT count(*) FROM control_proposals WHERE {pkind} AND created_at>? AND '
+                           "state NOT IN ('confirmed')", (since,)).fetchone()[0]
+        return done + asked
+
+    # ---- C1b: the confirm card ---------------------------------------------------------------------------------------
+    def _propose(self, rt, db, m, cfg, kind, now, task=None, note=None, mode=None, title=None, linear=False):
+        """A confirm card to the owner (code-owned, never_auto, button only) for a relay / launch from a console
+        message; nothing runs until `settle` sees the owner's own click."""
+        pid = _new_id('cp')
+        words = self._original(m)
+        short = words if len(words) <= CARD_WORDS_MAX else words[:CARD_WORDS_MAX].rstrip() + self.msg('control.card.more')
+        base = getattr(rt, 'DASHBOARD_URL', None)  # no configured console address: no link rather than a broken one
+        link = f"{base}/control?conversation={m['conversation_id']}" if isinstance(base, str) and \
+            base.startswith(('http://', 'https://')) else None
+        if kind == 'relay':
+            what = self.msg('control.card.relay_' + mode, task=task['task_id'], title=task.get('title') or task['task_id'])
+        else:
+            what = self.msg('control.card.launch_' + ('ticket' if linear else 'local'), title=title)
+        question = self.msg('control.card.question', what=what, words=short, link=link) if link else \
+            self.msg('control.card.question_nolink', what=what, words=short)
+        card = rt.supervisor_card(db, question, [f"confirm={self.msg('control.card.confirm')}:approve",
+                                                 f"cancel={self.msg('control.card.cancel')}:reject"],
+                                  never_auto=True, kind='control_proposal', refs={'proposal': pid}, now=now,
+                                  task_id=cfg['task'], first_line_max=None)
+        with _transaction(db):
+            db.execute('INSERT INTO control_proposals (proposal_id,message_id,kind,task_id,title,note,linear,mode,state,'
+                       "card_event,created_at) VALUES (?,?,?,?,?,?,?,?,'proposed',?,?)",
+                       (pid, m['message_id'], kind, task['task_id'] if task else None, title, note, int(bool(linear)), mode,
+                        card['event_id'], now))
+            db.execute('INSERT OR IGNORE INTO button_only_cards VALUES (?,?,?)', (card['event_id'], 'control_proposal', now))
+        return {'ok': True, 'state': 'proposed', 'proposal_id': pid, 'kind': kind,
+                'task_id': task['task_id'] if task else None, 'title': title, 'mode': mode, 'linear': bool(linear),
+                'card_event': card['event_id'],
+                'next': self.msg('control.card.next', name=self.name)}
+
+    def settle(self, rt, db, now=None):
+        """Supervisor step: each proposal's confirm card -> exactly one outcome. Only the owner's own button click
+        (decision provenance slack_button, role approver) on 确认 runs the relay / launch; 取消 cancels; a typed reply or
+        anyone else's decision runs nothing (refused); no click within PROPOSAL_TTL -> expired. The claim
+        (proposed -> deciding) makes a second click or a second supervisor do nothing."""
+        if not present(db):
+            return []
+        now = time.time() if now is None else now
+        done = []
+        owner = _owner_user(rt)  # None: every decision is refused (fail closed)
+        for p in [dict(r) for r in db.execute("SELECT * FROM control_proposals WHERE state='proposed' ORDER BY created_at")]:
+            d = db.execute('SELECT d.*, c.options FROM decisions d JOIN escalation_cards c ON c.event_id=d.event_id '
+                           'WHERE d.event_id=?', (p['card_event'],)).fetchone() if p['card_event'] else None
+            if d is None and now - p['created_at'] < PROPOSAL_TTL:
+                continue
+            with _transaction(db):
+                claimed = db.execute("UPDATE control_proposals SET state='deciding',decided_at=? WHERE proposal_id=? AND "
+                                     "state='proposed'", (d['decided_at'] if d is not None else None, p['proposal_id']))
+            if claimed.rowcount != 1:
+                continue
+            m = self._row(db, p['message_id'])
+            result, error, relay_id = None, None, None
+            if d is None:
+                state = 'expired'
+            elif not owner or d['actor'] != owner or d['provenance'] != 'slack_button' or d['role'] != 'approver':
+                state = 'refused'
+            elif rt.buttons.resolve_choice(d['choice'], rt.buttons.card_model(d['options']))['kind'] != 'approve':
+                state = 'cancelled'
+            else:
+                try:
+                    if p['kind'] == 'relay':
+                        result = self._relay(rt, db, _db_path(db), m, rt._resolve_task_arg(db, p['task_id']), p['note'], now)
+                    else:
+                        result = self._launch(rt, db, _db_path(db), m, self.settings(self._config(rt)), p['title'],
+                                              p['linear'], now)
+                    state, relay_id = 'confirmed', result['relay_id']
+                except Exception as exc:  # noqa: BLE001 - recorded on the proposal; the owner sees it on the console
+                    state, error = 'failed', _code(exc)
+            with _transaction(db):
+                db.execute('UPDATE control_proposals SET state=?,settled_at=?,relay_id=?,error=? WHERE proposal_id=?',
+                           (state, now, relay_id, error, p['proposal_id']))
+            note = self.msg(f'control.proposal.{state}', task=(result or {}).get('task_id') or p['task_id'] or p['title'],
+                            error=error or '')
+            self._console_note(db, m, note, now)
+            _card_result(rt, db, p['card_event'], note, p['proposal_id'])
+            done.append({'proposal_id': p['proposal_id'], 'state': state, 'error': error})
+        return done
+
+    def _console_note(self, db, m, text, now):
+        """A line from the runtime under the owner's message on the console (a control-role row, not the run's answer)."""
+        if m is None:
+            return
+        rid = _new_id('cm')
+        with _transaction(db):
+            db.execute('INSERT INTO control_messages (message_id,conversation_id,source,role,text,digest,facts,state,'
+                       "reply_to,smoke,created_at,updated_at) VALUES (?,?,?,'control',?,?,?,'answered',?,?,?,?)",
+                       (rid, m['conversation_id'], m['source'], text, digest(text), json.dumps({'runtime': True}),
+                        m['message_id'], m['smoke'], now, now))
 
     # ---- the control task ----------------------------------------------------------------------------------------
     def bootstrap(self, rt, db, db_path, *, launch=True, rewrite_goal=False, wait_seconds=90.0, now=None):
@@ -611,6 +739,13 @@ class Control:
         if m['role'] == 'owner':
             out['relays'] = [{'task_id': r['task_id'], 'mode': r['mode'], 'at': _iso(r['at'])} for r in db.execute(
                 'SELECT task_id, mode, at FROM control_relays WHERE message_id=? ORDER BY at', (m['message_id'],))]
+            out['proposals'] = [{'kind': r['kind'], 'task_id': r['task_id'], 'title': r['title'], 'mode': r['mode'],
+                                 'linear': bool(r['linear']), 'state': r['state'], 'error': r['error'],
+                                 'at': _iso(r['created_at'])} for r in db.execute(
+                'SELECT * FROM control_proposals WHERE message_id=? ORDER BY created_at', (m['message_id'],))] \
+                if _has_table(db, 'control_proposals') else []
+        else:
+            out['runtime'] = bool(json.loads(m['facts'] or '{}').get('runtime'))
         return out
 
     # ---- helpers -------------------------------------------------------------------------------------------------
@@ -671,6 +806,50 @@ class Control:
 
 
 # ---- module helpers ------------------------------------------------------------------------------------------------
+def _owner_user(rt):
+    """The owner's chat user id from the deployment profile (the assembled runtime always has it), else the hub's
+    OWNER; None when neither is there."""
+    try:
+        user = rt.DEPLOYMENT.owner.slack_user
+    except AttributeError:
+        user = getattr(rt, 'OWNER', None)
+    return user if isinstance(user, str) and user else None
+
+
+def button_only(db, eid):
+    """C1b: a card only a button click decides (a control confirm card): a typed reply in its thread never records its
+    decision (card_replies.handle, escalation.thread_reply_decision). False on a database that never had the table."""
+    try:
+        return db.execute('SELECT 1 FROM button_only_cards WHERE event_id=?', (eid,)).fetchone() is not None
+    except Exception:  # noqa: BLE001 - no such table: no button-only card
+        return False
+
+
+def _code(exc):
+    text = str(exc)
+    return text if text and len(text) <= 120 and all(c.isalnum() or c in '_:-.' for c in text) else type(exc).__name__
+
+
+def _has_table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _card_result(rt, db, card_event, text, proposal_id):
+    """Best effort: a bot reply in the confirm card's thread saying what happened."""
+    try:
+        esc = db.execute('SELECT thread_ts FROM escalations WHERE event_id=?', (card_event,)).fetchone()
+        card = db.execute('SELECT channel FROM escalation_cards WHERE event_id=?', (card_event,)).fetchone()
+        if not esc or not card or not esc['thread_ts']:
+            return None
+        sent = rt.slack.api_call('chat.postMessage', rt.api_identity(bot=True), json_body={
+            'channel': card['channel'], 'thread_ts': esc['thread_ts'], 'text': text, 'unfurl_links': False,
+            'metadata': rt.agent_metadata('control_proposal_result', None, proposal_id=proposal_id)})
+        rt.record_send(db, card['channel'], (sent or {}).get('ts'), 'control_proposal_result', proposal_id)
+        return (sent or {}).get('ts')
+    except Exception:  # noqa: BLE001 - the outcome stands; only the receipt is missing
+        return None
+
+
 def _db_path(db):
     row = next((r for r in db.execute('PRAGMA database_list') if r[1] == 'main'), None)
     return row[2] if row else None
