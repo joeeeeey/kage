@@ -1,7 +1,7 @@
 """`python3 -m kage --deployment DIR [arguments]`: the deployment's program on the runtime Kage assembles (kage.app).
 
-The arguments are the program's own (`status`, `tail RUN`, `--help`, …); the program name in its usage is the
-deployment's. An assembly that cannot be made (a switch off, another release pinned, a transitional module missing or
+The arguments are the program's own (`status`, `tail RUN`, `--help`, …; `ask-owner…` is the owner's `ask-<key>…`);
+the program name in its usage is the deployment's. An assembly that cannot be made (a switch off, another release pinned, a transitional module missing or
 altered) is refused before anything runs: exit 3, one JSON line on stderr. A failing command ends like the program's
 own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors withheld)."""
 import json
@@ -22,7 +22,7 @@ def main(argv=None):
     except app.AssemblyError as exc:
         print(app.refusal(exc), file=sys.stderr)
         return 3
-    sys.argv = [Path(assembly.program).name, *argv[2:]]
+    sys.argv = [Path(assembly.program).name, *app.owner_alias(argv[2:], assembly.deployment.owner.key)]
     try:
         runtime['main']()
     except Exception as exc:  # the program's own last word (the deployment's guard, the same lines)

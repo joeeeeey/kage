@@ -178,6 +178,29 @@ class App:
         return module
 
 
+VALUE_OPTIONS = ('--db',)  # the program's global options that take a value
+
+
+def owner_alias(argv, key):
+    """The generic owner-keyed command names (`ask-owner`, `ask-owner-…`) as this owner's (`ask-<key>`, D15.4): the
+    command (the first argument after the global options) renamed; every other argument and command unchanged."""
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if token in VALUE_OPTIONS:
+            i += 2
+        elif token.startswith('-'):
+            i += 1
+        else:
+            break
+    else:
+        return list(argv)
+    command = argv[i]
+    if command == 'ask-owner' or command.startswith('ask-owner-'):
+        return [*argv[:i], f'ask-{key}' + command[len('ask-owner'):], *argv[i + 1:]]
+    return list(argv)
+
+
 def assemble(deployment_dir, *, into=None, version=None, program=None):
     """App(deployment_dir, version=…, program=…).assemble(into)."""
     return App(deployment_dir, version=version, program=program).assemble(into)
