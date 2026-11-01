@@ -43,6 +43,23 @@ class LeakScanTest(unittest.TestCase):
         denied = {leak_scan.digest('northwind')}
         self.assertEqual(len(self.findings('NORTHWIND_TOKEN_FILE and northwind-infra', denied)), 2)
 
+    def test_compound_project_names(self):
+        # K15d: a project name is a compound of ordinary words; it is found however it is joined, its parts alone pass
+        denied = {leak_scan.digest('north-wind')}
+        text = 'the north-wind rollout, NORTH_WIND_ROOT, north.wind.example, ex-north-wind-ops'
+        self.assertEqual([(r, h[1:]) for r, h in self.findings(text, denied)], [('denylist', '…(10 chars)')] * 4)
+        self.assertEqual(self.findings('north wind, north-west wind, wind-north', denied), [])
+
+    def test_known_history_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'known.txt'
+            path.write_text('# released\n0123456789ab ' + leak_scan.digest('north-wind') + '\n\n')
+            self.assertEqual(leak_scan.load_known(path), {('0123456789ab', leak_scan.digest('north-wind'))})
+            path.write_text('0123456789ab north-wind\n')                 # a word, not its hash: refused
+            with self.assertRaises(ValueError):
+                leak_scan.load_known(path)
+            self.assertEqual(leak_scan.load_known(Path(tmp) / 'none.txt'), set())
+
     def test_real_looking_chat_ids(self):
         self.assertEqual(self.findings('user ' + REAL_ID), [('chat-id', 'U…(10 chars)')])
         self.assertEqual(self.findings('channel ' + REAL_CHANNEL), [('chat-id', 'C…(11 chars)')])

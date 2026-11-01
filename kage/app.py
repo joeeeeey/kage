@@ -9,7 +9,10 @@
   runtime_version   the runtime's VERSION when the program does not pass its own
   values            {"<unit>.<hint>": text} — the deployment's own words and names (env names, paths, help texts) the
                     generated units read with `_app.value`
-  modules           {"<name>": {"path", "sha256", "note"}} — the deployment's modules Kage does not serve yet
+  messages          {"<catalog key>": template} — the deployment's own wording of some messages of the owner's
+                    catalog (an example that names one of its projects, say), with the catalog's placeholders; set by
+                    `assemble` (kage.locale.override), so the catalog itself stays free of deployment words
+  modules          {"<name>": {"path", "sha256", "note"}} — the deployment's modules Kage does not serve yet
                     (transitional): every one is verified before anything loads; a missing file or another sha256
                     refuses the whole assembly (AssemblyError), before any database, file or process is touched
 
@@ -31,6 +34,7 @@ import sys
 import types
 
 import kage
+from kage import locale
 from kage import profile
 
 SHA256_RE = re.compile(r'[0-9a-f]{64}')
@@ -103,6 +107,9 @@ class App:
             raise AssemblyError(f'release_mismatch: the lock pins {pinned}, this is Kage {kage.__version__}')
         self.version = version or spec.get('runtime_version')
         self.values = dict(spec.get('values') or {})
+        self.messages = spec.get('messages') or {}  # K15d: the deployment's wording of some catalog messages
+        if not isinstance(self.messages, dict):
+            raise AssemblyError('assembly_messages_not_an_object')
         self.modules = dict(spec.get('modules') or {})
         self.bridge = Bridge(self)
         self._leaves = {}
@@ -149,6 +156,10 @@ class App:
     def assemble(self, into=None):
         """The runtime: the hub's namespace, in `into` (a module's globals) or a fresh one. Returns the namespace."""
         self.verify()
+        try:
+            locale.override(self.deployment.owner.language, self.messages)
+        except locale.LocaleError as exc:
+            raise AssemblyError(f'assembly_messages_refused: {exc}') from None
         namespace = into if into is not None else types.ModuleType('kage_runtime').__dict__
         namespace.update({'__file__': str(self.program), '_app': self})
         self._run('hub', namespace)

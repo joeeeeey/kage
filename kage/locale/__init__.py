@@ -4,12 +4,16 @@
 "words": {key: [phrase, ...]}}.
 The owner's language (owner.json) picks the catalog. Every catalog carries the same keys; a missing catalog or key is a
 LocaleError, never a silent fallback, so a guard cannot quietly run with the wrong words.
+
+A deployment may word some messages its own way (`override`, from instance.json `assembly.messages`: an example that
+names one of its projects, say); the catalog itself stays free of deployment words.
 """
 from __future__ import annotations
 import functools
 import json
 from pathlib import Path
 import re
+import string
 import types
 
 HERE = Path(__file__).resolve().parent
@@ -52,10 +56,32 @@ def words(language, key):
         raise LocaleError(f'{language}: no words {key!r}') from None
 
 
+_OVERRIDES = {}  # language -> {key: the deployment's template}
+
+
+def fields(template):
+    """The placeholder names of a message template, sorted."""
+    return sorted(f for _, f, _, _ in string.Formatter().parse(template) if f is not None)
+
+
+def override(language, messages):
+    """The deployment's own wording for some messages of `language` (replaces any earlier override). Each key must be a
+    message of the catalog, with the same placeholders."""
+    base = catalog(language)['messages']
+    for key, text in messages.items():
+        if key not in base:
+            raise LocaleError(f'{language}: an override for no message {key!r}')
+        if not isinstance(text, str) or fields(text) != fields(base[key]):
+            raise LocaleError(f'{language}: the override of {key!r} has other placeholders than the catalog')
+    _OVERRIDES[language] = dict(messages)
+
+
 def message(language, key, **values):
-    """The text for `key`, formatted with `values`."""
-    try:
-        template = catalog(language)['messages'][key]
-    except KeyError:
-        raise LocaleError(f'{language}: no message {key!r}') from None
+    """The text for `key` (the deployment's override if it has one), formatted with `values`."""
+    template = _OVERRIDES.get(language, {}).get(key)
+    if template is None:
+        try:
+            template = catalog(language)['messages'][key]
+        except KeyError:
+            raise LocaleError(f'{language}: no message {key!r}') from None
     return template.format(**values) if values else template

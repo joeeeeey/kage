@@ -1,5 +1,6 @@
 import contextlib
 import io
+from pathlib import Path
 import sys
 import types
 import unittest
@@ -11,7 +12,8 @@ from kage import cli
 def core(key='mira'):
     deployment = types.SimpleNamespace(owner=types.SimpleNamespace(timezone='Europe/Lisbon', slack_workspace='T0000TEST01',
                                                                    assistant_slack_app='A0000TEST01'),
-                                       instance=types.SimpleNamespace(agent_marker='test_agent_sent'))
+                                       instance=types.SimpleNamespace(agent_marker='test_agent_sent',
+                                                                      workspace_root=Path('/srv/work/desk')))
     return cli.CliCore('en', owner_key=key, owner_name='Mira', owner_slack_user='U0000TEST01', bot_user='U0000TEST02',
                        dashboard_url='http://127.0.0.1:9999', deployment=deployment, description='The test program.',
                        tail_command='run-tail', tasks_root_env='TEST_TASKS_ROOT', worker_config_path='~/.config/test.json',
@@ -41,6 +43,9 @@ class CliTest(unittest.TestCase):
         code, out = run(core(), ['ask-mira', '--help'])
         self.assertEqual(code, 0)
         self.assertIn('everything addressed to Mira', out)
+        code, out = run(core(), ['task-rename', '--help'])
+        self.assertEqual(code, 0)
+        self.assertIn('or the desk root', ' '.join(out.split()))       # the deployment's workspace folder (K15d)
 
     def test_a_command_runs_through_the_runtime(self):
         c = core()

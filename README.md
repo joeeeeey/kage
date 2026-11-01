@@ -19,7 +19,7 @@ after it verifies. See [`docs/coexistence.md`](docs/coexistence.md).
 | `kage/` | the engine package (Python 3.10+, standard library only) — the only thing a release ships |
 | `examples/` | fictional deployments used by the tests |
 | `tests/` | unit tests; offline by construction (`tests/__init__.py` refuses every socket) |
-| `tools/leak_scan.py` | personal-data scan (hashed denylist, real-looking chat ids, home paths, emails) |
+| `tools/leak_scan.py` | personal-data scan (hashed denylist of names and deployment project / task words, real-looking chat ids, home paths, emails; released findings in `tools/leak-history-known.txt`) |
 | `tools/bundle.py` | builds and verifies the release bundle a deployment installs |
 | `docs/` | coexistence contract and release process |
 

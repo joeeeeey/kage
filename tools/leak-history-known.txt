@@ -1,0 +1,5 @@
+# Findings of tools/leak_scan.py --history in released commits, "<commit12> <sha256 of the matched text>" (see the
+# scan's doc): words denied after the release that carried them. The text is gone from the tree; history is not rewritten.
+# K15d (0.47.0): becb2cf (K14f, v0.41.0) - a deployment project name in a help example and its workspace folder name.
+becb2cf328df 7273c9c2e4781d9d005605899854a2384f2520624995487c39a262badd0ca9d8
+becb2cf328df c9cdd26c48cdfa9e90d663ab6eb9d7e0e1e67d1f62240245c635b3492f5b21ea

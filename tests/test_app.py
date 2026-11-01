@@ -6,10 +6,12 @@ from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 import kage
 from kage import __main__ as program
 from kage import app
+from kage import locale
 
 EXAMPLE = Path(__file__).resolve().parents[1] / 'examples/northwind-mira/deploy'
 
@@ -140,7 +142,36 @@ class UnitsTest(unittest.TestCase):
                       and ast.unparse(n.func) == '_app.leaf' and isinstance(n.args[0], ast.Constant)}
             self.assertIsNone(re.search(r"\b[CDGU]0[0-9A-Z]{8,}\b", source), path.name)
         self.assertLessEqual(asked, set(assembly.UNITS) | set(assembly.TRANSITIONAL))
-        self.assertEqual(set(assembly.TRANSITIONAL), {'feedback_learning', 'slack_transport'})
+        self.assertEqual(set(assembly.TRANSITIONAL), {'slack_transport'})  # K15d: feedback_learning is a unit
+
+
+class MessagesTest(unittest.TestCase):
+    """K15d: the deployment's own wording of a catalog message (instance.json `assembly.messages`), set by kage.app when it
+    assembles; the catalog stays free of deployment words. A key the catalog lacks, or other placeholders, refuse."""
+
+    def tearDown(self):
+        locale.override('en', {})
+
+    def assemble(self, messages):
+        with Deployment(messages=messages) as d, mock.patch.object(app.App, '_run'):
+            a = app.App(d.root / 'deploy')
+            a.assemble()
+            return a.deployment.owner.language
+
+    def test_the_deployments_wording(self):
+        language = self.assemble({'learning.smoke.3': ' (only the {smoke_scope} rollout)'})
+        self.assertEqual(locale.message(language, 'learning.smoke.3', smoke_scope='pilot'), ' (only the pilot rollout)')
+        self.assertIn('project X', locale.message(language, 'cli.main.10'))      # not overridden: the catalog's
+        locale.override(language, {})
+        self.assertEqual(locale.message(language, 'learning.smoke.3', smoke_scope='pilot'), ' (limited to the pilot scope)')
+
+    def test_refusals(self):
+        for messages, why in (({'no.such.key': 'x'}, 'no message'), ({'learning.smoke.3': 'no placeholder'}, 'placeholders'),
+                              ({'learning.smoke.3': 7}, 'placeholders')):
+            with self.assertRaisesRegex(app.AssemblyError, 'assembly_messages_refused: .*' + why):
+                self.assemble(messages)
+        with Deployment(messages=['x']) as d, self.assertRaisesRegex(app.AssemblyError, 'assembly_messages_not_an_object'):
+            app.App(d.root / 'deploy')
 
 if __name__ == '__main__':
     unittest.main()

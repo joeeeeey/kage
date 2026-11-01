@@ -612,7 +612,9 @@ class CliCore:
                                                  '--apply; backup, old-name symlink, reversible with --map NEW=OLD)')
         trn.add_argument('--map', action='append', required=True, metavar='OLD=NEW', help='Repeatable')
         trn.add_argument('--apply', action='store_true', help='Write (default: report what would change)')
-        trn.add_argument('--root', help=f'Tasks root (default: {self.tasks_root_env} or the task-workspaces root)')
+        tasks_root = self.deployment.instance.workspace_root  # the deployment's (K15d: no folder name in Kage)
+        trn.add_argument('--root', help=f'Tasks root (default: {self.tasks_root_env} or the '
+                                         f'{tasks_root.name if tasks_root else "tasks"} root)')
         trn.add_argument('--backup-dir', help='Default: <db dir>/backups')
         trn.add_argument('--update-config', action='store_true',
                          help='Set intake.inbox_task / intake.oncall_task (and dispatch.long_lived_tasks) still naming OLD')
