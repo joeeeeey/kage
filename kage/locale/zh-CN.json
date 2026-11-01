@@ -1277,7 +1277,25 @@
     "commands.run_tail.1": "还没有运行记录。",
     "commands.run_tail.2": "等待后台运行开始…",
     "commands.run_tail.3": "没有等到运行开始。",
-    "commands.run_tail.4": "↻ 同一任务的下一次运行开始了（重试 / 换 provider / 后续事件）"
+    "commands.run_tail.4": "↻ 同一任务的下一次运行开始了（重试 / 换 provider / 后续事件）",
+    "cli.main.1": "One plain Chinese sentence: what you understood {owner} wants (max 120 chars); the confirmation reads 我理解你的意思是：<meaning>。 [对，就这样] [不是]",
+    "cli.main.2": "Do not reply \"收到，在弄～\" to the requester",
+    "cli.main.3": "Short ack in the language the requester wrote in (refused otherwise) instead of the default, which follows their message (收到，在弄～ / On it. / …)",
+    "cli.main.4": "Brief card event where {owner} chose 建任务去处理 (option research; strategic requesters)",
+    "cli.main.5": "Draft card event where {owner} chose 按草稿发送",
+    "cli.main.6": "Required with --card: ONE plain Chinese sentence {owner} reads first, e.g. 'agent 想把张三的 Neon 成员账号移除，问你是否批准' (names, not ids; <= 110 chars)",
+    "cli.main.7": "Agent: propose a routine -> [批准] [拒绝]; code writes it on approval",
+    "cli.main.8": "P41, {owner}-facing (Chinese): the reminder's first line, verb first: what he has to do + object + plain link + how to answer, e.g. \"要你决定：是否批准合并 PR #2647（修 …）→ 点 [批准] 或回复“批准”\"; at most 2 short lines after it (why now)",
+    "cli.main.9": "His feedback used generalizable directive language (以后/这类/统一/dont/always…)",
+    "cli.main.10": "The SEMANTIC request category (what-to-do class) shown instead of the card-type shape, e.g. \"example-shop 承诺/配置对齐\"",
+    "cli.main.11": "语义化场景名（不要用卡片类型）",
+    "cli.main.12": "什么时候：一句具体的话",
+    "cli.main.13": "系统现在默认怎么处理",
+    "cli.main.14": "你刚才的做法 / 纠正",
+    "cli.main.15": "建议规则，if-then 人话：以后遇到…→…",
+    "cli.main.16": "会影响什么 + 一两个例子",
+    "cli.main.17": "依据：近 N 条同类处理（默认按 shape 历史计数）",
+    "cli.main.18": "；"
   },
   "words": {
     "decision.approve_phrases": [

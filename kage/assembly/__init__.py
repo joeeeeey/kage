@@ -1,0 +1,3 @@
+"""Generated assembly units (K14g): one per deployment adapter served by Kage, and the hub. See kage.app."""
+UNITS = ('ask_cards', 'blockers', 'cache_report', 'card_gate', 'card_replies', 'card_threads', 'claude_delivery', 'event_envelope', 'liveness', 'poll_schedule', 'provider_health', 'routines', 'rule_engine', 'rule_registry', 'run_log', 'stuck_claims', 'task_lifecycle', 'task_memory', 'task_registry', 'task_rename')
+TRANSITIONAL = ('avatar_cache', 'dashboard', 'decision_buttons', 'dispatch_runner', 'dispatcher', 'feedback_learning', 'intake', 'message_preview', 'slack_transport', 'trace_chain', 'worker_config')

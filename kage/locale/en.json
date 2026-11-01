@@ -1277,7 +1277,25 @@
     "commands.run_tail.1": "No runs yet.",
     "commands.run_tail.2": "Waiting for the background run to start…",
     "commands.run_tail.3": "The run did not start in time.",
-    "commands.run_tail.4": "↻ The next run of the same task started (retry / other provider / follow-up event)"
+    "commands.run_tail.4": "↻ The next run of the same task started (retry / other provider / follow-up event)",
+    "cli.main.1": "One plain sentence: what you understood {owner} wants (max 120 chars); the confirmation reads \"I understand you mean: <meaning>.\" [Yes, that] [No]",
+    "cli.main.2": "Do not reply \"On it.\" to the requester",
+    "cli.main.3": "Short ack in the language the requester wrote in (refused otherwise) instead of the default, which follows their message (收到，在弄～ / On it. / …)",
+    "cli.main.4": "Brief card event where {owner} chose \"open a task for it\" (option research; strategic requesters)",
+    "cli.main.5": "Draft card event where {owner} chose \"send as drafted\"",
+    "cli.main.6": "Required with --card: ONE plain sentence {owner} reads first, e.g. 'the agent wants to remove a colleague's Neon member account; do you approve?' (names, not ids; <= 110 chars)",
+    "cli.main.7": "Agent: propose a routine -> [Approve] [Reject]; code writes it on approval",
+    "cli.main.8": "P41, {owner}-facing (in their language): the reminder's first line, verb first: what they have to do + object + plain link + how to answer, e.g. \"Decide: approve merging PR #2647 (fix …) → click [Approve] or reply \\\"approve\\\"\"; at most 2 short lines after it (why now)",
+    "cli.main.9": "Their feedback used generalizable directive language (from now on / this kind / always / never …)",
+    "cli.main.10": "The SEMANTIC request category (what-to-do class) shown instead of the card-type shape, e.g. \"example-shop commitment / config alignment\"",
+    "cli.main.11": "Semantic scenario name (not the card type)",
+    "cli.main.12": "When: one concrete sentence",
+    "cli.main.13": "What the system does by default now",
+    "cli.main.14": "What you just did / corrected",
+    "cli.main.15": "The proposed rule, if-then in plain words: from now on when … → …",
+    "cli.main.16": "What it affects + one or two examples",
+    "cli.main.17": "Basis: the last N similar handlings (by default the shape history count)",
+    "cli.main.18": "; "
   },
   "words": {
     "decision.approve_phrases": [
