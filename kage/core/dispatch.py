@@ -4,6 +4,7 @@ routing and revival, the provider-switch plan, waiting for a provider to recover
 sweep, start / launch / tend / finalize, the breaker and the owner's run / failure / breaker cards. Process
 control and the agent CLIs are injected; the provider adapters and the runner are the deployment's.
 """
+from __future__ import annotations
 import datetime as dt
 import hashlib
 import json

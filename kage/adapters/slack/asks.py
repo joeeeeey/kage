@@ -3,6 +3,7 @@
 The asked text mentions only the responders (they are prefixed when the text names nobody) and never broadcasts;
 labels are plain text; nothing may look like a credential (kage.core.secrets).
 """
+from __future__ import annotations
 import re
 
 from kage.core import asks as core

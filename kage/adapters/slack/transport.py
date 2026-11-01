@@ -11,6 +11,7 @@ add_reactions). So that a replaced `api_call` is the one every other operation u
 `self.call` (the adapter passes a function that looks its own `api_call` up at call time) and announces successful
 posts through `self.post_send` (the adapter's post-send hook).
 """
+from __future__ import annotations
 import json
 import mimetypes
 import os

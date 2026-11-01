@@ -3,6 +3,7 @@
 DMs bind requests, not people: a send as the owner into a DM extends only the SENDING task's own watches
 there (its agent metadata names the task; the other person's messages and other tasks' sends never extend them), and
 records the task's conversation window (`dm_windows`, `note_window`) that lets a live back-and-forth stay with it."""
+from __future__ import annotations
 import json
 from pathlib import Path
 import re

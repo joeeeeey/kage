@@ -18,6 +18,7 @@ Only refs and hashes are stored; bodies are re-read through the API when a sessi
 
 `rt` is the runtime (store helpers, Slack client, task registry, lifecycle, worker config, sibling modules).
 """
+from __future__ import annotations
 import hashlib
 import json
 import re

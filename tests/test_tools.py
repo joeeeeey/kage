@@ -117,7 +117,7 @@ class BundleTest(unittest.TestCase):
     def extract(self, tarball):
         dest = self.tmp / 'x'
         with tarfile.open(tarball) as tar:
-            tar.extractall(dest, filter='data')
+            bundle.extract(tar, dest)  # the tool's own extraction: the 'data' filter, or its 3.9 equivalent
         [root] = list(dest.iterdir())
         return root
 

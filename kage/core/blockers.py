@@ -22,6 +22,7 @@ stay with ask-<owner key> / rule-check. P47: waiting on a person is never a bloc
 P45: the P3.1 run-end guard (a card when a run wrote blocker lines only into status.md) is gone; its `blocker_guard`
 table stays (DDL only) so old databases and the card-destination check keep their rows.
 """
+from __future__ import annotations
 import datetime as dt
 import hashlib
 import html

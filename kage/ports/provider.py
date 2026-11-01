@@ -8,6 +8,7 @@ kage.adapters.providers; adding a provider adds one module.
 - `prompt_layout(profile, mode)`: how a run's prompt is laid out (single / split / constant).
 Later steps add liveness, delivery, probes and error classes.
 """
+from __future__ import annotations
 import json
 
 # Tools that wait for a human at the terminal: a dispatched run never gets them (they would block it).

@@ -10,6 +10,7 @@ The words come from the owner's language (kage.locale: decision, filler, waiting
 words, line labels) and from the owner profile (`key`, the owner's word in identifiers and CLI values, e.g.
 `--waiting-on <key>`; `short_name`, how messages name the owner). The gate dict uses neutral keys (`why_owner`).
 """
+from __future__ import annotations
 import re
 import time
 

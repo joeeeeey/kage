@@ -21,6 +21,7 @@ watch, then the later registration, then provider/session order. `set-current`
 `TaskRegistry` binds the tasks root: the environment variable that overrides it and its default, and the same for the
 root of the smoke-dispatch TEST workspaces (only directories with SMOKE_PREFIX under that root are tasks, so nothing
 else there gains a task identity). The functions that need no root are module functions."""
+from __future__ import annotations
 import datetime as dt
 import functools
 import json

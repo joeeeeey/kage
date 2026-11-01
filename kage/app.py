@@ -19,6 +19,7 @@ Kage serves) or the declared transitional modules; owner-keyed names (`ask_owner
 the deployment's names (`key_name`), and generic names under the deployment's own (`_ALIASES`). `python3 -m kage
 --deployment DIR …` runs the program's command line on it (kage/__main__.py).
 """
+from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util

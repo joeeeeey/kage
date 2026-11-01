@@ -29,6 +29,7 @@ routines and ≤ 48 runs per task per day; kill switch `routines.enabled`.
 `Routines` binds the owner (key, name, chat user, the ask hook), the owner's time zone and language (the card and file
 words come from the catalog, `routines.*`) and the copy-standard helpers; `Scheduler` runs on one `Routines`.
 """
+from __future__ import annotations
 import datetime as dt
 import functools
 import hashlib

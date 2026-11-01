@@ -17,6 +17,7 @@ the agent's own triage basis / note and the last summary lines of its local run 
   python3 trace_chain.py [--db PATH] [--json] REF
   REF = Slack link | CHANNEL/TS | TS | burst id | event id | dispatch id | run id | task id
 """
+from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt

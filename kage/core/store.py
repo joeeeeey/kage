@@ -3,6 +3,7 @@ tables (each module's own `initialize`, handed in by the deployment in the runti
 migrations. Table and column names never change; a migration only adds (nullable columns, new tables), never rewrites a
 row. `transaction` is the one write transaction shape (BEGIN IMMEDIATE, commit or roll back).
 """
+from __future__ import annotations
 import contextlib
 import os
 from pathlib import Path

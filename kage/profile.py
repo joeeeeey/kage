@@ -15,6 +15,7 @@ Loading is strict. Any problem raises ProfileError and nothing is half-loaded, s
 whole. A profile file that is group- or world-writable is refused, like any other file that decides who may
 approve things.
 """
+from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json

@@ -22,6 +22,7 @@ machine-applicable patch of the active spec, or an inbox-policy addendum) -> one
 supervisor (code, never the agent) applies an approved patch: new version file, changelog, validation, then switch
 `active.json`; a rejected proposal's fingerprint is suppressed for 28 days.
 """
+from __future__ import annotations
 import copy
 import datetime as dt
 import hashlib

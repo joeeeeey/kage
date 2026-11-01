@@ -1,6 +1,7 @@
 """Claude Code (`claude -p --output-format stream-json`): the run's argv, the hook settings that keep a dispatched run
 away from interactive tools, the lean-context profile (skill listing, git instructions, prompt-cache TTL, auto memory,
 MCP) and its stream-json events."""
+from __future__ import annotations
 import json
 import os
 from pathlib import Path

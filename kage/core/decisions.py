@@ -9,6 +9,7 @@ end or a separator, and maps to exactly one option. A question, a condition righ
 (on a verbatim card) any extra text leaves it undecided. The phrases and patterns come from the owner's catalog
 (kage.locale `decision.*`); the channel adapter removes its markup before and passes the plain text in.
 """
+from __future__ import annotations
 import json
 import re
 

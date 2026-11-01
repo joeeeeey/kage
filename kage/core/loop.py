@@ -4,6 +4,7 @@ event's bounded context), ingest into events with envelopes and read receipts, d
 Codex queue, the dispatcher's route), resolve, recovery of a dead Codex owner, the daemon's health step,
 run_loop and its start. Everything else is reached through the runtime (`rt`).
 """
+from __future__ import annotations
 import fcntl
 import hashlib
 import json

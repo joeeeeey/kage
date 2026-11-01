@@ -13,6 +13,7 @@ the session settled by itself is closed. A dead session's claims belong to the d
 `StuckClaims` holds the owner-facing words (the owner's language catalog, `stuck.*`), the owner's chat user (only the
 owner's click settles a card) and the workspace-name prefix a card leaves out of a task's name.
 """
+from __future__ import annotations
 import json
 import time
 import uuid

@@ -1,5 +1,6 @@
 """Slack side of decision cards: Slack markup in labels and replies (`<@U…>`, `<!here>`, `<https://…|label>`), and
 the escaped one-line excerpt of a reply that a card shows."""
+from __future__ import annotations
 import re
 
 from kage.core import decisions as core

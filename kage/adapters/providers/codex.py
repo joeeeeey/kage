@@ -1,4 +1,5 @@
 """Codex CLI (`codex exec --json`): the run's argv and its JSONL events."""
+from __future__ import annotations
 from pathlib import Path
 
 from kage.ports import provider as port

@@ -9,6 +9,7 @@ While waiting it renders new complete lines of events.jsonl into the masked <run
 through the run-log module the deployment hands in (`load_run_log()`, kage.core.runlog underneath). The child still
 writes straight to the file, so a renderer problem can never block or kill the child; the supervisor and a terminal
 tail render the same way under the same lock if this one cannot."""
+from __future__ import annotations
 import json
 import os
 from pathlib import Path

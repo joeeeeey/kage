@@ -16,6 +16,7 @@ their language, `health.*`, not a card): when a provider degrades, and when it i
 successful run on it. `dispatch.provider_health.enabled=false`: no evaluation, no notices. The post itself is the
 channel's (`post(rt, db, provider, kind, text)`, e.g. kage.adapters.slack.health_notices).
 """
+from __future__ import annotations
 import json
 import time
 

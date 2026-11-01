@@ -4,6 +4,7 @@ Limits and durations, the confirmation policy, the card copy in the asker's lang
 owner's clock. The language of an ask is a short code (`zh`, `en`) mapped to a catalog; an unknown code falls back to
 the owner's language. The answer the owner gives on someone's behalf is recorded as `<key>_override`.
 """
+from __future__ import annotations
 import datetime as dt
 import re
 

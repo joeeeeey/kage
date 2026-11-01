@@ -36,6 +36,7 @@ P45: `RETIRED_KEYS` — keys of removed features (`blockers.guard_enabled`). A f
 value must keep its old type (a bool) and is then dropped, so nothing reads it and the next `set` writes the file
 without it. Any other unknown key still fails closed.
 """
+from __future__ import annotations
 import contextlib
 import fcntl
 import hashlib

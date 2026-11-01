@@ -14,6 +14,7 @@ Notes: a session that is not the task's current session writes
 status.md and resolves the note event. Agent messages (`send-to-task`) are kept in
 `<workspace>/history/messages/`. Both are plain Markdown, mode 0600, never secrets.
 """
+from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl

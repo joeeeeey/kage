@@ -2,6 +2,7 @@
 owner-keyed command names from the profile. Every name it runs is reached through the runtime (`rt`); the
 description is the deployment's (the hub's docstring).
 """
+from __future__ import annotations
 import argparse
 import contextlib
 import json

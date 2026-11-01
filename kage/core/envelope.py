@@ -13,6 +13,7 @@ The owner's own trust class and intent are named by the owner key (owner.key in 
 stored by keeping its key. Channel-specific reading of a message (metadata, app ids, guest flags) is the channel
 adapter's (kage.adapters.slack.envelope).
 """
+from __future__ import annotations
 import json
 from pathlib import Path
 import re

@@ -19,6 +19,7 @@ of the run, from the `result` event's totals); `since_use_seconds` — the gap s
 run's end or a warmed keep-warm refresh's start; and `keep_warm`: the refreshes (`keep_warm_runs`, never counted as runs)
 per task with their first-call numbers and cost, plus the cost per day of the window.
 """
+from __future__ import annotations
 import json
 from pathlib import Path
 import re

@@ -3,6 +3,7 @@
 rendered once in memory. `Pages` is path-like for the dashboard server: `pages / 'assets' / name` and `.read_bytes()`;
 a name that is not a page raises FileNotFoundError, as a missing file does.
 """
+from __future__ import annotations
 from pathlib import Path
 import re
 

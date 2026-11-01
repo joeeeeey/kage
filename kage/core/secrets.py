@@ -4,6 +4,7 @@ The shapes are obvious credentials only (chat, cloud and code-host tokens, priva
 assignments). Every language catalog adds its own labelled form (kage.locale `secret.labelled`), and all of them apply
 whatever the owner's language is. Links to one-time secret shares are the intended path and pass.
 """
+from __future__ import annotations
 import re
 
 from kage import locale

@@ -14,6 +14,7 @@ destinations of owner-facing posts (for the install-time report) and the report'
 `require` calls back through the adapter's module-level names (`hooks`: check, record_refusal, private) so a caller or
 test that replaces one of them is what `require` uses.
 """
+from __future__ import annotations
 import http.client
 import json
 import re

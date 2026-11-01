@@ -4,6 +4,7 @@ identity checks, the approvals-thread, decision and ask read models, `--about` r
 ask-owner card text, local events, the run / takeover / tail read models and the terminal-only check.
 Everything it does not hold it reaches through the runtime (`rt`).
 """
+from __future__ import annotations
 import hashlib
 import json
 import os

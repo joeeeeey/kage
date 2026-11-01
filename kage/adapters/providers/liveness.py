@@ -25,6 +25,7 @@ Only `dead` lets the dispatcher revive; `unknown` keeps today's delivery.
 Context cap: `session_bytes` is the size of a session's on-disk transcript (the Codex rollout above, or
 ~/.claude/projects/<dir>/<session>.jsonl), stat only — the file is never opened.
 """
+from __future__ import annotations
 import glob
 import json
 import os

@@ -1,6 +1,7 @@
 """Slack side of provider-health notices: a top-level bot message in the owner's private decision channel, mentioning
 the owner, with a context line linking the dashboard's health page; the destination is checked private first and the
 send is ledgered (it is the runtime's own message, never ingested as work)."""
+from __future__ import annotations
 from kage import locale
 
 

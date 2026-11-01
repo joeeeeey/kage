@@ -4,6 +4,7 @@ The arguments are the program's own (`status`, `tail RUN`, `--help`, …; `ask-o
 the program name in its usage is the deployment's. An assembly that cannot be made (a switch off, another release pinned, a transitional module missing or
 altered) is refused before anything runs: exit 3, one JSON line on stderr. A failing command ends like the program's
 own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors withheld)."""
+from __future__ import annotations
 import json
 from pathlib import Path
 import re

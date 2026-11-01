@@ -3,6 +3,7 @@
 Events for a Claude consumer session are queued in the store; the session claims a batch, works it and releases
 it; a wake file tells a live Claude CLI that work is waiting (advisory: the store is the truth). `settle_claimed`
 (ClaudeDelivery: it records the owner's decision) and `requeue_claimed` act on exact claimed rows."""
+from __future__ import annotations
 import contextlib
 import hashlib
 import json

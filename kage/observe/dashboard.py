@@ -44,6 +44,7 @@ P48 turns /intake into the inbox trace (trace_chain.py, read-only, metadata only
   /intake?trace=<ref>    deep link: the page opens that item's trace.
 The database is still opened read-only; run logs are read, never written, from here.
 """
+from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt

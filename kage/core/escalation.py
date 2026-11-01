@@ -3,6 +3,7 @@ reconcile, retire, hand-off, inheritance), posting a card, escalation, decisions
 confirmed proposal, receipts and the decision event, the ask-owner card, code-owned (supervisor) cards, closing,
 the smokes and claim release. Everything else is reached through the runtime (`rt`).
 """
+from __future__ import annotations
 import functools
 import hashlib
 import json

@@ -4,6 +4,7 @@ events (notes, send-to-task), the memory guard, a dispatched run's question hook
 terminal takeover / hand-back, the run tail, launching a task and the dispatch smoke. Everything else — the
 deployment's paths (tail wrapper, iTerm script) among it — is reached through the runtime (`rt`).
 """
+from __future__ import annotations
 import hashlib
 import json
 import os

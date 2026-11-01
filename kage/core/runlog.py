@@ -15,6 +15,7 @@ URL credentials, private-key blocks and `NAME=value` assignments whose name cont
 CREDENTIAL (also JSON `"api_key": "..."` and `--token X` style flags), and one-time verification codes next to their
 label (验证码 123456, MFA code: 123456, `--token-code 123456`).
 """
+from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl

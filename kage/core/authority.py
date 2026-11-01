@@ -9,6 +9,7 @@ destination or the owner's DM; a malformed config fails closed (every card refus
 Identifier formats are the channel's (passed in as regexes); the owner's id is the DM fallback. Error codes keep the
 `invalid_decision_config_*` names; the not-private refusal is named by the owner key (`<key>_card_destination_…`).
 """
+from __future__ import annotations
 import datetime as dt
 import json
 from pathlib import Path

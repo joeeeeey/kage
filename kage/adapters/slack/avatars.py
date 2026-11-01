@@ -1,4 +1,5 @@
 """Private SQLite identity/avatar cache; Slack bodies are never persisted."""
+from __future__ import annotations
 import contextlib
 import json
 import math

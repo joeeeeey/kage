@@ -6,6 +6,7 @@ rewrite it); relayed text the code cannot send back is scrubbed instead (`scrub`
 record formats; the card-reference pattern and the ask verbs come from the owner's catalog (`copy.*`). The agent-facing
 wording (the standards and two problem texts) is the deployment's to choose; the defaults below name the owner.
 """
+from __future__ import annotations
 import re
 
 from kage import locale

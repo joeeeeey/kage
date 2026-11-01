@@ -33,6 +33,7 @@ Agent-continuing (a running or scheduled session) / Blocked (a report-blocker ca
 - `settle` (supervisor): the owner's click on an orphan / deadline card routes back here — 继续查 / 让 agent 跟进 re-dispatches
   the task to a closure state; 我来跟进 / 改状态指派 / 关单 / 改期 record his choice and reply in the card thread.
 """
+from __future__ import annotations
 import datetime as dt
 import json
 import os

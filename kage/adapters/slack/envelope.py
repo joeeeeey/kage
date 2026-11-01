@@ -4,6 +4,7 @@ What only a Slack message tells: the instance's hidden marker (message metadata 
 (`app_id`), bot posts (`bot_id`, `bot_message`, the assistant's bot user), the author's workspace (`user_team`) and
 guest flags (`user_profile.is_restricted` / `is_ultra_restricted`), and which subtypes are hand-typed.
 """
+from __future__ import annotations
 from kage.core import envelope as core
 
 HAND_TYPED_SUBTYPES = (None, 'file_share', 'thread_broadcast')

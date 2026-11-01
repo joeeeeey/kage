@@ -4,6 +4,7 @@ context (session notes, takeover, launch brief, events, the split / constant-fir
 context). The owner's dispatch rules are the owner's playbook pack (`dispatch_rules`); everything else is reached
 through the runtime (`rt`).
 """
+from __future__ import annotations
 from pathlib import Path
 import time
 

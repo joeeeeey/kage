@@ -5,6 +5,7 @@ Block and action ids are stored in posted messages and read back by the receiver
 owner reads comes from the owner's catalog (`decision.*`); times are the owner's clock. Text is mrkdwn: labels, notes
 and excerpts are escaped where they are rendered.
 """
+from __future__ import annotations
 import datetime as dt
 
 from kage import locale

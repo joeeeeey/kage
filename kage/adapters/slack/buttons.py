@@ -9,6 +9,7 @@ replaced function (a test's patch) is the one the guard and the cards reach: `lo
 `record_refusal`, `private` (the destination guard's callbacks) and `default_model` (the buttons of a card stored
 without options).
 """
+from __future__ import annotations
 import os
 from pathlib import Path
 import re

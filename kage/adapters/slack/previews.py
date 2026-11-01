@@ -1,4 +1,5 @@
 """Bounded on-demand Slack previews: bodies live only in a short-lived memory cache."""
+from __future__ import annotations
 from collections import OrderedDict
 import contextlib
 import html

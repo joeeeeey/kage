@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -54,6 +55,21 @@ def verify(directory):
     return problems
 
 
+def extract(tar, dest):
+    """tar.extractall with the 'data' filter; on a Python without extraction filters (3.9, as macOS ships it) the same
+    refusal by hand first: regular files and directories only, relative names that stay inside `dest`."""
+    if hasattr(tarfile, 'data_filter'):
+        tar.extractall(dest, filter='data')
+        return
+    root = os.path.realpath(dest)
+    for member in tar.getmembers():
+        target = os.path.realpath(os.path.join(dest, member.name))
+        if not (member.isfile() or member.isdir()) or os.path.isabs(member.name) or '..' in Path(member.name).parts \
+                or not (target == root or target.startswith(root + os.sep)):
+            raise SystemExit(f'refusing archive member {member.name!r}: not a plain file or directory inside it')
+    tar.extractall(dest)
+
+
 def build(ref, outdir):
     commit = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', '--verify', f'{ref}^{{commit}}'],
                             capture_output=True, text=True, check=True).stdout.strip()
@@ -61,7 +77,7 @@ def build(ref, outdir):
                              capture_output=True, check=True).stdout
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-            tar.extractall(tmp, filter='data')
+            extract(tar, tmp)
         init = Path(tmp, 'kage/__init__.py').read_text(encoding='utf-8')
         version = re.search(r"^__version__ = '([^']+)'$", init, re.M).group(1)
         manifest = manifest_of(tmp)

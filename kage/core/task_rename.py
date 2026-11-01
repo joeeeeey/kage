@@ -26,6 +26,7 @@ a symlink to NEW removes that symlink, moves the folder back and rewrites the da
 workspace that still mention OLD (goal.md CLI examples...) are reported, never rewritten (`rules inbox-sync`
 regenerates the managed blocks).
 """
+from __future__ import annotations
 import datetime as dt
 import fcntl
 import json

@@ -6,6 +6,7 @@ and file, and two hooks that are its own names, looked up at call time: `call` (
 every operation reaches the replaced one) and `post_send` (its `notify_followup_activity`). `followup_helper` is the
 path of the follow-up runtime's poll-schedule module (absent: the hook does nothing).
 """
+from __future__ import annotations
 import importlib.util
 import re
 import sys

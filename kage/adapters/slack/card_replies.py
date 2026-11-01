@@ -22,6 +22,7 @@
 `rt` is the runtime: its Slack client and identities, transactions, decision recording, card update, watch helpers and
 the sibling modules (`rt.buttons`, `rt.envelopes`, `rt.card_threads`, `rt.worker_config`).
 """
+from __future__ import annotations
 import json
 import re
 import time

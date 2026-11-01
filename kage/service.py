@@ -14,6 +14,7 @@ Exit 64: usage; 78: refused (launchd retries after its throttle interval).
 
 Standard library only, imported by path: nothing but this file runs before the checks pass.
 """
+from __future__ import annotations
 import hashlib
 import json
 import os

@@ -10,6 +10,7 @@ The registry knows nothing about a particular deployment. The caller gives it:
   language   the catalog for titles, levels and the `show` text (kage.locale)
 State (the parsed-file cache) lives in the Registry object, never in this module.
 """
+from __future__ import annotations
 import json
 import os
 from pathlib import Path

@@ -5,6 +5,7 @@
 The owner's language (owner.json) picks the catalog. Every catalog carries the same keys; a missing catalog or key is a
 LocaleError, never a silent fallback, so a guard cannot quietly run with the wrong words.
 """
+from __future__ import annotations
 import functools
 import json
 from pathlib import Path
