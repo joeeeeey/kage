@@ -7,8 +7,9 @@
   lock              the deployment's kage.lock, relative to its root ($KAGE_LOCK overrides, as for the deployment's
                     bridge): every switch must be on Kage and the pinned release must be this one
   runtime_version   the runtime's VERSION when the program does not pass its own
-  values            {"<unit>.<hint>": text} — the deployment's own words and names (env names, paths, help texts) the
-                    generated units read with `_app.value`
+  values            {"<unit>.<hint>": text} — the deployment's own words and names (env names, paths, help texts, its
+                    receipt reactions) the generated units read with `_app.value`; one a unit reads and the deployment
+                    does not declare refuses (`value_missing`)
   messages          {"<catalog key>": template} — the deployment's own wording of some messages of the owner's
                     catalog (an example that names one of its projects, say), with the catalog's placeholders; set by
                     `assemble` (kage.locale.override), so the catalog itself stays free of deployment words

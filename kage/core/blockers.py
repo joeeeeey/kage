@@ -5,7 +5,7 @@ is missing or expired, a verification code, missing permission or a UI-only step
 stay with ask-<owner key> / rule-check. P47: waiting on a person is never a blocker (the external_owner type is gone, R-0004:
 `ask` with a deadline, followed up at least twice), and a card from the CLI passes the card gate (card_gate).
 
-- `report-blocker` (agent session) records one `automation_gaps` row and posts ONE assistant-bot card to the owner in the
+- `report-blocker` (agent session) records one `automation_gaps` row and posts ONE assistant card to the owner in the
   the owner-only decision channel. The card is ask-<owner key>'s card + decision watch, owned by the reporting session, so clicks
   and typed replies come back to it as events. Type-specific default options choose HOW to get unblocked; the card
   authorizes nothing (the task's own authorization and rule-check still apply). A blocker still waiting for the owner with
@@ -336,7 +336,7 @@ def smoke_workspace(rt, now):
 
 def synthetic_decision(rt, db, card_event, option_id, now):
     """TEST cards only: record a decision without a Slack click and deliver it like `decide` would (event on the card
-    watch); the card's buttons are replaced by the outcome line, attributed to assistant-bot (never to the owner)."""
+    watch); the card's buttons are replaced by the outcome line, attributed to the assistant (never to the owner)."""
     card = db.execute('SELECT * FROM escalation_cards WHERE event_id=?', (card_event,)).fetchone()
     esc = db.execute('SELECT * FROM escalations WHERE event_id=?', (card_event,)).fetchone()
     if card is None or esc is None or not card['smoke']:
@@ -357,7 +357,7 @@ def synthetic_decision(rt, db, card_event, option_id, now):
 
 
 def synthetic_reply(rt, db, watch_id, now):
-    """TEST: an event on the card watch standing in for a typed thread reply (no Slack message, no text; assistant-bot
+    """TEST: an event on the card watch standing in for a typed thread reply (no Slack message, no text; the assistant
     as author, never the owner)."""
     w = rt.load(db, watch_id)
     if not w.get('smoke'):
@@ -399,7 +399,8 @@ class Blockers:
     """The owner-bound half of blockers: the cards and replies in the owner's words, the owner's clicks, the
     ledger views, the weekly skill proposals and the smoke."""
 
-    def __init__(self, language, *, tz, tz_name, owner_key, owner_name, owner_user, ask_owner, worker_slug, run_id_env):
+    def __init__(self, language, *, tz, tz_name, owner_key, owner_name, owner_user, ask_owner, worker_slug, run_id_env,
+                 internal_names=()):
         self.language = language
         self.tz = tz
         self.tz_name = tz_name
@@ -414,7 +415,8 @@ class Blockers:
         self.resolution_zh = {f'{self.key}_manual': self.msg('blockers.resolution_zh.owner_manual', owner=self.name), 'credential_added': self.msg('blockers.resolution_zh.credential_added', owner=self.name), 'agent_browser': self.msg('blockers.resolution_zh.agent_browser'),
                               'skill_built': self.msg('blockers.resolution_zh.skill_built'), 'skipped': self.msg('blockers.resolution_zh.skipped')}
         self.owner_manual = (f'{self.key}_manual', 'credential_added')   # resolutions that cost the owner a manual step
-        self.internal_systems = {'slack-followup', 'followup', 'task-followup', 'deployment-skill', 'reminder', 'reminders',
+        # `internal_names`: the deployment's own names for this runtime (its program's skill, say), never a blocker
+        self.internal_systems = {'slack-followup', 'followup', 'task-followup', *internal_names, 'reminder', 'reminders',
                                  'watch', 'watcher', 'watches', 'card', 'cards', 'deadline', 'deadlines', 'self', 'agent', 'runtime',
                                  'supervisor', 'orphan', 'digital-worker', self.worker_slug, f'ask-{self.key}', 'blocker-card'}
         self._bookkeeping_verb = re.compile(self.pattern('blockers._bookkeeping_verb.1'))

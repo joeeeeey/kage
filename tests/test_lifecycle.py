@@ -1,4 +1,6 @@
+from pathlib import Path
 import re
+import types
 import unittest
 import zoneinfo
 
@@ -25,6 +27,13 @@ class LifecycleTest(unittest.TestCase):
         self.assertIn('Mira chose "Close it"', L.close_prompt)
         self.assertIn('{task}', L.close_prompt)                     # formatted later with the task id
         self.assertIn('Mira 在「任务停着没人推进」卡片上选了「关单」', lifecycle('zh-CN').close_prompt)
+
+    def test_the_tracker_helper_is_the_deployments(self):
+        rt = types.SimpleNamespace(__file__='/nonexistent/skills/runtime-skill/scripts/runtime.py')
+        self.assertIsNone(lc._linear_script(rt))                       # N1: no helper -> every ticket state unknown
+        self.assertIsNone(lifecycle()._linear_state(rt, 'TEST-12'))
+        self.assertEqual(lc._linear_script(rt, 'tracker/scripts/read.py'),
+                         Path('/nonexistent/skills/tracker/scripts/read.py'))
 
     def test_handoff_without_closure(self):
         zh = lifecycle('zh-CN')

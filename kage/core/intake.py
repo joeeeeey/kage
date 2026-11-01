@@ -2597,7 +2597,7 @@ class IntakeCore:
                       linear=False, ack=True, ack_text=None, decision_event=None, parent=None, slug=None,
                       incident=False, again=False, wait_seconds=90.0, now=None, runner=None):
         """§6: bootstrap a new task workspace (--no-launch), bind the source conversation, launch the first session
-        headless (run card = the assistant-bot notification), ack the requester as the owner (unless strategic / --no-ack, or —
+        headless (run card = the assistant's notification), ack the requester as the owner (unless strategic / --no-ack, or —
         P38 (F29) — the burst was already answered as the owner: `ack_skipped`, unless `again`)."""
         now = time.time() if now is None else now
         b = burst(db, ident)
@@ -2881,7 +2881,7 @@ class IntakeCore:
         return card
 
     def intake_brief(self, rt, db, db_path, ident, body, now=None):
-        """Strategic / vague directive: an assistant-bot brief card to the owner ONLY (no external post of any kind)."""
+        """Strategic / vague directive: an assistant brief card to the owner ONLY (no external post of any kind)."""
         now = time.time() if now is None else now
         b = burst(db, ident)
         body = rt.task_memory.clean_text(body)

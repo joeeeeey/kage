@@ -10,12 +10,12 @@ Agent-continuing (a running or scheduled session) / Blocked (a report-blocker ca
   cards, owed-reply watches / ask cards with a named target and an unexpired deadline, routines / scheduled wakes,
   running sessions, a status.md terminal marker) or to `orphan`.
 - `closure_guard` (dispatcher, at run end): a `success` run that left the task an orphan AND whose final message merely
-  handed off / suggested next steps (no completion, no mechanism) gets ONE assistant-bot card to the owner. Conservative: only
+  handed off / suggested next steps (no completion, no mechanism) gets ONE assistant card to the owner. Conservative: only
   Linear-ticket, runtime-managed, non-smoke tasks; one card per task per cooldown; misses rather than noise.
 - `orphan_sweep` (supervisor, deduped, every `tasks.sweep_interval_minutes`): scans ONLY runtime-managed tasks (≥1
   `dispatches` row) the runtime launched or that were registered after the P0 backfill — a backfilled folder only ever
   revived by an event is never swept (`sweep_tasks`). An orphan that has been idle past `tasks.orphan_idle_hours` and
-  that Linear still shows non-terminal (read via tracker-helper, best effort) gets one card. Each Linear read is
+  that Linear still shows non-terminal (read via the deployment's tracker helper, best effort) gets one card. Each Linear read is
   persisted (a Done / Canceled ticket is not read again until the task is dispatched again) and one sweep's liveness
   probes and reads share a wall-clock budget. Local tasks are exempt (looser; never swept).
 - `deadline_watchdog` (supervisor): a registered `task_deadlines` row surfaces one card `tasks.deadline_lead_hours`
@@ -275,8 +275,10 @@ def _recent_orphan_card(db, task_id, now, cfg):
                       'LIMIT 1', (task_id, now - cooldown)).fetchone() is not None
 
 
-def _linear_script(rt):
-    return Path(rt.__file__).resolve().parents[2] / 'tracker-helper' / 'scripts' / 'linear_api.py'
+def _linear_script(rt, helper=None):
+    """The deployment's tracker helper (`helper`: its path under the skills root, the folder of the runtime's skill
+    folder); None without one, then every ticket state is unknown."""
+    return Path(rt.__file__).resolve().parents[2] / helper if helper else None
 
 
 def _linear_ttl(cfg):
@@ -385,8 +387,10 @@ class Lifecycle:
     """The owner-bound half of the task lifecycle: closure states, the orphan sweep and its cards, deadlines
     and wake-ups in the owner's words and time zone, and the owner's clicks."""
 
-    def __init__(self, language, *, tz, ticket_task_re, ticket_id_re, owner_key, owner_name, owner_user):
+    def __init__(self, language, *, tz, ticket_task_re, ticket_id_re, owner_key, owner_name, owner_user,
+                 tracker_helper=None):
         self.language = language
+        self.tracker_helper = tracker_helper
         self.tz = tz
         self.ticket_task_re = ticket_task_re
         self.ticket_id_re = ticket_id_re
@@ -423,7 +427,7 @@ class Lifecycle:
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
 
     def is_linear_task(self, task_id):
-        """A Linear-ticket task (<ticket>-N / TEAM-N) — driven by the lifecycle machinery. local-task-… and the plain-named
+        """A Linear-ticket task (<TEAM>-N, a team of the org's ticket pattern) — driven by the lifecycle machinery. local-task-… and the plain-named
         long-lived tasks (<owner key>-inbox / <owner key>-oncall, P39) are not."""
         return bool(task_id) and bool(self.ticket_task_re.match(str(task_id)))
 
@@ -523,7 +527,7 @@ class Lifecycle:
 
     def closure_guard(self, rt, db, run, final, now=None, probe=None):
         """A dispatched `success` run that left its Linear-ticket task an orphan AND merely suggested next steps / handed
-        off → ONE assistant-bot card to the owner. Conservative: non-Linear / local / smoke / non-runtime-managed tasks, a task
+        off → ONE assistant card to the owner. Conservative: non-Linear / local / smoke / non-runtime-managed tasks, a task
         already in a closure state, and a final that declared completion or made no suggestion are all left alone."""
         now = time.time() if now is None else now
         if not config(rt)['orphan_sweep_enabled']:
@@ -550,15 +554,16 @@ class Lifecycle:
         return self.post_orphan_card(rt, db, task_id, task_path, now, reason='run_end')['reason']
 
     def _linear_state(self, rt, task_id, timeout=LINEAR_TIMEOUT):
-        """Best effort: the Linear workflow state of a <ticket>-N / TEAM-N ticket via the sibling tracker-helper skill.
+        """Best effort: the Linear workflow state of a <TEAM>-N ticket via the deployment's tracker helper (a script under
+        the skills root that prints `issue get --json`; `tracker_helper`).
         Returns {'state': name, 'type': category} or None when it cannot be read (then the sweep stays conservative and
         does NOT card). Not cached here: the sweep persists every read (`task_linear_reads`); tests inject their own
         reader or fake the subprocess."""
         state = None
         try:
             m = self.ticket_id_re.match(str(task_id))
-            script = _linear_script(rt)
-            if m and script.is_file():
+            script = _linear_script(rt, self.tracker_helper)
+            if m and script is not None and script.is_file():
                 import subprocess
                 out = subprocess.run(['python3', str(script), '--json', 'issue', 'get', m.group(0)],
                                      capture_output=True, text=True, timeout=timeout, check=False)

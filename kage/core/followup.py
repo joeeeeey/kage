@@ -748,7 +748,7 @@ class FollowupCore:
         return responders, text, stored, reminder, remind, expire
 
     def audience_identity(self, users):
-        """Audience rule: a post whose audience is only the owner goes out as assistant-bot.
+        """Audience rule: a post whose audience is only the owner goes out as the assistant.
 
         the owner's own user token never push-notifies the owner, so the owner-only cards, reminders and
         notifications use the bot token; posts to anyone else keep the owner's identity.

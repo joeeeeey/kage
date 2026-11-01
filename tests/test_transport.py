@@ -111,6 +111,13 @@ class TransportTest(unittest.TestCase):
             t.validate_bot_identity(BOT_TOKEN)
         self.assertEqual(t.validate_user_identity(USER_TOKEN)['user_id'], 'U0000TEST09')
 
+    def test_reaction_names_and_the_usage_example(self):
+        self.fake({'auth.test': {'ok': True, 'user': 'mira', 'user_id': 'U0000TEST09'}})
+        with self.assertRaisesRegex(ValueError, r'^Use Slack emoji API names, for example thinking_face or eyes\.$'):
+            make().add_reactions(USER_TOKEN, 'D0000TEST01', '1.1', ['Not A Name'])
+        with self.assertRaisesRegex(ValueError, r'for example thinking_face or mira-mark\.$'):  # N1: the deployment's
+            make(emoji_example='mira-mark').add_reactions(USER_TOKEN, 'D0000TEST01', '1.1', [])
+
     def test_tokens_from_env_then_file(self):
         t = make()
         user_file, bot_file = self.tmp / 'u', self.tmp / 'b'

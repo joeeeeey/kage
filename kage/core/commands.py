@@ -457,7 +457,7 @@ class CommandsCore:
                               (now, card['id'], 'open')).rowcount != 1:
                     continue
             try:
-                # The reminder mentions exactly the responders: the owner-only -> assistant-bot.
+                # The reminder mentions exactly the responders: the owner-only -> the assistant.
                 sent = self.rt.slack.api_call('chat.postMessage', self._identity_token(
                         self.rt.audience_identity(json.loads(card['responders'])), user_token), json_body={
                     'channel': card['channel'], 'thread_ts': self.rt._ask_root(card), 'text': card['reminder_text'],
@@ -488,7 +488,7 @@ class CommandsCore:
         responders, body, stored, reminder, remind, expire = self.rt._ask_inputs(
             [self.owner_slack_user], f'{label} {text}', options, confirm_mode, remind_after, expire_after, None, lang, smoke=True)
         channel = self.rt.buttons.load_config()['decision_channel']
-        identity = self.rt.audience_identity(responders)  # the owner is the only responder: assistant-bot
+        identity = self.rt.audience_identity(responders)  # the owner is the only responder: the assistant
         if live_card:  # P38 (F49): a live TEST ask card lands in the owner's decision channel: same guard (dry posts nothing)
             self.rt.buttons.require_private_destination(self.rt, db, channel, 'smoke_ask')
         owner = {'session': session, 'provider': provider, 'cwd': str(Path(cwd).expanduser().absolute())}
@@ -1150,7 +1150,8 @@ class CommandsCore:
                 'session': run['session'] if run else json.loads(d['plan'])[0].get('session'),
                 'current_session': {'provider': row['current_provider'], 'session': row['current_session']},
                 'parent': parent, 'log_dir': run['log_dir'] if run else None,
-                'next': 'The run is headless; progress and failures arrive as assistant-bot cards. Use send-to-task to add input.'}
+                'next': f'The run is headless; progress and failures arrive as {self.rt.DEPLOYMENT.owner.assistant_name} cards. '
+                        'Use send-to-task to add input.'}
 
     def smoke_dispatch_workspace(self, provider, now=None):
         now = time.time() if now is None else now

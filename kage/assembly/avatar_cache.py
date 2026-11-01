@@ -22,7 +22,6 @@ _k = kage_bridge.module('avatars', 'kage.adapters.slack.avatars')
 _owner = kage_bridge.deployment().owner
 
 def _slack_transport():
-    transport = Path(__file__).resolve().parents[2] / 'slack-helper/scripts/slack_bot.py'
     module = _app.leaf('slack_transport')
     return module
 AVATARS = _k.Avatars(_owner.language, owner_key=_owner.key, owner_name=_owner.short_name, owner_slack_user=OWNER, slack_workspace=TEAM, guard_env=_app.value('avatar_cache.guard_env'), slack_transport=_slack_transport)

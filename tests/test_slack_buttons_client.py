@@ -64,6 +64,16 @@ class ClientTest(unittest.TestCase):
                                bot_token_env='KAGE_TEST_BOT_TOKEN', call=lambda *a, **k: self.calls.append(a) or {'ok': True},
                                post_send=lambda r, p: self.calls.append(('post_send', r, p)), followup_helper=self.helper)
 
+    def test_the_usage_example_is_the_deployments(self):
+        self.assertEqual(self.c.transport.emoji_example, 'eyes')                 # N1: Kage's neutral default
+        named = client.Client(guard_env='KAGE_TEST_OFFLINE', owner_name='Owner', expected_bot_user='examplebot',
+                              user_token_env='KAGE_TEST_USER_TOKEN', user_token_file=str(self.tmp / 'token'),
+                              bot_token_env='KAGE_TEST_BOT_TOKEN', call=lambda *a, **k: {'ok': True},
+                              post_send=lambda r, p: None, followup_helper=self.helper, emoji_example='mira-mark')
+        self.assertEqual(named.transport.emoji_example, 'mira-mark')
+        with self.assertRaisesRegex(ValueError, r'for example thinking_face or mira-mark\.$'):
+            named.add_reactions('xoxp-' + 'fake', 'D0TEST00001', '1.1', ['Not A Name'])
+
     def test_operations_go_through_the_transport_and_its_hooks(self):
         self.assertIs(self.c.transport.call.__class__, type(lambda: 0))
         self.c.transport.call('auth.test', 'xoxb-' + 'fake')

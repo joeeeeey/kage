@@ -1,4 +1,5 @@
 import copy
+import dataclasses
 import datetime as dt
 import json
 import os
@@ -50,6 +51,8 @@ class LoadExampleTest(unittest.TestCase):
         self.assertEqual(d.owner.slack_workspace, 'T0000TEST01')
         self.assertEqual(d.owner.assistant_slack_bot_user, 'U0000TEST02')
         self.assertEqual(d.owner.assistant_slack_app, 'A0000TEST01')
+        self.assertEqual(d.owner.assistant_name, "Mira's kage")
+        self.assertEqual(dataclasses.replace(d.owner, assistant_display=None).assistant_name, 'assistant')  # N1
         self.assertEqual(d.org.tracker, 'jira')
         self.assertEqual(d.org.tracker_team, 'PM')
         self.assertEqual(d.owner.slack_workspace_url, 'https://northwind-example.slack.com')

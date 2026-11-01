@@ -13,6 +13,7 @@ def runtime(**over):
                                           DEFAULTS={'intake': {'inbox_task': 'owner-inbox'}})
     return types.SimpleNamespace(
         __file__='/nonexistent/runtime.py', SKILL=Path('/nonexistent/skill'), INBOX_KIND='task_inbox', claude=claude,
+        RECEIPT_EMOJI={'claude': 'test-claude-mark', 'codex': 'test-codex-mark'},
         worker_config=worker_config, local_message=lambda db, eid: None, decision_annotation=lambda db, eid: '',
         envelope_annotation=lambda db, eid: '', card_replies=types.SimpleNamespace(routed=lambda db, c, t: None),
         load=lambda db, wid: {'channel': 'C0000TEST01', 'thread': None, 'mode': 'waiting', 'cwd': '/tmp/x'}, **over)
@@ -58,6 +59,13 @@ class PromptsTest(unittest.TestCase):
         text = c.event_prompt(w, [e], '/tmp/db')
         self.assertIn("Mira's reply that starts with a clear approve / no", text)
         self.assertIn('- event=e1 ref=T0000TEST01/C0000TEST01/1.000001 author=U0000TEST02', text)
+        # N1: the program's name is its skill folder; the provenance reaction is the runtime's (the deployment's values)
+        self.assertTrue(text.startswith('[skill: external observations, not new authorization]'))
+        self.assertIn('test-codex-mark', text)
+        self.assertNotIn('test-claude-mark', text)
+        self.assertIn('test-claude-mark', c.event_prompt(dict(w, provider='claude'), [e], '/tmp/db'))
+        self.assertEqual(c.split_lead, P.SPLIT_LEAD_TEMPLATE.format(tool='skill'))
+        self.assertTrue(c.split_lead.startswith('[skill dispatcher: headless consumer run]'))
         self.assertIn('批准 / 不行', zh.event_prompt(w, [e], '/tmp/db'))
         db = sqlite3.connect(':memory:')
         local = {'path': '/nonexistent/note.md', 'kind': 'intake', 'sender': 'x', 'task_id': 't', 'created_at': 0}

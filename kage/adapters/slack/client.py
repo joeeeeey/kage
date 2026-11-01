@@ -30,12 +30,12 @@ class Client:
     """The transport's operations under the deployment's names, and the post-send hook."""
 
     def __init__(self, *, guard_env, owner_name, expected_bot_user, user_token_env, user_token_file, bot_token_env,
-                 call, post_send, followup_helper):
+                 call, post_send, followup_helper, emoji_example='eyes'):
         self.followup_helper = followup_helper
         self.transport = _transport.Transport(
             guard_env=guard_env, owner_name=owner_name, expected_bot_user=expected_bot_user,
             user_token_env=user_token_env, user_token_file=user_token_file, bot_token_env=bot_token_env,
-            post_send=post_send, call=call)
+            post_send=post_send, call=call, emoji_example=emoji_example)
 
     def require_real_slack(self, what):
         self.transport.require_live(what)

@@ -12,6 +12,7 @@ from kage.observe import dashboard as D
 from kage.observe import web as W
 
 VALUES = {'owner_name': 'Mira', 'OWNER_NAME': 'MIRA', 'owner_key': 'mira', 'tz_name': 'Europe/Lisbon',
+          'receipt_emoji': 'eyes',
           'tail_command': 'test-tail', 'ticket_ref_reason': 'ticket_ref', 'ticket_team': 'TEST',
           'feedback_corpus': '~/.local/share/test/feedback-corpus', 'service_label': 'org.example.followup',
           'trace_global': 'TestTrace', 'channel_example': 'C0000TEST01', 'oncall_channel_example': 'C0000TEST02',

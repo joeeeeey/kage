@@ -37,6 +37,7 @@ class CliCore:
         self.key, self.name = owner_key, owner_name
         self.team = self.deployment.owner.slack_workspace
         self.app_id = self.deployment.owner.assistant_slack_app
+        self.assistant = self.deployment.owner.assistant_name
         self.agent_event_type = self.deployment.instance.agent_marker
 
     def msg(self, key, **values):
@@ -227,7 +228,7 @@ class CliCore:
         sub.add_parser('claude-hook-config', help='Print session-only native hook settings; does not install them')
         settle = sub.add_parser('claude-release-settled', help='Idempotently close claims whose events are already handled')
         settle.add_argument('--dry-run', action='store_true', help='Report counts without writing')
-        owner = sub.add_parser(f'ask-{self.key}', help=f'Owner only: post an assistant-bot decision card to {self.name} without an inbound event')
+        owner = sub.add_parser(f'ask-{self.key}', help=f'Owner only: post an {self.assistant} decision card to {self.name} without an inbound event')
         owner.add_argument('--session', required=True)
         owner.add_argument('--provider', choices=self.rt.claude.PROVIDERS, required=True)
         owner.add_argument('--cwd', required=True)
@@ -513,7 +514,7 @@ class CliCore:
         smrt.add_argument('--no-wait', action='store_true')
         smrt.add_argument('--timeout', type=float, default=900.0)
         # ---- P3.1 capability blockers and the automation gap ledger ----
-        rb = sub.add_parser('report-blocker', help=f'Agent: a capability blocker -> one assistant-bot card to {self.name} (deduplicated)')
+        rb = sub.add_parser('report-blocker', help=f'Agent: a capability blocker -> one {self.assistant} card to {self.name} (deduplicated)')
         rb.add_argument('--task', help='Task id or workspace (default: the current directory)')
         rb.add_argument('--system', required=True, help='Short slug, e.g. authentik, aws-console, google-workspace')
         rb.add_argument('--operation', required=True, help='What could not be done (<=160 chars; Chinese is fine)')
@@ -577,7 +578,7 @@ class CliCore:
         hlth = sub.add_parser('health', help=f'P38 daemon health: provider status and window counts, stranded deliveries, stuck claims, refused {self.name}-facing posts (the supervisor checks every 30 s)')
         hlth.add_argument('--sweep', action='store_true', help='Run one stranded / stuck-claim / provider-health / '
                                                                'refused-card re-post pass first')
-        # P38 (F49): one-off install check of every the owner-facing destination (posts nothing; assistant-bot conversations.info).
+        # P38 (F49): one-off install check of every owner-facing destination (posts nothing; the assistant's conversations.info).
         cdc = sub.add_parser('card-destination-check', help=f'Install check: are the configured and every stored {self.name}-facing card channel private / an IM per Slack? Exit 1 if a configured one or one used in the last 30 days is not (older ones are listed as legacy)')
         cdc.add_argument('--refresh', action='store_true', help='Ignore cached verdicts and ask Slack again')
         # ---- P35 learn rules from the owner's card feedback ----

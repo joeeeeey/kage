@@ -1655,7 +1655,7 @@
           field('cards.retire_buttons_on_reply', toggle('cards.retire_buttons_on_reply', '开（你在卡片 thread 里回复后，按下一项的规则收起按钮）', '关（按钮一直留着）')),
           field('cards.retire_on', select('cards.retire_on', ['plan_change', 'any_reply']), 'plan_change：只有明确的决定或改方案（改成 / 先别 / 取消…）才收起，提问时按钮留着；any_reply：任何回复都收起（P3.1 的老做法）'),
           field('cards.thread_reply_decisions', toggle('cards.thread_reply_decisions', '开（“批准 / 不行 / 选项名”开头的明确回复直接算决定）', '关（文字回复都由 agent 发确认卡）'), '紧急开关：关掉后只有按钮和确认卡能决定'),
-          field('cards.read_receipts', toggle('cards.read_receipts', '开（消息进了任务上下文就加 agent-processing / agent-working）', '关（不加表情）'), '私信用你的身份加，频道里用 bot'),
+          field('cards.read_receipts', toggle('cards.read_receipts', '开（消息进了任务上下文就加 {{receipt_emoji}}）', '关（不加表情）'), '私信用你的身份加，频道里用 bot'),
           field('cards.open_poll_seconds', num('cards.open_poll_seconds', 0, 900), '等你决定的卡片 thread 多久看一次（秒）；0 = 按普通节奏（1–15 分钟）'),
           field('cards.max_open_per_task', num('cards.max_open_per_task', 1, 20), '到上限后，这个任务的 agent 要先关掉或合并旧卡（--about）才能再发卡；接替旧卡的新卡和超过“旧检查卡过期天数”的卡不算，收件处和 oncall 不限（规则 R-0008）'),
           field('cards.task_thread', toggle('cards.task_thread', '开（同一任务的卡片串成一条 thread，从卡片建的任务继承父 thread）', '关（每张卡片各自占最外层，P3.2 前的样子）'), '紧急开关：关掉后恢复每张卡片独立发在频道最外层'),

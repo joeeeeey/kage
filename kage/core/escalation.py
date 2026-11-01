@@ -486,7 +486,7 @@ class EscalationCore:
             with self.rt.transaction(db):
                 self.rt.schedule.note_window(db, w['channel'], held['ts'], self.rt.registry.task_id_for_cwd(w['cwd']), 'holding_message',
                                      e['author'] if re.fullmatch(r'U[A-Z0-9]+', str(e['author'])) else None)
-        self.rt.slack.add_reactions(user_token, e['channel'], e['ts'], ['thinking_face', 'agent-processing' if self.rt.claude.provider(owner) == 'claude' else 'agent-working'])
+        self.rt.slack.add_reactions(user_token, e['channel'], e['ts'], ['thinking_face', self.rt.RECEIPT_EMOJI['claude' if self.rt.claude.provider(owner) == 'claude' else 'codex']])
         link = f"{self.deployment.owner.slack_workspace_url}/archives/{e['channel']}/p{e['ts'].replace('.', '')}"
         # Escape supplied plain text so it cannot insert mentions or Slack links. P3.1: the question leads; the source
         # message link and the task move to the footer.
@@ -1039,7 +1039,7 @@ class EscalationCore:
                  parent_event=None, live_card=False, poster_cwd=None, about=None, replaces=False, gate=None):
         """Agent-initiated decision card with no inbound Slack event (owner session only).
 
-        Like smoke-escalation but real: an assistant-bot card mentioning the owner (the owner-only audience),
+        Like smoke-escalation but real: an assistant card mentioning the owner (the owner-only audience),
         its own decision watch owned by the calling session and a synthetic, already-handled
         source event, so decide / propose-decision / confirm-decision and normal provider-aware
         delivery work unchanged. `trusted_owner` is only for the dispatcher (end-of-run questions)
@@ -1183,7 +1183,7 @@ class EscalationCore:
     def supervisor_card(self, db, question, options, *, never_auto=True, smoke=False, kind='supervisor_card', refs=None, now=None,
                         footer=None, task_id=None, live_card=False, body_blocks=None, hint=None, parent_event=None,
                         broadcast=False, first_line_max=_OWNER_DEFAULT):
-        """Code-owned decision card (P3 routine confirmations): an assistant-bot card to the owner with no owner session and no
+        """Code-owned decision card (P3 routine confirmations): an assistant card to the owner with no owner session and no
         watch. The receiver records the click (`decide`, receipt, card update) but queues no session event; the
         supervisor settles the decision from SQLite. A card that was posted but failed readback is still returned
         (with `warning`) so it is never posted twice. P3.1: the owner's typed reply in its thread is polled by

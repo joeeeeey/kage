@@ -43,6 +43,7 @@ PATH_NAME_RE = re.compile(r'[a-z][a-z0-9_]{0,63}')
 OWNER_KEY_RE = re.compile(r'[a-z][a-z0-9_]{0,31}')
 MARKER_RE = re.compile(r'[a-z][a-z0-9_]{2,63}')
 DEFAULT_AGENT_MARKER = 'kage_agent_sent'
+DEFAULT_ASSISTANT = 'assistant'   # how text names the assistant (bot) when owner.json gives no assistant.display
 TRACKERS = ('linear', 'jira', 'none')
 
 
@@ -64,6 +65,11 @@ class Owner:
     assistant_display: str | None
     assistant_slack_bot_user: str | None
     assistant_slack_app: str | None
+
+    @property
+    def assistant_name(self):
+        """How text names the assistant: "post an <name> decision card", "<name> cards"."""
+        return self.assistant_display or DEFAULT_ASSISTANT
 
     def tz(self):
         """The owner's tzinfo. Without a tz database, the profile's fixed fallback offset (validated at load)."""

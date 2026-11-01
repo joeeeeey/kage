@@ -20,6 +20,12 @@ class BlockersTest(unittest.TestCase):
         self.assertEqual(B.owner_manual, ('owner_manual', 'credential_added'))
         self.assertIn('ask-owner', B.internal_systems)
         self.assertIn('test-worker', B.internal_systems)
+        self.assertNotIn('mira-runtime', B.internal_systems)
+        named = b.Blockers('en', tz=TZ, tz_name='Asia/Shanghai', owner_key='owner', owner_name='Mira',
+                           owner_user=lambda rt: 'U0000TEST01', ask_owner=lambda rt: rt.ask, worker_slug='test-worker',
+                           run_id_env='TEST_RUN_ID', internal_names=('mira-runtime',))
+        self.assertIn('mira-runtime', named.internal_systems)        # N1: the deployment's own names for the runtime
+        self.assertTrue(named._is_internal_bookkeeping('mira-runtime', 'anything'))
         self.assertEqual(B.proposals_schema_id, 'test-worker.gap-proposals/v1')
         self.assertIn('owner_manual INTEGER NOT NULL DEFAULT 0', B.ddl)
         self.assertEqual(B.resolution_zh['owner_manual'], 'Mira did it by hand')

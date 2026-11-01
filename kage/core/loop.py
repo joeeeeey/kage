@@ -674,7 +674,7 @@ class LoopCore:
         `contextual(ts)` first (a plain emoji name) then the consuming provider's emoji — best effort and idempotent
         (already_reacted = done). The bot reacts where it can (the decision channel, channels it is in) with a plain
         reactions.add: its scopes are not known to include the reactions:read a read-back needs. the owner's user token reacts
-        through slack-helper's add_reactions (as the escalation() provenance reaction does) in DMs, and wherever Slack
+        through the Slack transport's add_reactions (as the escalation() provenance reaction does) in DMs, and wherever Slack
         refused the bot or the bot token is unusable. A network error after a bot add is not retried as the owner (the reaction
         may have landed), so a message never gets the emoji twice. Never raises; a 429 backs reactions.add off runtime-wide."""
         out = []

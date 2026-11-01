@@ -11,7 +11,7 @@ from kage import cli
 
 def core(key='mira'):
     deployment = types.SimpleNamespace(owner=types.SimpleNamespace(timezone='Europe/Lisbon', slack_workspace='T0000TEST01',
-                                                                   assistant_slack_app='A0000TEST01'),
+                                                                   assistant_slack_app='A0000TEST01', assistant_name='Aide'),
                                        instance=types.SimpleNamespace(agent_marker='test_agent_sent',
                                                                       workspace_root=Path('/srv/work/desk')))
     return cli.CliCore('en', owner_key=key, owner_name='Mira', owner_slack_user='U0000TEST01', bot_user='U0000TEST02',
@@ -39,6 +39,7 @@ class CliTest(unittest.TestCase):
         self.assertIn('The test program.', out)
         self.assertIn('ask-mira', out)
         self.assertIn('ask-mira-close', out)
+        self.assertIn('post an Aide decision card to Mira', ' '.join(out.split()))  # N1: the assistant's name
         self.assertIn('run-tail: print/follow the readable log', ' '.join(out.split()))
         code, out = run(core(), ['ask-mira', '--help'])
         self.assertEqual(code, 0)

@@ -17,7 +17,7 @@ LINEAR_TASK_RE = re.compile(_TICKET_FLAGS + '^' + kage_bridge.deployment().org.t
 TICKET_ID_RE = re.compile(_TICKET_FLAGS + kage_bridge.deployment().org.ticket_ref)
 _k = kage_bridge.module('lifecycle', 'kage.core.lifecycle')
 _owner = kage_bridge.deployment().owner
-LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TASK_RE, ticket_id_re=TICKET_ID_RE, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')))
+LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TASK_RE, ticket_id_re=TICKET_ID_RE, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), tracker_helper=_app.value('task_lifecycle.tracker_helper'))
 (ORPHAN_OPTIONS, DEADLINE_OPTIONS, ID_RE) = (LIFECYCLE.orphan_options, LIFECYCLE.deadline_options, _k.ID_RE)
 (TERMINAL_RE, HANDOFF_RE, COMPLETION_RE) = (LIFECYCLE.terminal_re, LIFECYCLE.handoff_re, LIFECYCLE.completion_re)
 (SWEEP_LINEAR_TTL, SWEEP_LINEAR_BUDGET) = (_k.SWEEP_LINEAR_TTL, _k.SWEEP_LINEAR_BUDGET)

@@ -20,7 +20,7 @@ SHANGHAI = kage_bridge.deployment().owner.tz()
 TZ_NAME = kage_bridge.deployment().owner.timezone
 _k = kage_bridge.module('blockers', 'kage.core.blockers')
 _owner = kage_bridge.deployment().owner
-BLOCKERS = _k.Blockers(_owner.language, tz=SHANGHAI, tz_name=TZ_NAME, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), ask_owner=lambda rt: getattr(rt, _app.key_name('ask_owner')), worker_slug=_app.value('blockers.worker_slug'), run_id_env=_app.value('blockers.run_id_env'))
+BLOCKERS = _k.Blockers(_owner.language, tz=SHANGHAI, tz_name=TZ_NAME, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), ask_owner=lambda rt: getattr(rt, _app.key_name('ask_owner')), worker_slug=_app.value('blockers.worker_slug'), run_id_env=_app.value('blockers.run_id_env'), internal_names=(_app.value('blockers.internal_names'),))
 (TYPES, REMOVED_TYPES, TYPE_ZH, RESOLUTIONS) = (_k.TYPES, _k.REMOVED_TYPES, BLOCKERS.type_zh, BLOCKERS.resolutions)
 (RESOLUTION_ZH, OWNER_MANUAL, UNRESOLVED) = (BLOCKERS.resolution_zh, BLOCKERS.owner_manual, _k.UNRESOLVED)
 (GAP_ID_RE, PROPOSAL_ID_RE, SYSTEM_RE, SLUG_RE) = (_k.GAP_ID_RE, _k.PROPOSAL_ID_RE, _k.SYSTEM_RE, _k.SLUG_RE)

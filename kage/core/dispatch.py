@@ -2180,7 +2180,7 @@ class Dispatcher:
             self._register_current(self._dispatch(dispatch_id), 'claude', plan[0]['session'], now, 'launch')
         return dispatch_id
 
-    # ---- cards (assistant-bot, Chinese, the owner-only channel) ----
+    # ---- cards (the assistant, the owner's language, the owner-only channel) ----
     def _card_channel(self):
         return self.rt.buttons.load_config()['decision_channel']
 

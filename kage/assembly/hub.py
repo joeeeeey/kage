@@ -65,7 +65,7 @@ def connect(path):
 IDENTITY_CACHE = {}
 READ_CACHE = {}
 RATE_LIMITS = {}
-RECEIPT_EMOJI = {'claude': 'agent-processing', 'codex': 'agent-working'}
+RECEIPT_EMOJI = {'claude': _app.value('hub.RECEIPT_EMOJI.claude'), 'codex': _app.value('hub.RECEIPT_EMOJI.codex')}
 _RETIRE_CHECKED = {}
 
 class _Runtime:
@@ -145,7 +145,7 @@ if 'PROMPTS_CORE' not in globals():
 (event_prompt, claude_batch_prompt) = (PROMPTS_CORE.event_prompt, PROMPTS_CORE.claude_batch_prompt)
 (local_event_context, WAKE_INSTRUCTION) = (PROMPTS_CORE.local_event_context, PROMPTS_CORE.wake_instruction)
 (INTAKE_INSTRUCTION, SESSION_NOTES) = (PROMPTS_CORE.intake_instruction, _k.SESSION_NOTES)
-(RUN_CONTEXT_HEAD, SPLIT_LEAD, RUN_CONTEXT_ENV) = (_k.RUN_CONTEXT_HEAD, _k.SPLIT_LEAD, PROMPTS_CORE.run_context_env)
+(RUN_CONTEXT_HEAD, SPLIT_LEAD, RUN_CONTEXT_ENV) = (_k.RUN_CONTEXT_HEAD, PROMPTS_CORE.split_lead, PROMPTS_CORE.run_context_env)
 (KEEP_WARM_CONTEXT, dispatch_prompt_parts) = (_k.KEEP_WARM_CONTEXT, PROMPTS_CORE.dispatch_prompt_parts)
 dispatch_prompt = PROMPTS_CORE.dispatch_prompt
 _k = kage_bridge.module('loop', 'kage.core.loop')

@@ -29,13 +29,14 @@ class Transport:
     def __init__(self, *, guard_env, owner_name, expected_bot_user, user_token_env='SLACK_USER_TOKEN',
                  user_token_file_env='SLACK_USER_TOKEN_FILE', user_token_file='~/.config/slack/token',
                  bot_token_env='SLACK_BOT_TOKEN', bot_token_file_env='SLACK_BOT_TOKEN_FILE',
-                 bot_token_file='~/.config/slack/bot-token', post_send=None, call=None):
+                 bot_token_file='~/.config/slack/bot-token', post_send=None, call=None, emoji_example='eyes'):
         self.guard_env, self.owner_name, self.expected_bot_user = guard_env, owner_name, expected_bot_user
         self.user_token_env, self.user_token_file_env, self.user_token_file = (user_token_env, user_token_file_env,
                                                                                user_token_file)
         self.bot_token_env, self.bot_token_file_env, self.bot_token_file = bot_token_env, bot_token_file_env, bot_token_file
         self.post_send = post_send or (lambda response, payload: None)
         self.call = call or self.api_call
+        self.emoji_example = emoji_example  # the second name in the add_reactions usage error (a deployment's own)
 
     def offline(self):
         return os.environ.get(self.guard_env) == '1'
@@ -132,7 +133,7 @@ class Transport:
         identity = self.call('auth.test', token)
         normalized = list(dict.fromkeys(name.strip(':') for name in names))
         if not normalized or any(not re.fullmatch(r'[a-z0-9_+-]+', n) for n in normalized):
-            raise ValueError('Use Slack emoji API names, for example thinking_face or agent-working.')
+            raise ValueError(f'Use Slack emoji API names, for example thinking_face or {self.emoji_example}.')
         for name in normalized:
             try:
                 self.call('reactions.add', token, json_body={'channel': channel, 'timestamp': ts, 'name': name})

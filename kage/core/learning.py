@@ -16,7 +16,7 @@ Three layers over one `提炼 -> 你批准 -> 生效` pipeline:
      distillation + ids + a private pointer.
   2. Strong-signal card (immediate, CONSERVATIVE): on a single interaction with a strong signal — (a) the owner overrode the
      recommended / done option AND (b) his feedback used generalizable directive language, OR (c) it is the >=2nd
-     correction of the same (category, action, shape) — ONE code-owned assistant-bot card asks "要不要固化成规则？"
+     correction of the same (category, action, shape) — ONE code-owned assistant card asks "要不要固化成规则？"
      [提炼成规则] [只记这次] [不用]. Capped per day, deduped by shape, a declined shape suppressed for N days.
      [提炼成规则] re-dispatches the <owner key>-inbox to draft a concrete candidate rule and `rule-propose` it (the existing
      gated path); [只记这次] records only; [不用] suppresses the shape.

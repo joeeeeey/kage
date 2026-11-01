@@ -1795,7 +1795,7 @@ class AccessPolicy:
 
     def post_check_card(self, rt, db, db_path, check_id, result, plan, now, smoke=False, session=None, provider=None,
                         live_card=False, about=None, replaces=False):
-        """Decision card for one_tap / <owner key>: assistant-bot, the owner-only channel, default [批准] [拒绝], bound to this check.
+        """Decision card for one_tap / <owner key>: the assistant, the owner-only channel, default [批准] [拒绝], bound to this check.
         P3.1: the card is `card_text` (the agent's plain sentence + why + reversibility); technical detail stays on the
         dashboard (/rules?check=…), linked from the footer next to the task name. A smoke card is dry unless `live_card`.
         P46: `about` (the card this one continues) threads it there with reply_broadcast, like ask-<owner key> --about; with
