@@ -117,5 +117,30 @@ class AppTest(unittest.TestCase):
         self.assertIn('usage: python3 -m kage --deployment DIR', err.getvalue())
 
 
+
+class UnitsTest(unittest.TestCase):
+    """The generated units (kage/assembly/): the package lists exactly its unit files; every unit compiles; every leaf
+    a unit asks for is a unit or a declared transitional module (K15c: only the deployment's own programs); no unit
+    holds a Slack id (the deployment's data stays in instance.json `assembly.values`)."""
+
+    def test_units_and_the_leaves_they_ask_for(self):
+        import ast
+        import re
+        from kage import assembly
+        unit_dir = Path(assembly.__file__).parent
+        files = sorted(p.stem for p in unit_dir.glob('*.py') if p.stem not in ('__init__', 'hub'))
+        self.assertEqual(sorted(assembly.UNITS), files)
+        self.assertFalse(set(assembly.UNITS) & set(assembly.TRANSITIONAL))
+        asked = set()
+        for path in sorted(unit_dir.glob('*.py')):
+            source = path.read_text(encoding='utf-8')
+            tree = ast.parse(source)
+            compile(tree, str(path), 'exec')
+            asked |= {n.args[0].value for n in ast.walk(tree) if isinstance(n, ast.Call)
+                      and ast.unparse(n.func) == '_app.leaf' and isinstance(n.args[0], ast.Constant)}
+            self.assertIsNone(re.search(r"\b[CDGU]0[0-9A-Z]{8,}\b", source), path.name)
+        self.assertLessEqual(asked, set(assembly.UNITS) | set(assembly.TRANSITIONAL))
+        self.assertEqual(set(assembly.TRANSITIONAL), {'feedback_learning', 'slack_transport'})
+
 if __name__ == '__main__':
     unittest.main()
