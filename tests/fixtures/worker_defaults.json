@@ -1,0 +1,253 @@
+{
+ "schema_version": 1,
+ "providers": {
+  "claude": {
+   "model_default": "claude-sonnet-5-5",
+   "model_important": "claude-opus-5-5",
+   "effort": "xhigh",
+   "yolo_args": [
+    "--permission-mode",
+    "bypassPermissions"
+   ]
+  },
+  "codex": {
+   "model": "gpt-6.1-sol",
+   "effort": "xhigh",
+   "yolo_args": [
+    "--dangerously-bypass-approvals-and-sandbox"
+   ]
+  }
+ },
+ "routing": {
+  "categories": {
+   "infra": "codex",
+   "debug": "codex",
+   "dev": "codex",
+   "docs": "claude",
+   "design": "claude",
+   "ui": "claude"
+  },
+  "fallback_order": [
+   "codex",
+   "claude"
+  ]
+ },
+ "circuit_breaker": {
+  "round_trips_per_hour": 10
+ },
+ "intake": {
+  "enabled": true,
+  "channels": [
+   "C0TEST00001",
+   "C0TEST00002",
+   "C0TEST00003"
+  ],
+  "oncall_channels": [
+   "C0TEST00002",
+   "C0TEST00003"
+  ],
+  "burst_seconds": 30,
+  "poll_seconds": 60,
+  "alert_dedupe_minutes": 30,
+  "dm_settle_seconds": 90,
+  "dm_request_routing": true,
+  "dm_conversation_minutes": 30,
+  "dm_queries": [
+   "to:me"
+  ],
+  "mention_search": true,
+  "search_max_pages": 2,
+  "max_api_calls_per_cycle": 20,
+  "delegate_bot_names": [
+   "helper-*"
+  ],
+  "inbox_task": "example-inbox",
+  "oncall_task": "example-oncall",
+  "inbox_provider": "claude",
+  "inbox_model": "claude-sonnet-5-5",
+  "inbox_effort": "xhigh",
+  "oncall_provider": "codex",
+  "oncall_model": "gpt-6.1-sol",
+  "oncall_effort": "xhigh"
+ },
+ "ask": {
+  "remind_after": "10h",
+  "expire_after": "24h"
+ },
+ "dispatch": {
+  "enabled": true,
+  "concurrency": 3,
+  "reserved_intake_slots": 1,
+  "liveness_cache_seconds": 20,
+  "retry_backoff_seconds": [
+   30,
+   120
+  ],
+  "partial_retries": 1,
+  "max_run_seconds": 7200,
+  "unbound_watches": "revive",
+  "notify_cards": true,
+  "failed_cooldown_seconds": 1800,
+  "max_event_age_hours": 48,
+  "provider_wait_hours": 48,
+  "probe_min_seconds": 120,
+  "probe_max_seconds": 1800,
+  "probe_enabled": true,
+  "unresolved_retries": 2,
+  "progress_updates": true,
+  "claude_env_passthrough": [
+   "ANTHROPIC_BASE_URL",
+   "ANTHROPIC_AUTH_TOKEN",
+   "ANTHROPIC_API_KEY"
+  ],
+  "login_shell": "/bin/sh",
+  "long_lived_fresh": true,
+  "long_lived_tasks": [],
+  "max_session_context_mb": 16,
+  "stranded_revive": true,
+  "stuck_claim_minutes": 45,
+  "provider_health": {
+   "enabled": true,
+   "window_minutes": 30,
+   "degrade_threshold": 3,
+   "recover_checks": 3,
+   "slow_run_minutes": 10,
+   "oncall_slow_run_minutes": 0,
+   "min_runs": 3
+  },
+  "lean_context": {
+   "enabled": true,
+   "keep_warm": {
+    "enabled": true,
+    "interval_minutes": 50,
+    "max_idle_hours": 24
+   },
+   "inbox": {
+    "skills": "names",
+    "git_context": false,
+    "rules_in_system_prompt": true,
+    "cache_ttl": "1h",
+    "keep_skills": [
+     "example-followup",
+     "example-workspace"
+    ],
+    "first_message": "constant",
+    "auto_memory": false,
+    "mcp": "none",
+    "drop_tools": [
+     "Agent",
+     "Workflow",
+     "SendMessage",
+     "ListAgents",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "ScheduleWakeup",
+     "EnterWorktree",
+     "ExitWorktree",
+     "NotebookEdit",
+     "LSP",
+     "ReportFindings"
+    ]
+   },
+   "oncall": {
+    "skills": "names",
+    "git_context": true,
+    "rules_in_system_prompt": true,
+    "cache_ttl": "1h",
+    "keep_skills": [
+     "example-followup",
+     "example-workspace"
+    ],
+    "first_message": "constant",
+    "auto_memory": false,
+    "mcp": "none",
+    "drop_tools": [
+     "Workflow",
+     "SendMessage",
+     "ListAgents",
+     "CronCreate",
+     "CronDelete",
+     "CronList",
+     "ScheduleWakeup",
+     "EnterWorktree",
+     "ExitWorktree",
+     "NotebookEdit",
+     "ReportFindings"
+    ]
+   },
+   "long_lived": {
+    "skills": "full",
+    "git_context": true,
+    "rules_in_system_prompt": true,
+    "cache_ttl": "default",
+    "keep_skills": [],
+    "first_message": "per_run",
+    "auto_memory": true,
+    "mcp": "inherit",
+    "drop_tools": []
+   },
+   "task": {
+    "skills": "full",
+    "git_context": true,
+    "rules_in_system_prompt": false,
+    "cache_ttl": "default",
+    "keep_skills": [],
+    "first_message": "per_run",
+    "auto_memory": true,
+    "mcp": "inherit",
+    "drop_tools": []
+   }
+  }
+ },
+ "rules": {
+  "enabled": true,
+  "proposals_enabled": true,
+  "proposal_suppress_days": 28,
+  "max_proposals_per_run": 5,
+  "typed_approval_max_age_hours": 24
+ },
+ "routines": {
+  "enabled": true,
+  "min_interval_minutes": 15,
+  "max_per_task": 20,
+  "max_runs_per_day": 48,
+  "scan_seconds": 60
+ },
+ "blockers": {
+  "enabled": true,
+  "skill_proposals_enabled": true,
+  "reminder_hours": 24,
+  "skill_proposal_suppress_days": 28,
+  "max_skill_proposals_per_run": 3
+ },
+ "cards": {
+  "retire_buttons_on_reply": true,
+  "thread_reply_decisions": true,
+  "read_receipts": true,
+  "open_poll_seconds": 300,
+  "task_thread": true,
+  "realtime_replies": false,
+  "reconcile_days": 14,
+  "reconcile_minutes": 45,
+  "thread_retire_hours": 48,
+  "retire_on": "plan_change",
+  "max_open_per_task": 3
+ },
+ "tasks": {
+  "orphan_sweep_enabled": true,
+  "deadline_watchdog_enabled": true,
+  "orphan_idle_hours": 12,
+  "deadline_lead_hours": 24,
+  "sweep_interval_minutes": 30,
+  "max_wakes": 6,
+  "wake_window_hours": 168,
+  "stale_card_days": 3
+ },
+ "feedback_learning": {
+  "enabled": true,
+  "strong_signal_mode": "conservative",
+  "max_promote_cards_per_day": 2,
+  "suppress_days": 28
+ }
+}
