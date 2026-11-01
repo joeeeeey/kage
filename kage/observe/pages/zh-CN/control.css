@@ -83,3 +83,8 @@
   .ctl-thread { padding: var(--sp-3); min-height: 52vh; }
   .ctl-msg { max-width: 100%; }
 }
+
+/* C2: a Slack conversation: the owner's words stay in Slack; the page links to the thread */
+.ctl-msg-body.is-slack { color: var(--ink-3); font-style: italic; }
+.ctl-slack-link { list-style: none; font-size: var(--fs-sm); }
+.ctl-slack-link a { color: var(--accent-d); }

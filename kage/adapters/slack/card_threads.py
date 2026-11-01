@@ -235,6 +235,13 @@ def decision_channels(rt):
         return []
 
 
+def _control_present(db):
+    try:
+        return db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='control_threads'").fetchone() is not None
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _db_path(db):
     row = next((r for r in db.execute('PRAGMA database_list') if r[1] == 'main'), None)
     return row[2] if row else None
@@ -298,6 +305,13 @@ class CardThreads:
         author = self.eligible_author(rt, db, channel, root, m)
         if author is None:
             return {'ts': ts, 'outcome': 'skipped', 'reason': f'not_{self.key}_or_delegate'}
+        control = getattr(getattr(rt, 'LOOP_CORE', None), 'control', None)
+        if control is not None and author == self.key:
+            # Phase 2 C2: the owner's reply in a control conversation's thread (a thread he started with a top-level
+            # message) is the next message of that conversation; None (every other thread, or control off): as before.
+            taken = control.thread_reply(rt, db, channel, root, m, now, source)
+            if taken is not None:
+                return taken
         if rt._secret_thread(db, channel, root):
             return {'ts': ts, 'outcome': 'skipped', 'reason': 'secret_thread'}  # a verification code: its own watch only
         if _one(db, 'SELECT 1 FROM promote_cards WHERE card_channel=? AND card_ts=?', (channel, root)):
@@ -370,8 +384,12 @@ class CardThreads:
                 users += [u for u in ooo.get('delegates') or [] if USER_RE.fullmatch(str(u))]
         except Exception:  # noqa: BLE001
             pass
-        return {'ok': True, 'enabled': bool(cfg.get('realtime_replies') and cfg['task_thread'] and channels),
-                'channels': channels, 'users': sorted(set(users)), 'ttl_seconds': CONFIG_TTL}
+        out = {'ok': True, 'enabled': bool(cfg.get('realtime_replies') and cfg['task_thread'] and channels),
+               'channels': channels, 'users': sorted(set(users)), 'ttl_seconds': CONFIG_TTL}
+        control = getattr(getattr(rt, 'LOOP_CORE', None), 'control', None)
+        if control is not None and channels and _control_present(db) and control.card_channel_on(rt)[0]:
+            out['control'] = True  # Phase 2 C2: also forward the owner's new top-level messages (`control-push`)
+        return out
 
     def push(self, rt, db, channel, ts, root, user, now=None):
         """The receiver's realtime path: refs only; the message is re-read and re-verified here."""

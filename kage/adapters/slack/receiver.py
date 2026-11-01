@@ -189,6 +189,36 @@ def card_reply_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[
     return refs, ""
 
 
+def control_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dict[str, str] | None, str]:
+    """Phase 2 C2: the receiver-side filter for a NEW top-level message (the owner's control message in the card
+    channel): (refs, "") for a plain human top-level message in this workspace, else (None, drop code). Ids only; the
+    runtime reads the message back and decides whether it is the owner's own (`control-push`)."""
+    if not is_card_reply_event(payload):
+        return None, "not_message_event"
+    event = payload["event"]
+    if str(payload.get("team_id") or "") != expected_team_id:
+        return None, "unexpected_team"
+    for key in ("subtype", "bot_id", "app_id"):
+        if event.get(key) not in (None, ""):
+            return None, "has_" + key
+    refs = {key: event.get(key) for key in ("channel", "ts", "user")}
+    if not isinstance(refs["channel"], str) or not CARD_REPLY_CHANNEL_RE.fullmatch(refs["channel"]):
+        return None, "bad_channel"
+    if not isinstance(refs["ts"], str) or not SLACK_TS_RE.fullmatch(refs["ts"]):
+        return None, "bad_ts"
+    if event.get("thread_ts") not in (None, "", refs["ts"]):
+        return None, "thread_reply"
+    if not isinstance(refs["user"], str) or not CARD_REPLY_USER_RE.fullmatch(refs["user"]):
+        return None, "bad_user"
+    return refs, ""
+
+
+def control_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:
+    # Refs only: the runtime reads the message itself. Never the text.
+    return followup_base_command(python=python, script=script, db=db) + [
+        "control-push", "--channel", refs["channel"], "--ts", refs["ts"], "--user", refs["user"]]
+
+
 def followup_base_command(*, python: str, script: Path, db: str | None = None) -> list[str]:
     command = [python, "-I", str(script)]
     return command + ["--db", str(db)] if db else command
@@ -226,6 +256,7 @@ def parse_card_reply_config(result: Any) -> dict[str, Any] | None:
         "users": frozenset(u for u in users if isinstance(u, str) and CARD_REPLY_USER_RE.fullmatch(u)),
         "ttl_seconds": card_reply_ttl(result.get("ttl_seconds")),
         "error": False,
+        "control": result.get("control") is True,  # Phase 2 C2: forward the owner's new top-level messages too
     }
 
 

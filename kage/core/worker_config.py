@@ -90,9 +90,13 @@ SPARSE_SECTIONS = ('control',)
 # `model` / `effort` None = the provider's defaults (`model_for`).
 CONTROL_DEFAULTS = {'enabled': False, 'task': None, 'provider': 'claude', 'model': None, 'effort': None,
                     'retention_days': 30, 'answer_timeout_minutes': 15, 'allow_launch': True, 'messages_per_hour': 30,
-                    'relays_per_hour': 20, 'launches_per_day': 10, 'history_turns': 8}
+                    'relays_per_hour': 20, 'launches_per_day': 10, 'history_turns': 8,
+                    # C2: the owner's top-level messages in the card channel are control messages too (while enabled);
+                    # the fallback poll interval; whether their relays also wait for a confirm card
+                    'card_channel': True, 'channel_poll_seconds': 60, 'confirm_slack': False}
 CONTROL_RANGES = {'retention_days': (1, 365), 'answer_timeout_minutes': (2, 240), 'messages_per_hour': (1, 600),
-                  'relays_per_hour': (1, 200), 'launches_per_day': (0, 100), 'history_turns': (0, 40)}
+                  'relays_per_hour': (1, 200), 'launches_per_day': (0, 100), 'history_turns': (0, 40),
+                  'channel_poll_seconds': (15, 3600)}
 
 
 def control_settings(config, owner_key):
@@ -107,7 +111,7 @@ def _validate_control(spec):
     _keys(spec, CONTROL_DEFAULTS, 'control')
     for key, value in spec.items():
         field = f'control_{key}'
-        if key in ('enabled', 'allow_launch'):
+        if key in ('enabled', 'allow_launch', 'card_channel', 'confirm_slack'):
             _bool(value, field)
         elif key == 'task':
             if value is not None and (not isinstance(value, str) or not TASK_ID_RE.fullmatch(value)):

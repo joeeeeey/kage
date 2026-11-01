@@ -76,6 +76,7 @@
       const who = UA_LABEL[f.ua] || f.ua || '?';
       return f.browser_like ? '控制台 · ' + who : '控制台 · ' + who + ' · 没有浏览器标头（可能不是你在页面上发的）';
     }
+    if (f.source === 'slack') return 'Slack 卡片频道 · 你本人输入';
     return f.source || m.source;
   }
 
@@ -93,7 +94,10 @@
     }
     li.append(head);
     const body = h('div', { class: 'ctl-msg-body' });
-    body.textContent = m.expired ? '（原文已过保留期）' : (m.text || '');
+    const inSlack = m.slack && m.text === null;
+    body.textContent = inSlack ? (mine ? '（Slack 卡片频道里的消息，原文在 Slack）' : '（回答在 Slack 讨论串里）')
+      : m.expired ? '（原文已过保留期）' : (m.text || '');
+    if (inSlack) body.classList.add('is-slack');
     li.append(body);
     if (mine) {
       const facts = h('div', { class: 'ctl-msg-facts' + (m.facts && m.facts.source === 'console' && !m.facts.browser_like ? ' is-odd' : ''),
@@ -130,7 +134,7 @@
         type: 'button', class: 'ctl-conv' + (c.conversation_id === state.conversation ? ' is-on' : ''),
         'aria-pressed': String(c.conversation_id === state.conversation),
         onclick: () => { state.conversation = c.conversation_id; refresh(); },
-      }, h('span', { class: 'ctl-conv-title', text: c.title || '（无标题）' }),
+      }, h('span', { class: 'ctl-conv-title', text: c.title || (c.source === 'slack' ? 'Slack 对话' : '（无标题）') }),
         h('small', { text: clock(c.updated_at) + (c.last_state ? ' · ' + (STATE_LABEL[c.last_state] || c.last_state) : '') })));
       return li;
     }));
@@ -177,7 +181,7 @@
     if (!d.enabled) {
       banner.hidden = false;
       banner.replaceChildren(h('b', { text: '总控还没开启。' }),
-        h('span', { text: ' 在左下角“总控设置”里打开；打开前，这里发的话不会被处理。' }));
+        h('span', { text: ' 在“总控设置”里打开；打开前，这里发的话不会被处理。' }));
       $('ctl-settings').open = true;
     } else if (d.config_error) {
       banner.hidden = false;
@@ -190,6 +194,11 @@
     const list = $('ctl-messages');
     const msgs = d.messages || [];
     list.replaceChildren(...msgs.map(messageItem));
+    const slack = d.conversation && d.conversation.slack;
+    if (slack && slack.link) {  // C2: a conversation that lives in a Slack thread
+      list.prepend(h('li', { class: 'ctl-slack-link' }, h('a', { href: slack.link, target: '_blank', rel: 'noopener',
+        text: '这段对话在 Slack 卡片频道的讨论串里，点这里打开' })));
+    }
     if (!msgs.length) list.append(h('li', { class: 'empty', text: state.conversation ? '这个对话还没有消息' :
       '新对话：在下面写下你想问的事或要交代的事。' }));
     $('ctl-send').disabled = !d.enabled || state.sending;

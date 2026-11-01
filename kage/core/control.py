@@ -33,10 +33,11 @@ import uuid
 from kage import locale
 from kage.core import secrets as _secrets
 from kage.core import task_memory as _memory
+from kage.core import store as _store
 from kage.core.store import transaction as _transaction
 from kage.core.worker_config import control_settings
 
-SOURCES = ('console',)                 # C2 adds 'slack'
+SOURCES = ('console', 'slack')        # C2: the owner's top-level messages in the card channel
 STATES = ('received', 'queued', 'working', 'answered', 'failed')
 OPEN_STATES = ('received', 'queued', 'working')
 MAX_TEXT = 4000                        # characters of one owner message
@@ -46,6 +47,21 @@ MAX_FOLLOWUPS = 3                      # replies after the answer (a relay's out
 PUMP_BATCH = 10
 PROPOSAL_TTL = 24 * 3600               # a confirm card nobody clicked closes as expired
 CARD_WORDS_MAX = 600                   # the owner's words on a confirm card; the whole text is on the console
+SINCE_KEY = 'control_slack_since'      # runtime_meta: Slack messages before this never become control messages
+POLL_KEY = 'control_slack_poll'        # runtime_meta: the last fallback poll (time + counts, no bodies)
+SINCE_GRACE = 60                       # seconds before the entry first saw the card channel that still count
+PUSH_KEY = 'control_slack_push'        # runtime_meta: the receiver's last control-push
+HISTORY_MAX_SKIP = 600                 # the poll skips the history read while the receiver pushes, but reads this often
+PAGE_LIMIT = 200                       # messages per conversations.history / .replies page
+HISTORY_PAGES = 5                      # history pages per poll; a longer gap goes on from Slack's page cursor next poll
+REPLY_PAGES = 2                        # replies pages per control thread per poll; the rest next poll, from its cursor
+THREAD_ACTIVE = 86400                  # a control thread's replies are polled only within a day of its last turn:
+THREAD_HOT = 3600                      # every poll within an hour of it,
+THREAD_IDLE_POLL = 300                 # then every 5 minutes
+THREAD_POLL_MAX = 5                    # control threads per poll (the least recently polled first)
+TS_RE = re.compile(r'\d+\.\d+')
+CHANNEL_RE = re.compile(r'[CG][A-Z0-9]{2,}')
+USER_RE = re.compile(r'[UW][A-Z0-9]{2,}')
 MESSAGE_ID_RE = re.compile(r'cm[0-9a-f]{14}')
 CONVERSATION_ID_RE = re.compile(r'cv[0-9a-f]{14}')
 CLIENT_ID_RE = re.compile(r'[A-Za-z0-9_-]{8,64}')
@@ -80,11 +96,23 @@ DDL = '''
   CREATE INDEX IF NOT EXISTS control_proposals_state ON control_proposals (state, created_at);
   -- Cards only a button click decides: a typed thread reply never records their decision (card_replies.handle).
   CREATE TABLE IF NOT EXISTS button_only_cards (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, at REAL NOT NULL);
+  -- C2: a conversation the owner started with a top-level message in the card channel: its thread (the message's ts) is
+  -- that conversation; `cursor` = the newest reply the fallback poll read; `updated_at` = its last turn (the owner's
+  -- message or the answer); `polled_at` = the fallback poll's last read of it.
+  CREATE TABLE IF NOT EXISTS control_threads (
+    channel TEXT NOT NULL, root_ts TEXT NOT NULL, conversation_id TEXT NOT NULL, cursor TEXT, created_at REAL NOT NULL,
+    updated_at REAL NOT NULL, polled_at REAL, PRIMARY KEY (channel, root_ts));
 '''
 
 
 def initialize(db):
     db.executescript(DDL)
+    # C2: a Slack message's refs (its text stays in Slack: only the digest is stored)
+    for column in ('channel', 'ts'):
+        _store.add_column(db, 'control_messages', column, 'TEXT')
+    db.execute('CREATE UNIQUE INDEX IF NOT EXISTS control_messages_slack ON control_messages (channel, ts) WHERE channel IS '
+               'NOT NULL AND role=\'owner\'')
+    db.commit()
 
 
 def present(db):
@@ -219,6 +247,279 @@ class Control:
                        "updated_at=? WHERE message_id=? AND state='failed'", (now, message_id))
         return self.public(db, self._row(db, message_id))
 
+    # ---- C2: the card channel ------------------------------------------------------------------------------------
+    def card_channel_on(self, rt):
+        """(on, cfg): the entry is on and its card-channel source too."""
+        on, config = self.enabled(rt)
+        cfg = self.settings(config) if config else None
+        return bool(on and cfg and cfg['card_channel']), cfg
+
+    def _since(self, db, now):
+        """The instant the entry first saw the card channel (minus SINCE_GRACE): older messages never count."""
+        row = db.execute('SELECT value FROM runtime_meta WHERE key=?', (SINCE_KEY,)).fetchone()
+        if row is None:
+            with _transaction(db):
+                db.execute('INSERT OR IGNORE INTO runtime_meta VALUES (?,?)', (SINCE_KEY, f'{now - SINCE_GRACE:.6f}'))
+            row = db.execute('SELECT value FROM runtime_meta WHERE key=?', (SINCE_KEY,)).fetchone()
+        return float(row[0])
+
+    def typed(self, rt, db, channel, m, root=None):
+        """The owner's own hand-typed message: a top-level message (`root` None) or a reply in thread `root`. Exactly the
+        classification card replies use (kage.adapters.slack.envelope: our marker, our app id, our send ledger, another
+        app, a bot -> not the owner's), plus: the owner's user id, no subtype, no bot id / app id / bot profile."""
+        owner = _owner_user(rt)
+        ts = str(m.get('ts') or '')
+        if not owner or m.get('user') != owner or not TS_RE.fullmatch(ts) or m.get('subtype') or m.get('bot_id') or \
+                m.get('app_id') or m.get('bot_profile'):
+            return False
+        thread = m.get('thread_ts')
+        if root is None:
+            if thread not in (None, '', ts):
+                return False
+        elif thread != root or not TS_RE.fullmatch(str(root)) or float(ts) <= float(root):
+            return False
+        try:
+            ledger = db.execute('SELECT 1 FROM agent_sends WHERE channel=? AND ts=?', (channel, ts)).fetchone() is not None
+        except Exception:  # noqa: BLE001 - a store without the send ledger: nothing was sent from it
+            ledger = False
+        if ledger:
+            return False
+        env = rt.envelopes.classify_message(m, thread_root=root or ts, ledger_hit=False, people=rt.envelopes.load_people())
+        e = rt.envelopes.ENVELOPES
+        return env['author_kind'] == 'human' and env['trust'] == e.owner_trust and env['authority'] == e.owner_intent
+
+    def _read(self, rt, channel, ts, root=None):
+        """One message read back from Slack (the owner's token, read-only), or None."""
+        if root and root != ts:
+            found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
+                'channel': channel, 'ts': root, 'oldest': ts, 'latest': ts, 'inclusive': 'true', 'limit': 2,
+                'include_all_metadata': 'true'})
+        else:
+            found = rt.slack.api_call('conversations.history', rt.api_identity(), params={
+                'channel': channel, 'latest': ts, 'inclusive': 'true', 'limit': 1, 'include_all_metadata': 'true'})
+        return next((x for x in found.get('messages') or [] if isinstance(x, dict) and x.get('ts') == ts), None)
+
+    def _root(self, db, m):
+        """The thread root of a Slack control message's conversation."""
+        root = json.loads(m.get('facts') or '{}').get('root')
+        if root or db is None:
+            return root or m['ts']
+        row = db.execute('SELECT root_ts FROM control_threads WHERE conversation_id=?', (m['conversation_id'],)).fetchone()
+        return row[0] if row else m['ts']
+
+    def _record_slack(self, rt, db, cfg, channel, m, root, via, now):
+        """A verified Slack message of the owner's -> an owner message (refs + digest, no text). `root` None starts a
+        conversation whose thread is this message. Returns its id, or None (already recorded / rate limited)."""
+        ts = str(m['ts'])
+        text = m.get('text') or ''
+        recent = db.execute("SELECT count(*) FROM control_messages WHERE role='owner' AND source='slack' AND created_at>?",
+                            (now - 3600,)).fetchone()[0]
+        if recent >= cfg['messages_per_hour']:
+            return None
+        facts = {'source': 'slack', 'channel': channel, 'via': via, 'hand_typed': True, 'root': root or ts}
+        mid = _new_id('cm')
+        with _transaction(db):
+            if db.execute("SELECT 1 FROM control_messages WHERE channel=? AND ts=? AND role='owner'", (channel, ts)).fetchone():
+                return None
+            if root is None:
+                conversation = _new_id('cv')
+                db.execute('INSERT INTO control_conversations VALUES (?,?,?,?,?,?)', (conversation, 'slack', None, 0, now, now))
+                db.execute('INSERT INTO control_threads (channel,root_ts,conversation_id,cursor,created_at,updated_at) '
+                           'VALUES (?,?,?,?,?,?)', (channel, ts, conversation, ts, now, now))
+            else:
+                row = db.execute('SELECT conversation_id FROM control_threads WHERE channel=? AND root_ts=?',
+                                 (channel, root)).fetchone()
+                if row is None:
+                    return None
+                conversation = row[0]
+                db.execute('UPDATE control_conversations SET updated_at=? WHERE conversation_id=?', (now, conversation))
+                db.execute('UPDATE control_threads SET updated_at=? WHERE channel=? AND root_ts=?', (now, channel, root))
+            db.execute('INSERT INTO control_messages (message_id,conversation_id,source,role,client_id,text,digest,facts,'
+                       "state,smoke,created_at,updated_at,channel,ts) VALUES (?,?,'slack','owner',NULL,NULL,?,?,'received',"
+                       '0,?,?,?,?)', (mid, conversation, digest(text), json.dumps(facts, sort_keys=True), now, now, channel, ts))
+        try:  # the control-plane receipt the owner sees on the message (👀 + the provider's emoji)
+            rt.ingest_receipt(db, [(channel, ts)], cfg['provider'], now)
+        except Exception:  # noqa: BLE001 - a receipt never blocks the message
+            pass
+        return mid
+
+    def slack_push(self, rt, db, channel, ts, user, now=None):
+        """The receiver's realtime path for a NEW top-level message in a decision channel: refs only; the message is
+        read back and verified here (`typed`). Nothing while the entry or its card channel is off."""
+        now = time.time() if now is None else now
+        if not (CHANNEL_RE.fullmatch(str(channel)) and TS_RE.fullmatch(str(ts)) and USER_RE.fullmatch(str(user))):
+            return {'ok': False, 'outcome': 'refused', 'reason': 'invalid_refs'}
+        on, cfg = self.card_channel_on(rt)
+        if not on:
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'control_off'}
+        if channel not in rt.card_threads.decision_channels(rt):
+            return {'ok': False, 'outcome': 'refused', 'reason': 'not_a_decision_channel'}
+        if user != _owner_user(rt):
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'not_the_owner'}
+        initialize(db)
+        with _transaction(db):  # the receiver is forwarding: the fallback poll may skip its history read meanwhile
+            db.execute('INSERT OR REPLACE INTO runtime_meta VALUES (?,?)', (PUSH_KEY, f'{now:.6f}'))
+        if float(ts) <= self._since(db, now):
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'before_the_entry'}
+        if db.execute("SELECT 1 FROM control_messages WHERE channel=? AND ts=? AND role='owner'", (channel, ts)).fetchone():
+            return {'ok': True, 'outcome': 'duplicate'}
+        m = self._read(rt, channel, ts)
+        if m is None:
+            return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
+        if not self.typed(rt, db, channel, m):
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'not_hand_typed'}
+        mid = self._record_slack(rt, db, cfg, channel, m, None, 'push', now)
+        if mid:
+            rt.start(_db_path(db))
+        return {'ok': True, 'outcome': 'recorded' if mid else 'duplicate_or_rate_limited', 'message_id': mid}
+
+    def thread_reply(self, rt, db, channel, root, m, now=None, source='push'):
+        """The owner's reply in a control conversation's thread: the next message of that conversation. None when the
+        entry or its card channel is off, or the thread is not a control thread (card routing goes on as before)."""
+        if not present(db) or not _has_table(db, 'control_threads'):
+            return None
+        if db.execute('SELECT 1 FROM control_threads WHERE channel=? AND root_ts=?', (channel, root)).fetchone() is None:
+            return None
+        on, cfg = self.card_channel_on(rt)
+        if not on:
+            return None
+        now = time.time() if now is None else now
+        ts = str(m.get('ts') or '')
+        if not self.typed(rt, db, channel, m, root):
+            return {'ts': ts, 'outcome': 'skipped', 'reason': 'not_hand_typed_control_thread'}
+        mid = self._record_slack(rt, db, cfg, channel, m, root, source, now)
+        if mid:
+            rt.start(_db_path(db))
+        return {'ts': ts, 'outcome': 'control' if mid else 'duplicate', 'message_id': mid}
+
+    def slack_poll(self, rt, db, now=None, force=False):
+        """Supervisor step, every control.channel_poll_seconds (the receiver's push is the fast path), on the owner's
+        user token. Per decision channel: conversations.history from its cursor for the owner's new top-level messages,
+        paged (HISTORY_PAGES per poll; a longer gap goes on from Slack's page cursor next poll, and the cursor moves only
+        once everything up to the walk's end is read); skipped while the receiver pushed within the interval, but at least
+        every HISTORY_MAX_SKIP. Then conversations.replies for the control threads that are due (THREAD_ACTIVE,
+        THREAD_HOT, THREAD_IDLE_POLL; at most THREAD_POLL_MAX), from each thread's cursor. Never before the entry
+        first saw the channel; nothing while it is off. `force` (the CLI) reads everything that is active now."""
+        if not present(db):  # the entry was never set up here (control-bootstrap creates the tables): nothing at all
+            return None
+        on, cfg = self.card_channel_on(rt)
+        if not on:
+            return None
+        now = time.time() if now is None else now
+        initialize(db)
+        last = _meta_json(db, POLL_KEY).get('at') or 0.0
+        if not force and now - last < cfg['channel_poll_seconds']:
+            return None
+        since = self._since(db, now)
+        pushed = _meta_float(db, PUSH_KEY)
+        out = {'at': now, 'recorded': 0, 'reads': 0, 'history': {}, 'threads': 0, 'error': None}
+        owner = _owner_user(rt)
+        token = None
+        try:
+            for channel in rt.card_threads.decision_channels(rt):
+                key = f'control_cursor:{channel}'
+                state = _meta_json(db, key)
+                state['cursor'] = max(str(state.get('cursor') or f'{since:.6f}'), f'{since:.6f}', key=float)
+                if not force and not state.get('walk') and now - pushed < cfg['channel_poll_seconds'] and \
+                        now - (state.get('read_at') or 0) < HISTORY_MAX_SKIP:
+                    out['history'][channel] = 'skipped_receiver_pushed'
+                    continue
+                token = token or rt.api_identity()
+                out['history'][channel] = self._poll_history(rt, db, cfg, token, channel, key, state, owner, now, out)
+            due = [dict(r) for r in db.execute('SELECT * FROM control_threads WHERE updated_at>? ORDER BY '
+                                               'coalesce(polled_at,0), updated_at DESC', (now - THREAD_ACTIVE,))]
+            due = [t for t in due if force or now - t['updated_at'] <= THREAD_HOT or
+                   now - (t['polled_at'] or 0) >= THREAD_IDLE_POLL][:THREAD_POLL_MAX]
+            for t in due:
+                token = token or rt.api_identity()
+                out['threads'] += 1
+                self._poll_thread(rt, db, cfg, token, t, now, out)
+        except Exception as exc:  # noqa: BLE001 - recorded; the next poll retries from the same cursors
+            out['error'] = type(exc).__name__
+        with _transaction(db):
+            db.execute('INSERT OR REPLACE INTO runtime_meta VALUES (?,?)', (POLL_KEY, json.dumps(out)))
+        if out['recorded']:
+            rt.start(_db_path(db))
+        return out
+
+    def _poll_history(self, rt, db, cfg, token, channel, key, state, owner, now, out):
+        """One channel's new top-level messages, newest page first (Slack's order). A walk = every message in (cursor,
+        latest]; it may span polls (Slack's page cursor kept in `walk`); the cursor moves to the newest ts read only
+        when the walk is complete. Messages are recorded as soon as read (a re-read is a duplicate)."""
+        walk = state.get('walk') or {'latest': f'{now:.6f}', 'page': None, 'high': state['cursor']}
+        try:
+            for _ in range(HISTORY_PAGES):
+                params = {'channel': channel, 'oldest': state['cursor'], 'latest': walk['latest'], 'limit': PAGE_LIMIT,
+                          'include_all_metadata': 'true', **({'cursor': walk['page']} if walk['page'] else {})}
+                page = rt.slack.api_call('conversations.history', token, params=params)
+                out['reads'] += 1
+                for m in sorted((x for x in page.get('messages') or [] if isinstance(x, dict) and
+                                 TS_RE.fullmatch(str(x.get('ts') or ''))), key=lambda x: float(x['ts'])):
+                    if float(m['ts']) <= float(state['cursor']) or float(m['ts']) > float(walk['latest']):
+                        continue
+                    walk['high'] = max(walk['high'], m['ts'], key=float)
+                    if m.get('user') != owner or m.get('thread_ts') not in (None, '', m['ts']):
+                        continue
+                    if self.typed(rt, db, channel, m) and self._record_slack(rt, db, cfg, channel, m, None, 'poll', now):
+                        out['recorded'] += 1
+                walk['page'] = (page.get('response_metadata') or {}).get('next_cursor') or None
+                if not walk['page']:
+                    if page.get('has_more'):
+                        raise RuntimeError('incomplete_slack_pagination')
+                    state = {'cursor': walk['high'], 'read_at': now}
+                    return 'read'
+            # the page cap: the walk goes on next poll; the cursor stays where everything before it is read
+            state = {**state, 'walk': walk, 'read_at': now}
+            out['error'] = out['error'] or 'history_page_cap'
+            return 'page_cap'
+        except Exception:
+            if walk.get('page'):  # Slack's page cursor may be the problem (expired): the next walk starts again
+                state = {k: v for k, v in state.items() if k != 'walk'}
+            raise
+        finally:
+            with _transaction(db):
+                db.execute('INSERT OR REPLACE INTO runtime_meta VALUES (?,?)', (key, json.dumps(state, sort_keys=True)))
+
+    def _poll_thread(self, rt, db, cfg, token, t, now, out):
+        """The owner's replies in one control thread, oldest first (Slack's order), from its cursor; REPLY_PAGES per
+        poll, the cursor saved after each page (the rest next poll)."""
+        cursor = start = t['cursor'] or t['root_ts']
+        page_cursor = None
+        try:
+            for _ in range(REPLY_PAGES):  # one query (oldest = the thread's cursor) paged with Slack's page cursor
+                found = rt.slack.api_call('conversations.replies', token, params={
+                    'channel': t['channel'], 'ts': t['root_ts'], 'oldest': start, 'limit': PAGE_LIMIT,
+                    'include_all_metadata': 'true', **({'cursor': page_cursor} if page_cursor else {})})
+                out['reads'] += 1
+                for m in sorted((x for x in found.get('messages') or [] if isinstance(x, dict) and
+                                 TS_RE.fullmatch(str(x.get('ts') or ''))), key=lambda x: float(x['ts'])):
+                    if m['ts'] == t['root_ts'] or float(m['ts']) <= float(cursor):
+                        continue
+                    if self.typed(rt, db, t['channel'], m, t['root_ts']) and \
+                            self._record_slack(rt, db, cfg, t['channel'], m, t['root_ts'], 'poll', now):
+                        out['recorded'] += 1
+                    cursor = m['ts']  # after it is handled: a failure leaves the cursor before it
+                page_cursor = (found.get('response_metadata') or {}).get('next_cursor') or None
+                if not page_cursor:
+                    return
+            out['error'] = out['error'] or 'replies_page_cap'
+        finally:
+            with _transaction(db):
+                db.execute('UPDATE control_threads SET cursor=?, polled_at=? WHERE channel=? AND root_ts=?',
+                           (cursor, now, t['channel'], t['root_ts']))
+
+    def _slack_post(self, rt, db, m, text, kind):
+        """A bot post in the thread of a Slack control conversation (the owner-only card channel, guarded like every
+        owner-facing post); returns its ts."""
+        channel, root = m['channel'], self._root(db, m)
+        rt.buttons.require_private_destination(rt, db, channel, kind)
+        sent = rt.slack.api_call('chat.postMessage', rt.api_identity(bot=True), json_body={
+            'channel': channel, 'thread_ts': root, 'text': text, 'unfurl_links': False, 'unfurl_media': False,
+            'metadata': rt.agent_metadata(kind, None, message=m['message_id'])})
+        ts = (sent or {}).get('ts')
+        rt.record_send(db, channel, ts, kind, m['message_id'])
+        return ts
+
     # ---- supervisor steps ----------------------------------------------------------------------------------------
     def pump(self, rt, db, now=None):
         """Each received owner message -> one pending local event on the control task (oldest first, PUMP_BATCH per
@@ -282,9 +583,11 @@ class Control:
                                  'started_at DESC LIMIT 1', (consumer['session'],)).fetchone()
             if (e is None or e['status'] == 'handled') and running is None:
                 self._fail(db, m['message_id'], 'no_reply', now)
+                self._failed_note(rt, db, m, 'no_reply')
                 out['failed'] += 1
             elif (m['state'] == 'queued' and now - m['updated_at'] > limit) or now - m['created_at'] > 2 * limit:
                 self._fail(db, m['message_id'], 'timeout', now)
+                self._failed_note(rt, db, m, 'timeout')
                 out['failed'] += 1
             elif m['state'] == 'queued' and consumer:
                 with _transaction(db):
@@ -296,6 +599,15 @@ class Control:
             cur = db.execute('UPDATE control_messages SET text=NULL WHERE text IS NOT NULL AND created_at<?', (cutoff,))
             out['expired'] = cur.rowcount
         return out
+
+    def _failed_note(self, rt, db, m, code):
+        """C2: a Slack message that failed gets one short note in its thread (best effort)."""
+        if m['source'] != 'slack':
+            return
+        try:
+            self._slack_post(rt, db, m, self.msg('control.slack.failed', code=code), 'control_failed')
+        except Exception:  # noqa: BLE001 - the console shows the failure anyway
+            pass
 
     def _fail(self, db, message_id, code, now):
         with _transaction(db):
@@ -336,7 +648,17 @@ class Control:
     def show(self, rt, db, message_id):
         """The held message with its conversation's earlier turns (for the run; the body file has the same)."""
         m, _, cfg = self._held(rt, db, message_id)
-        return {'ok': True, 'message': self.public(db, m), 'history': self._history(db, m, cfg['history_turns'])}
+        out = {'ok': True, 'message': self.public(db, m), 'history': self._history(db, m, cfg['history_turns'])}
+        if m['source'] == 'slack':  # C2: the words re-read from Slack (never stored), the thread so far
+            out['message']['text'] = self._original(m, rt)
+            root = self._root(db, m)
+            found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
+                'channel': m['channel'], 'ts': root, 'limit': 50, 'include_all_metadata': 'true'})
+            out['thread'] = [{'role': 'owner' if x.get('user') == _owner_user(rt) and not x.get('bot_id') else 'other',
+                              'ts': x.get('ts'), 'text': x.get('text')}
+                             for x in found.get('messages') or [] if isinstance(x, dict) and
+                             float(x.get('ts') or 0) <= float(m['ts'])]
+        return out
 
     def reply(self, rt, db, db_path, message_id, text, *, needs_answer=False, followup=False, now=None):
         """The control run's answer to the owner (stored for the console). Exactly one answer per message; up to
@@ -358,16 +680,23 @@ class Control:
                                    (message_id,)).fetchone()[0] > MAX_FOLLOWUPS:
             raise ValueError('too_many_followups')
         rid = _new_id('cm')
+        facts = {'followup': bool(followup)}
+        stored = text
+        if m['source'] == 'slack':  # C2: the answer goes into the message's thread (bot); its text stays in Slack
+            facts['slack_ts'] = self._slack_post(rt, db, m, text, 'control_reply')
+            stored = None
         with _transaction(db):
             db.execute('INSERT INTO control_messages (message_id,conversation_id,source,role,text,digest,facts,state,'
                        "needs_answer,reply_to,smoke,created_at,updated_at) VALUES (?,?,?,'control',?,?,?,'answered',?,?,?,"
-                       '?,?)', (rid, m['conversation_id'], m['source'], text, digest(text),
-                                json.dumps({'followup': bool(followup)}), int(bool(needs_answer)), message_id, m['smoke'],
+                       '?,?)', (rid, m['conversation_id'], m['source'], stored, digest(text),
+                                json.dumps(facts), int(bool(needs_answer)), message_id, m['smoke'],
                                 now, now))
             if not answered:
                 db.execute("UPDATE control_messages SET state='answered',needs_answer=?,error=NULL,updated_at=? WHERE "
                            'message_id=?', (int(bool(needs_answer)), now, message_id))
             db.execute('UPDATE control_conversations SET updated_at=? WHERE conversation_id=?', (now, m['conversation_id']))
+            if m['source'] == 'slack':  # the answer is a turn of the thread: the poll reads it as active again
+                db.execute('UPDATE control_threads SET updated_at=? WHERE conversation_id=?', (now, m['conversation_id']))
         if not answered and e['status'] != 'handled':
             try:
                 rt.resolve(db, e['id'], 'observe', now=now)
@@ -397,14 +726,14 @@ class Control:
                 or db.execute("SELECT 1 FROM control_proposals WHERE message_id=? AND task_id=? AND kind='relay' AND state "
                               "IN ('proposed','deciding')", (message_id, row['task_id'])).fetchone():
             raise ValueError('already_relayed_to_this_task')
-        self._original(m)  # the stored words must still be there and match their digest
-        if m['source'] == 'console':
+        self._original(m, rt)  # the stored words must still be there and match their digest
+        if m['source'] == 'console' or cfg['confirm_slack']:
             mode = 'event' if rt.registry.task_consumer(db, row['task_id']) else 'dispatch'
             return self._propose(rt, db, m, cfg, 'relay', now, task=row, note=note, mode=mode)
         return self._relay(rt, db, db_path, m, row, note, now)
 
     def _relay(self, rt, db, db_path, m, row, note, now):
-        original = self._original(m)
+        original = self._original(m, rt)
         body = self._relay_body(m, original, note, now)
         workspace = Path(row['path'])
         path = _memory._write_new(_memory._unique(workspace / 'history' / 'messages',
@@ -443,13 +772,13 @@ class Control:
             raise ValueError('launch_rate_limited')
         if getattr(rt.intake, 'run_bootstrap', None) is None:
             raise ValueError('no_workspace_bootstrap_in_this_deployment')
-        self._original(m)
-        if m['source'] == 'console':
+        self._original(m, rt)
+        if m['source'] == 'console' or cfg['confirm_slack']:
             return self._propose(rt, db, m, cfg, 'launch', now, title=title, linear=linear)
         return self._launch(rt, db, db_path, m, cfg, title, linear, now)
 
     def _launch(self, rt, db, db_path, m, cfg, title, linear, now):
-        body = self._relay_body(m, self._original(m), None, now)
+        body = self._relay_body(m, self._original(m, rt), None, now)
         data = rt.intake.run_bootstrap(title, title, body, linear=bool(linear), agent=cfg['provider'], root=rt.registry.root())
         launched = rt.launch_task(db, db_path, data['workspace'], 'auto', body, wait_seconds=0, now=now, persist=False)
         relay_id = _new_id('cr')
@@ -475,7 +804,7 @@ class Control:
         """A confirm card to the owner (code-owned, never_auto, button only) for a relay / launch from a console
         message; nothing runs until `settle` sees the owner's own click."""
         pid = _new_id('cp')
-        words = self._original(m)
+        words = self._original(m, rt)
         short = words if len(words) <= CARD_WORDS_MAX else words[:CARD_WORDS_MAX].rstrip() + self.msg('control.card.more')
         base = getattr(rt, 'DASHBOARD_URL', None)  # no configured console address: no link rather than a broken one
         link = f"{base}/control?conversation={m['conversation_id']}" if isinstance(base, str) and \
@@ -725,6 +1054,10 @@ class Control:
             if row is None:
                 raise KeyError(conversation)
             out['conversation'] = {**dict(row), 'created_at': _iso(row['created_at']), 'updated_at': _iso(row['updated_at'])}
+            thread = db.execute('SELECT channel, root_ts FROM control_threads WHERE conversation_id=?',
+                                (conversation,)).fetchone() if _has_table(db, 'control_threads') else None
+            if thread is not None:  # C2: a conversation the owner started in the card channel
+                out['conversation']['slack'] = {'channel': thread[0], 'root': thread[1]}
             out['messages'] = [self.public(db, dict(r)) for r in db.execute(
                 'SELECT * FROM control_messages WHERE conversation_id=? ORDER BY rowid', (conversation,))]  # as written
         return out
@@ -736,6 +1069,12 @@ class Control:
                'needs_answer': bool(m['needs_answer']), 'reply_to': m['reply_to'], 'error': m['error'],
                'run_id': m['run_id'], 'facts': json.loads(m['facts'] or '{}'), 'created_at': _iso(m['created_at']),
                'updated_at': _iso(m['updated_at']), 'relays': []}
+        if m.get('channel') and m.get('ts'):  # C2: a Slack message (the console links to it; its text stays in Slack)
+            out['slack'] = {'channel': m['channel'], 'ts': m['ts']}
+            out['expired'] = False
+        elif m['source'] == 'slack':
+            out['slack'] = {'reply_ts': json.loads(m['facts'] or '{}').get('slack_ts')}
+            out['expired'] = False
         if m['role'] == 'owner':
             out['relays'] = [{'task_id': r['task_id'], 'mode': r['mode'], 'at': _iso(r['at'])} for r in db.execute(
                 'SELECT task_id, mode, at FROM control_relays WHERE message_id=? ORDER BY at', (m['message_id'],))]
@@ -761,8 +1100,19 @@ class Control:
                           (m['conversation_id'], m['message_id'], turns)).fetchall()  # the turns written before it
         return [{'role': r['role'], 'text': r['text'], 'at': _iso(r['created_at'])} for r in reversed(rows)]
 
-    def _original(self, m):
-        """The owner's stored words, checked against the digest recorded with them."""
+    def _original(self, m, rt=None):
+        """The owner's words, checked against the digest recorded with them: console text from the store; a Slack
+        message re-read from Slack (its text is never stored)."""
+        if m['source'] == 'slack':
+            if rt is None:
+                raise ValueError('slack_message_needs_the_runtime')
+            found = self._read(rt, m['channel'], m['ts'], self._root(None, m))
+            text = (found or {}).get('text')
+            if text is None:
+                raise ValueError('slack_message_not_found')
+            if digest(text) != m['digest']:
+                raise ValueError('stored_text_does_not_match_its_digest')
+            return text
         if m['text'] is None:
             raise ValueError('message_text_expired')
         if digest(m['text']) != m['digest']:
@@ -777,6 +1127,8 @@ class Control:
                             sec=self.msg('control.facts.sec_present' if facts.get('browser_like') else
                                          'control.facts.sec_absent'),
                             site=sec.get('site') or '-')
+        if facts.get('source') == 'slack':
+            return self.msg('control.facts.slack', via=facts.get('via') or '-')
         return str(facts.get('source') or m['source'])
 
     def _body(self, rt, db, m, cfg, now):
@@ -788,10 +1140,17 @@ class Control:
             lines.append(self.msg('control.body.history'))
             for h in history:
                 who = self.msg('control.body.owner' if h['role'] == 'owner' else 'control.body.control', name=self.name)
-                lines.append(f"- {who} ({h['at']}): " + ' '.join(str(h['text'] or self.msg('control.body.expired')).split())[:600])
+                words = h['text'] if h['text'] is not None else self.msg(
+                    'control.body.slack_turn' if m['source'] == 'slack' else 'control.body.expired')
+                lines.append(f"- {who} ({h['at']}): " + ' '.join(str(words).split())[:600])
             lines.append('')
-        lines += [self.msg('control.body.message_begin', name=self.name), m['text'], self.msg('control.body.message_end'), '',
-                  self.msg('control.body.how', cli=cli, id=m['message_id'], name=self.name)]
+        if m['source'] == 'slack':  # C2: the words stay in Slack; the run reads them with control-show
+            lines += [self.msg('control.body.slack_message', name=self.name, cli=cli, id=m['message_id'],
+                               link=_permalink(rt, m['channel'], m['ts'])), '']
+        else:
+            lines += [self.msg('control.body.message_begin', name=self.name), m['text'], self.msg('control.body.message_end'),
+                      '']
+        lines += [self.msg('control.body.how', cli=cli, id=m['message_id'], name=self.name)]
         return '\n'.join(lines) + '\n'
 
     def _relay_body(self, m, original, note, now):
@@ -825,9 +1184,37 @@ def button_only(db, eid):
         return False
 
 
+def _permalink(rt, channel, ts):
+    try:
+        base = rt.DEPLOYMENT.owner.slack_workspace_url
+    except AttributeError:
+        base = None
+    if not base or not channel or not ts:
+        return f'{channel}/{ts}'
+    return f"{base}/archives/{channel}/p{str(ts).replace('.', '')}"
+
+
 def _code(exc):
     text = str(exc)
     return text if text and len(text) <= 120 and all(c.isalnum() or c in '_:-.' for c in text) else type(exc).__name__
+
+
+def _meta_json(db, key):
+    """A runtime_meta JSON object ({} when missing or not an object)."""
+    row = db.execute('SELECT value FROM runtime_meta WHERE key=?', (key,)).fetchone()
+    try:
+        value = json.loads(row[0]) if row else {}
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _meta_float(db, key):
+    row = db.execute('SELECT value FROM runtime_meta WHERE key=?', (key,)).fetchone()
+    try:
+        return float(row[0]) if row else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _has_table(db, name):

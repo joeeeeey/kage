@@ -1061,8 +1061,10 @@ class LoopCore:
             except Exception as exc:  # noqa: BLE001 - never stops delivery
                 self._meta_error(db, 'approvals_watch_error', exc)
             try:
-                # Phase 2 C1: the owner's control messages -> events on the control task (control.enabled; nothing at all
-                # while the entry has never been used: its tables do not exist).
+                # Phase 2 C2: the card channel's fallback poll (self-gated by control.enabled / card_channel /
+                # channel_poll_seconds; no Slack call while off), then C1: the owner's control messages -> events on the
+                # control task (nothing at all while the entry has never been used: its tables do not exist).
+                self.control.slack_poll(self.rt, db)
                 self.control.pump(self.rt, db)
             except Exception as exc:  # noqa: BLE001 - never stops delivery
                 self._meta_error(db, 'control_error', exc)

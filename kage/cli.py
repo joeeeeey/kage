@@ -54,6 +54,14 @@ class CliCore:
             return control.status(rt, db)
         if args.command == 'control-bootstrap':
             return control.bootstrap(rt, db, db_path, launch=not args.no_launch, rewrite_goal=args.rewrite_goal)
+        if args.command == 'control-push':  # C2: the Socket Mode receiver runs it without an agent identity
+            if rt._agent_session():
+                return rt._fail('agent_session_cannot_push_control_messages')
+            return control.slack_push(rt, db, args.channel, args.ts, args.user)
+        if args.command == 'control-poll':
+            if rt._agent_session():
+                return rt._fail('agent_session_cannot_poll_control_messages')
+            return {'ok': True, **(control.slack_poll(rt, db, force=True) or {'skipped': 'control_off'})}
         if args.command == 'control-show':
             return control.show(rt, db, args.message)
         if args.command == 'control-reply':
@@ -667,6 +675,12 @@ class CliCore:
         clau.add_argument('--title', required=True)
         clau.add_argument('--linear', action='store_true', help='Create a tracker ticket for the new task')
         sub.add_parser('control-status', help='The control entry: switch, task, messages by state')
+        cpush = sub.add_parser('control-push', help=f"Receiver only: {self.name}'s new top-level message in the card "
+                                                    'channel (refs only; read back and verified here)')
+        cpush.add_argument('--channel', required=True)
+        cpush.add_argument('--ts', required=True)
+        cpush.add_argument('--user', required=True, help='The author from the event (re-checked against Slack)')
+        sub.add_parser('control-poll', help='Run the card-channel fallback poll now (control.channel_poll_seconds)')
         cboot = sub.add_parser('control-bootstrap', help='Idempotent: create/register the control task and bind it')
         cboot.add_argument('--no-launch', action='store_true')
         cboot.add_argument('--rewrite-goal', action='store_true')

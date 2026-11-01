@@ -1639,6 +1639,9 @@ class DashboardCore:
                 db.close()
         out.update(config_error=error, digest=self.worker_config.digest(config) if config else None,
                    enums={'providers': list(self.worker_config.PROVIDERS), 'efforts': list(self.worker_config.EFFORTS)})
+        slack = (out.get('conversation') or {}).get('slack')
+        if slack:  # C2: where the conversation lives (its Slack text is never stored here)
+            slack['link'] = slack_link(slack['channel'], slack['root'])
         if token:
             out['page_token'] = token
         return out
