@@ -1295,7 +1295,9 @@
     "cli.main.15": "The proposed rule, if-then in plain words: from now on when … → …",
     "cli.main.16": "What it affects + one or two examples",
     "cli.main.17": "Basis: the last N similar handlings (by default the shape history count)",
-    "cli.main.18": "; "
+    "cli.main.18": "; ",
+    "trace.cli.unrecognized": "Not recognised: paste a Slack link, CHANNEL/TS, a burst / event / dispatch / run id or a task id",
+    "trace.cli.not_found": "No record of this message was found"
   },
   "words": {
     "decision.approve_phrases": [

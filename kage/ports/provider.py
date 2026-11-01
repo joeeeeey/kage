@@ -53,3 +53,32 @@ class Provider:
     def prompt_layout(self, profile, mode):
         """One message, instructions first, unless a provider can do better."""
         return 'single'
+
+
+class Providers:
+    """A deployment's providers by name (claude, else codex) and the dispatcher's calls on them. `claude` / `codex`:
+    callables that return the deployment's provider objects at call time (a replaced one is the one used)."""
+
+    def __init__(self, *, claude, codex):
+        self.claude, self.codex = claude, codex
+
+    def _provider(self, name):
+        return self.claude() if name == 'claude' else self.codex()
+
+    def lean_claude(self, profile, cwd, home=None):
+        """(settings, extra argv, summary) of a task class's lean-context profile; see kage.adapters.providers.claude."""
+        return self.claude().lean(profile, cwd, home)
+
+    def prompt_layout(self, profile, provider, mode):
+        """single / split / constant; see kage.ports.provider."""
+        return self._provider(provider).prompt_layout(profile, mode)
+
+    def build_command(self, provider, mode, session, prompt, model, effort, yolo_args, run_dir, settings=None,
+                      extra_args=(), system_prompt=None, disallowed=()):
+        """Exact CLI argv for a dispatched run; see kage.adapters.providers.claude / .codex."""
+        return self._provider(provider).build_command(mode, session, prompt, model, effort, yolo_args, run_dir, settings,
+                                                      extra_args, system_prompt, disallowed)
+
+    def parse_run_log(self, provider, events_text, stderr_text='', last_message=None):
+        """Summarise a run from its raw stdout (JSONL) and stderr; tolerant of partial files."""
+        return self._provider(provider).parse_run_log(events_text, stderr_text, last_message)

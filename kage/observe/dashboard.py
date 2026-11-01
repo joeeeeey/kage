@@ -1615,3 +1615,25 @@ class DashboardCore:
             raise
         finally:
             db.close()
+
+
+def cli_main(argv=None, *, description, default_db, default_design_html, default_port, server_class):
+    """The dashboard's command line: `--db`, `--port`, `--no-enrichment`, `--design-html` (the deployment's defaults);
+    serves on the loopback interface until interrupted. `server_class`: the deployment's DashboardServer."""
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument('--db', type=Path, default=default_db)
+    parser.add_argument('--port', type=int, default=default_port)
+    parser.add_argument('--no-enrichment', action='store_true', help='Disable bounded Slack profile/participant cache worker')
+    parser.add_argument('--design-html', type=Path, default=Path(default_design_html),
+                        help='Generated architecture design HTML served read-only on /design (default: %(default)s)')
+    args = parser.parse_args(argv)
+    os.umask(0o077)
+    server = server_class(('127.0.0.1', args.port), args.db.expanduser(), enrich_profiles=not args.no_enrichment,
+                          design_html=args.design_html.expanduser())
+    print(f'Follow-up Observatory: http://127.0.0.1:{server.server_port}', flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()

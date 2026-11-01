@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -3192,3 +3193,35 @@ def intake_playbook(pack, **context):
     if missing:
         raise ValueError('intake_playbook_incomplete: ' + ', '.join(missing))
     return playbook
+
+
+def run_workspace_bootstrap(bootstrap, title, brief, context, *, linear, agent, root, slug=None, date=None, folder_name=None,
+                            runner=None):
+    """The deployment's workspace bootstrap script (`bootstrap`, its path) with --no-launch (never a terminal tab); returns
+    its JSON report. A new ticket starts Todo (In Progress only while a session runs). `folder_name`: a local-only
+    workspace with exactly this name (the plain-named long-lived tasks)."""
+    runner = runner or subprocess.run
+    with tempfile.TemporaryDirectory(prefix='intake-bootstrap-') as tmp:
+        brief_file, context_file = Path(tmp) / 'brief.md', Path(tmp) / 'context.md'
+        brief_file.write_text(brief, encoding='utf-8')
+        context_file.write_text(context, encoding='utf-8')
+        cmd = [sys.executable, str(bootstrap), '--no-launch', '--title', title, '--brief-file', str(brief_file),
+               '--context-file', str(context_file), '--root', str(root), '--agent', agent]
+        if not linear:
+            cmd.append('--no-ticket')
+        else:
+            cmd += ['--state', 'Todo']  # tickets start Todo, not the bootstrap default In Progress
+        if slug:
+            cmd += ['--slug', slug]
+        if date:
+            cmd += ['--date', date]
+        if folder_name:
+            cmd += ['--folder-name', folder_name]
+        result = runner(cmd, capture_output=True, text=True, timeout=180, stdin=subprocess.DEVNULL)
+    if result.returncode != 0:
+        detail = re.sub(r'[^\w .:-]+', ' ', (result.stderr or '').strip().splitlines()[-1] if result.stderr else '')[:160]
+        raise ValueError('workspace_bootstrap_failed: ' + (detail or f'exit {result.returncode}'))
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        raise ValueError('workspace_bootstrap_returned_invalid_json') from None

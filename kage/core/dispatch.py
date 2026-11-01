@@ -2710,3 +2710,25 @@ class DispatchCore:
     def _waited(self, seconds):
         minutes = max(0, int(seconds // 60))
         return self.msg('dispatch._waited.1', value=minutes // 60) if minutes >= 60 else self.msg('dispatch._waited.2', minutes=minutes)
+
+
+EXPORT_RE = re.compile(r"^\s*export\s+([A-Z][A-Z0-9_]{1,63})=(?:\"([^\"$`\\]*)\"|'([^']*)'|([^\s\"'$`;#]+))\s*(?:#.*)?$")
+
+
+def rc_exports(names, home=None, *, rc_files):
+    """Last literal `export NAME=value` per name across the owner's shell startup files `rc_files` (relative to `home`;
+    comments ignored). Values containing expansions are skipped (the login-shell fallback evaluates those)."""
+    home = Path(home or os.path.expanduser('~'))
+    found = {}
+    for rc in rc_files:
+        try:
+            lines = (home / rc).read_text(encoding='utf-8', errors='replace').splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            m = EXPORT_RE.match(line)
+            if m and m.group(1) in names:
+                value = next(g for g in m.groups()[1:] if g is not None)
+                if value:
+                    found[m.group(1)] = value
+    return found

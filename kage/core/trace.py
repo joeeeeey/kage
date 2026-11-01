@@ -1451,3 +1451,24 @@ class TraceCore:
         if len(result['matches']) > 1:
             out.append(self.msg('trace.render_text.2', value=len(result['matches']) - 1) + ', '.join(m['ref'] for m in result['matches'][1:6]) + ')')
         return '\n'.join(out)
+
+
+def cli_main(argv=None, *, language, default_db, description, trace_ref, render_text):
+    """The trace command line: a reference (a Slack link, CHANNEL/TS, a burst / event / dispatch / run id or a task id),
+    `--db` (the deployment's database by default) and `--json`; `trace_ref` / `render_text` are the deployment's (its
+    names, looked up at call time). Exit 2: not a reference; 1: no record; 0: printed."""
+    parser = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('ref')
+    parser.add_argument('--db', type=Path, default=default_db)
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args(argv)
+    try:
+        result = trace_ref(args.db.expanduser(), args.ref)
+    except ValueError:
+        print(locale.message(language, 'trace.cli.unrecognized'), file=sys.stderr)
+        return 2
+    except KeyError:
+        print(locale.message(language, 'trace.cli.not_found'), file=sys.stderr)
+        return 1
+    print(json.dumps(result, ensure_ascii=False, indent=1) if args.json else render_text(result))
+    return 0

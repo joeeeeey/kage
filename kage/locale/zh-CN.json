@@ -1295,7 +1295,9 @@
     "cli.main.15": "建议规则，if-then 人话：以后遇到…→…",
     "cli.main.16": "会影响什么 + 一两个例子",
     "cli.main.17": "依据：近 N 条同类处理（默认按 shape 历史计数）",
-    "cli.main.18": "；"
+    "cli.main.18": "；",
+    "trace.cli.unrecognized": "无法识别：贴 Slack 链接、CHANNEL/TS、burst / 事件 / 派发 / 运行 id 或任务 id",
+    "trace.cli.not_found": "没有找到这条消息的记录"
   },
   "words": {
     "decision.approve_phrases": [
