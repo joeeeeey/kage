@@ -1,68 +1,85 @@
-/* The control entry (总控, Phase 2 C1). Tokens from the shared base (lane S1), with the current palette as fallback. */
-.ctl-main { display: grid; gap: var(--sp-4, 16px); }
+/* The control entry (总控, Phase 2 C1), on the shared base (base.css: tokens, cards, controls). */
 .ctl-banner {
-  padding: var(--sp-3, 12px) var(--sp-4, 16px); border-radius: var(--r-md, 14px);
-  background: var(--warn-soft, #fff6df); color: var(--warn-d, #8a5a00); border: 1px solid var(--line, #d7e3f4);
-  font-size: var(--fs-md, 14px);
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); line-height: var(--lh);
+  background: #fff8e6; color: var(--warn-d); border: 1.5px solid rgba(255, 177, 46, .8); font-size: var(--fs-md);
 }
-.ctl-layout { display: grid; grid-template-columns: minmax(200px, 260px) 1fr; gap: var(--sp-4, 16px); align-items: start; }
-.ctl-side {
-  display: grid; gap: var(--sp-3, 12px); position: sticky; top: var(--sp-4, 16px);
-  background: var(--surface, #fff); border: 1px solid var(--line, #d7e3f4); border-radius: var(--r-lg, 20px);
-  padding: var(--sp-3, 12px); box-shadow: var(--sh-card, 0 1px 2px rgba(13, 28, 58, .06));
+.ctl-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: var(--sp-4); align-items: start; }
+
+/* the conversation list and the thread are cards, like .ops-card */
+.ctl-side, .ctl-thread {
+  min-width: 0; border-radius: var(--r-lg); border: 1px solid rgba(255, 255, 255, .95); outline: 1px solid var(--line); outline-offset: -1px;
+  background: linear-gradient(175deg, rgba(255, 255, 255, .97), rgba(246, 251, 255, .93)); box-shadow: var(--sh-card);
 }
-.ctl-convs { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1, 4px); max-height: 52vh; overflow: auto; }
+.ctl-side { display: grid; gap: var(--sp-3); position: sticky; top: 76px; padding: var(--sp-3); }
+.ctl-side > .btn { width: 100%; }
+.ctl-convs { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 52vh; overflow: auto; }
 .ctl-conv {
-  width: 100%; text-align: left; display: grid; gap: 2px; padding: var(--sp-2, 8px) var(--sp-3, 12px);
-  border: 1px solid transparent; border-radius: var(--r-sm, 10px); background: transparent; cursor: pointer;
-  font: inherit; color: var(--ink, #0d1c3a);
+  width: 100%; text-align: left; display: grid; gap: 2px; padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; cursor: pointer;
+  font: inherit; color: var(--ink); transition: background .15s, border-color .15s;
 }
-.ctl-conv:hover { background: var(--surface-2, #f4f8fe); }
-.ctl-conv.is-on { background: var(--accent-soft, #e8eeff); border-color: var(--accent, #2f5bff); }
-.ctl-conv-title { font-size: var(--fs-base, 13px); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctl-conv small { font-size: var(--fs-xs, 11px); color: var(--ink-3, #4f668c); }
-.ctl-settings summary { cursor: pointer; font-size: var(--fs-sm, 12px); color: var(--ink-2, #2b4470); }
-.ctl-settings-form { display: grid; gap: var(--sp-2, 8px); margin-top: var(--sp-2, 8px); font-size: var(--fs-sm, 12px); }
-.ctl-settings-form .field { display: grid; gap: 2px; }
-.ctl-settings-form input[type=text], .ctl-settings-form select {
-  font: inherit; padding: 6px 8px; border: 1px solid var(--line, #d7e3f4); border-radius: var(--r-xs, 6px);
+.ctl-conv:hover { background: var(--accent-soft); }
+.ctl-conv:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.ctl-conv.is-on { background: var(--accent-soft); border-color: rgba(47, 91, 255, .45); }
+.ctl-conv-title { font: 600 var(--fs-base)/1.4 var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctl-conv small { font-size: var(--fs-xs); color: var(--ink-3); }
+.ctl-convs .empty, .ctl-messages .empty { padding: var(--sp-3); font-size: var(--fs-sm); }
+
+/* settings: a small form in the side card */
+.ctl-settings { border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+.ctl-settings summary { cursor: pointer; font: 700 var(--fs-sm) var(--display); color: var(--ink-2); }
+.ctl-settings-form { display: grid; gap: var(--sp-3); margin-top: var(--sp-3); font-size: var(--fs-sm); }
+.ctl-settings-form .field { display: grid; gap: 4px; color: var(--ink-2); font-weight: 600; }
+/* the on/off checkbox reads as a switch, its label beside it */
+.ctl-settings-form .field:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: var(--sp-2); }
+.ctl-settings-form input[type="text"], .ctl-settings-form select {
+  width: 100%; max-width: none; min-height: var(--control-h); padding: 6px 10px; font: var(--fs-base) var(--sans); color: var(--ink);
+  background: #fff; border: 1.5px solid var(--line-2); border-radius: var(--r-sm);
 }
-.ctl-thread {
-  display: grid; grid-template-rows: 1fr auto; gap: var(--sp-3, 12px); min-height: 60vh;
-  background: var(--surface, #fff); border: 1px solid var(--line, #d7e3f4); border-radius: var(--r-lg, 20px);
-  padding: var(--sp-4, 16px); box-shadow: var(--sh-card, 0 1px 2px rgba(13, 28, 58, .06));
-}
-.ctl-messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
-.ctl-messages .empty, .ctl-convs .empty { color: var(--ink-3, #4f668c); font-size: var(--fs-sm, 12px); padding: var(--sp-2, 8px); }
+.ctl-settings-form input[type="text"]:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.ctl-settings-form .btn { justify-self: start; }
+
+/* the thread */
+.ctl-thread { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: var(--sp-3); min-height: min(64vh, 620px); padding: var(--sp-4) var(--sp-5); }
+.ctl-messages { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
 .ctl-msg {
-  max-width: min(760px, 92%); padding: var(--sp-3, 12px) var(--sp-4, 16px); border-radius: var(--r-md, 14px);
-  border: 1px solid var(--line, #d7e3f4); display: grid; gap: var(--sp-2, 8px);
+  max-width: min(760px, 88%); padding: var(--sp-3) var(--sp-4); border-radius: var(--r-md); display: grid; gap: var(--sp-2);
+  border: 1px solid var(--line);
 }
-.ctl-msg.is-owner { align-self: flex-end; background: var(--accent-soft, #e8eeff); }
-.ctl-msg.is-control { align-self: flex-start; background: var(--surface-2, #f4f8fe); }
-.ctl-msg-head { display: flex; align-items: center; gap: var(--sp-2, 8px); font-size: var(--fs-sm, 12px); color: var(--ink-2, #2b4470); }
-.ctl-msg-head time { color: var(--ink-3, #4f668c); }
-.ctl-msg-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-md, 14px); line-height: var(--lh, 1.55); color: var(--ink, #0d1c3a); }
-.ctl-msg-facts { font-size: var(--fs-xs, 11px); color: var(--ink-3, #4f668c); }
-.ctl-msg-facts.is-odd { color: var(--bad-d, #b42335); font-weight: 600; }
-.ctl-relays { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: var(--fs-sm, 12px); color: var(--ink-2, #2b4470); }
-.ctl-relays code { font-family: var(--mono, ui-monospace, monospace); }
-.ctl-msg-error { display: flex; align-items: center; gap: var(--sp-2, 8px); font-size: var(--fs-sm, 12px); color: var(--bad-d, #b42335); }
-.ctl-run { font-size: var(--fs-xs, 11px); color: var(--accent, #2f5bff); }
-.ctl-composer { display: grid; gap: var(--sp-2, 8px); border-top: 1px solid var(--line, #d7e3f4); padding-top: var(--sp-3, 12px); }
-.ctl-label { font-size: var(--fs-sm, 12px); color: var(--ink-2, #2b4470); }
+.ctl-msg.is-owner { align-self: flex-end; background: var(--accent-soft); border-color: rgba(47, 91, 255, .3); border-bottom-right-radius: var(--r-xs); }
+.ctl-msg.is-control { align-self: flex-start; background: #fff; border-bottom-left-radius: var(--r-xs); box-shadow: var(--sh-sm); }
+.ctl-msg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--sp-2); font: 700 var(--fs-sm) var(--display); color: var(--ink-2); }
+.ctl-msg-head time { font: 400 var(--fs-xs) var(--mono); color: var(--ink-3); }
+.ctl-msg-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-md); line-height: var(--lh-loose); color: var(--ink); }
+.ctl-msg-facts { font-size: var(--fs-xs); color: var(--ink-3); }
+.ctl-msg-facts.is-odd { color: var(--bad-d); font-weight: 600; }
+.ctl-relays { list-style: none; margin: 0; padding: var(--sp-2) 0 0; border-top: 1px dashed var(--line-2); display: grid; gap: 2px; font-size: var(--fs-sm); color: var(--ink-2); }
+.ctl-relays code { font: var(--fs-xs) var(--mono); }
+.ctl-msg-error { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); color: var(--bad-d); }
+.ctl-run { font: 600 var(--fs-xs) var(--mono); color: var(--accent-d); }
+/* C1b: a relay / launch waiting for the owner's confirm card, and the ones that did not run */
+.ctl-proposals li[data-state="proposed"] small { color: var(--warn-d); font-weight: 600; }
+.ctl-proposals li[data-state="refused"] small, .ctl-proposals li[data-state="failed"] small { color: var(--bad-d); }
+
+/* the composer */
+.ctl-composer { display: grid; gap: var(--sp-2); border-top: 1px solid var(--line); padding-top: var(--sp-3); }
+.ctl-label { font: 700 var(--fs-sm) var(--display); color: var(--ink-2); }
 .ctl-composer textarea {
-  font: inherit; font-size: var(--fs-md, 14px); line-height: var(--lh, 1.55); resize: vertical; min-height: 72px;
-  padding: var(--sp-2, 8px) var(--sp-3, 12px); border: 1px solid var(--line, #d7e3f4); border-radius: var(--r-sm, 10px);
+  font: var(--fs-md)/var(--lh) var(--sans); color: var(--ink); resize: vertical; min-height: 76px; width: 100%;
+  padding: var(--sp-2) var(--sp-3); background: #fff; border: 1.5px solid var(--line-2); border-radius: var(--r-sm); transition: border-color .15s;
 }
-.ctl-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2, 8px); }
-.ctl-hint { color: var(--ink-3, #4f668c); font-size: var(--fs-xs, 11px); }
-.control-page .toast[data-tone=bad] { border-color: var(--bad, #e5484d); }
-@media (max-width: 760px) {
-  .ctl-layout { grid-template-columns: 1fr; }
+.ctl-composer textarea:hover { border-color: rgba(47, 91, 255, .45); }
+.ctl-composer textarea:focus-visible { outline: 3px solid var(--accent); outline-offset: 1px; }
+.ctl-composer-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); }
+.ctl-hint { color: var(--ink-3); font-size: var(--fs-xs); }
+.control-page .toast[data-tone="bad"] { border-left-color: var(--bad); }
+
+@media (max-width: 980px) {
+  .ctl-layout { grid-template-columns: minmax(0, 1fr); }
   .ctl-side { position: static; }
+  .ctl-convs { max-height: 30vh; }
+}
+@media (max-width: 760px) {
+  .ctl-thread { padding: var(--sp-3); min-height: 52vh; }
   .ctl-msg { max-width: 100%; }
 }
-@media (prefers-reduced-motion: reduce) { .ctl-conv { transition: none; } }
-.ctl-proposals li[data-state=proposed] small { color: var(--warn-d, #8a5a00); font-weight: 600; }
-.ctl-proposals li[data-state=refused] small, .ctl-proposals li[data-state=failed] small { color: var(--bad-d, #b42335); }

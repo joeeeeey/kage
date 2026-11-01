@@ -529,6 +529,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, (self.server.web/'ops.html').read_bytes(), 'text/html; charset=utf-8')
             assets = {'/': ('index.html', 'text/html; charset=utf-8'),
                       '/index.html': ('index.html', 'text/html; charset=utf-8'),
+                      '/base.css': ('base.css', 'text/css; charset=utf-8'),
                       '/app.css': ('app.css', 'text/css; charset=utf-8'),
                       '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                       '/ops.css': ('ops.css', 'text/css; charset=utf-8'),

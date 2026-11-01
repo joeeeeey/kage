@@ -1310,13 +1310,28 @@
     // top inset leaves room for the HUD card with its legend
     return scene.vw < 700 ? { t: 72, r: 54, b: 86, l: 8 } : { t: 92, r: 64, b: 76, l: 16 };
   }
-  function camFor(rect, kMin, kMax) {
-    const { t, r, b, l } = insets();
+  function hudBox() {
+    // the legend card (top left) in scene pixels, or null while it is hidden
+    const el = document.querySelector(".hud-tl");
+    if (!el || !scene.el || !el.getClientRects().length) return null;
+    const r = el.getBoundingClientRect(), s = scene.el.getBoundingClientRect();
+    return r.width && r.height ? { right: r.right - s.left, bottom: r.bottom - s.top } : null;
+  }
+  function camWithin(rect, kMin, kMax, ins) {
+    const { t, r, b, l } = ins;
     const aw = Math.max(80, scene.vw - l - r), ah = Math.max(80, scene.vh - t - b);
     const raw = Math.min(aw / rect.w, ah / rect.h);
     const k = clamp(raw, kMin, kMax);
     if (raw < kMin) return { k, x: l + 8 - rect.x * k, y: t + 4 - rect.y * k };
     return { k, x: l + (aw - rect.w * k) / 2 - rect.x * k, y: t + (ah - rect.h * k) / 2 - rect.y * k };
+  }
+  function camFor(rect, kMin, kMax) {
+    const base = insets(), hud = hudBox();
+    if (!hud) return camWithin(rect, kMin, kMax, base);
+    // no node starts under the legend card: its box is reserved beside it or below it, whichever leaves the map larger
+    const beside = camWithin(rect, kMin, kMax, { ...base, l: Math.max(base.l, hud.right + 12) });
+    const below = camWithin(rect, kMin, kMax, { ...base, t: Math.max(base.t, hud.bottom + 12) });
+    return beside.k > below.k + 1e-6 ? beside : below;
   }
   function fitAll(instant) {
     const lay = scene.layout;
