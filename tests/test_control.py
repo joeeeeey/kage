@@ -683,10 +683,11 @@ class QuietControlRunCardsTest(unittest.TestCase):
     def card_status(self, task, status, control_on=True):
         from kage.core import dispatch as D
         posted = []
+        config = {'intake': {}} if control_on is None else {'control': {'enabled': control_on}, 'intake': {}}
         me = types.SimpleNamespace(
             _cfg_value=lambda key, default: True, _dispatch=lambda did: {'task_id': task, 'task_key': task},
-            config=lambda: {'control': {'enabled': control_on}, 'intake': {}},
-            rt=types.SimpleNamespace(worker_config=wconfig(tempfile.mkdtemp())),
+            config=lambda: config,
+            rt=types.SimpleNamespace(worker_config=wconfig(tempfile.mkdtemp())), core=types.SimpleNamespace(key='owner'),
             _card_text=lambda d: posted.append(status) or (_ for _ in ()).throw(RuntimeError('posted')))
         me._control_task = lambda d: D.Dispatcher._control_task(me, d)
         try:
@@ -698,8 +699,12 @@ class QuietControlRunCardsTest(unittest.TestCase):
     def test_quiet_statuses(self):
         for status in ('running', 'success', 'retrying', 'fallback', 'resumed', 'handed_back'):
             self.assertEqual(self.card_status('owner-control', status), [], status)
-            self.assertEqual(self.card_status('owner-control', status, control_on=False), [status], status)
+            # C3: also while the entry is off or not configured at all (control-bootstrap's first run starts before
+            # the switch)
+            self.assertEqual(self.card_status('owner-control', status, control_on=False), [], status)
+            self.assertEqual(self.card_status('owner-control', status, control_on=None), [], status)
             self.assertEqual(self.card_status('some-task', status), [status], status)
+            self.assertEqual(self.card_status('some-task', status, control_on=None), [status], status)
         for status in ('failed', 'needs_owner', 'paused'):
             self.assertEqual(self.card_status('owner-control', status), [status], status)
 

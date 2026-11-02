@@ -21,12 +21,15 @@ States: received -> queued -> working -> answered | failed; `refused` is never s
 Tables are created on first use (an instance that never turns the entry on keeps its database as it was).
 """
 from __future__ import annotations
+from collections import OrderedDict, deque
 import datetime as dt
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
 import re
+import threading
 import time
 import uuid
 
@@ -59,6 +62,12 @@ THREAD_ACTIVE = 86400                  # a control thread's replies are polled o
 THREAD_HOT = 3600                      # every poll within an hour of it,
 THREAD_IDLE_POLL = 300                 # then every 5 minutes
 THREAD_POLL_MAX = 5                    # control threads per poll (the least recently polled first)
+WORDS_TTL = 60                         # C3: the console keeps Slack words it re-read in memory this long (never on disk)
+WORDS_ERROR_TTL = 15                   # ... and a failed read this long
+WORDS_READS_PER_MINUTE = 6             # Slack reads the console may make a minute (one per opened conversation)
+WORDS_MAX_CACHED = 32                  # conversations held in memory
+WORDS_PAGE = 200                       # messages of one conversation's thread read at once
+TEXT_STATES = ('stored', 'expired', 'in_slack', 'slack', 'slack_edited', 'unreadable', 'busy')
 TS_RE = re.compile(r'\d+\.\d+')
 CHANNEL_RE = re.compile(r'[CG][A-Z0-9]{2,}')
 USER_RE = re.compile(r'[UW][A-Z0-9]{2,}')
@@ -682,9 +691,9 @@ class Control:
         rid = _new_id('cm')
         facts = {'followup': bool(followup)}
         stored = text
-        if m['source'] == 'slack':  # C2: the answer goes into the message's thread (bot); its text stays in Slack
+        if m['source'] == 'slack':  # C2: the answer goes into the message's thread (bot); C3: its text is stored too (the
+            # run's own words, under the same retention as a console answer; the owner's Slack words never are)
             facts['slack_ts'] = self._slack_post(rt, db, m, text, 'control_reply')
-            stored = None
         with _transaction(db):
             db.execute('INSERT INTO control_messages (message_id,conversation_id,source,role,text,digest,facts,state,'
                        "needs_answer,reply_to,smoke,created_at,updated_at) VALUES (?,?,?,'control',?,?,?,'answered',?,?,?,"
@@ -1030,7 +1039,9 @@ class Control:
         return out
 
     # ---- the console's read model --------------------------------------------------------------------------------
-    def overview(self, db, config, conversation=None, limit=40):
+    def overview(self, db, config, conversation=None, limit=40, words=None):
+        """The console's view. `words` (C3, the dashboard's SlackWords): a Slack conversation's messages whose text is
+        not stored get it re-read from Slack, in memory only (see `text_state`)."""
         cfg = self.settings(config)
         out = {'enabled': cfg['enabled'], 'task': cfg['task'], 'provider': cfg['provider'], 'model': cfg['model'],
                'effort': cfg['effort'], 'allow_launch': cfg['allow_launch'], 'limits': {
@@ -1058,9 +1069,49 @@ class Control:
                                 (conversation,)).fetchone() if _has_table(db, 'control_threads') else None
             if thread is not None:  # C2: a conversation the owner started in the card channel
                 out['conversation']['slack'] = {'channel': thread[0], 'root': thread[1]}
-            out['messages'] = [self.public(db, dict(r)) for r in db.execute(
+            rows = [dict(r) for r in db.execute(
                 'SELECT * FROM control_messages WHERE conversation_id=? ORDER BY rowid', (conversation,))]  # as written
+            out['messages'] = [self.public(db, r) for r in rows]
+            if thread is not None:
+                out['conversation']['words'] = self._fill_words(rows, out['messages'], thread[0], thread[1], words)
         return out
+
+    def _fill_words(self, rows, messages, channel, root, words):
+        """C3: the text of a Slack conversation's messages that are not stored (the owner's words; answers from before
+        C3 or past retention), re-read from Slack through `words` with the owner's token. Each message gets
+        `text_state`: slack (read now), slack_edited (changed in Slack since it was recorded: the current text, never
+        relayed), unreadable (无法读取原文), busy (the read budget is used up: `retry_after`). Returns the read's
+        summary for the conversation."""
+        want = {}
+        for r, p in zip(rows, messages):
+            if p['text_state'] != 'in_slack':
+                continue
+            ts = r['ts'] if r.get('channel') and r.get('ts') else json.loads(r['facts'] or '{}').get('slack_ts')
+            if ts and TS_RE.fullmatch(str(ts)):
+                want[str(ts)] = (r, p)
+            else:
+                p['text_state'] = 'unreadable'
+        if not want:
+            return {'state': 'none'}
+        if words is None:
+            return {'state': 'not_read'}
+        try:
+            found, info = words.thread(channel, root)
+        except WordsUnavailable as exc:
+            for r, p in want.values():
+                p['text_state'] = exc.state
+                if exc.retry_after:
+                    p['retry_after'] = exc.retry_after
+            return {'state': exc.state, 'error': exc.code, 'retry_after': exc.retry_after}
+        for ts, (r, p) in want.items():
+            m = found.get(ts)
+            if m is None:
+                p['text_state'] = 'unreadable'
+                continue
+            raw = m.get('text') or ''
+            p['text'] = html.unescape(str(raw))[:MAX_REPLY]
+            p['text_state'] = 'slack' if digest(raw) == r['digest'] else 'slack_edited'
+        return info
 
     def public(self, db, m):
         """A message as the console shows it: text, state, request facts, relays (task, mode, time), error."""
@@ -1069,12 +1120,19 @@ class Control:
                'needs_answer': bool(m['needs_answer']), 'reply_to': m['reply_to'], 'error': m['error'],
                'run_id': m['run_id'], 'facts': json.loads(m['facts'] or '{}'), 'created_at': _iso(m['created_at']),
                'updated_at': _iso(m['updated_at']), 'relays': []}
+        # C3: where the text comes from: stored (console words, the run's answers), expired (past retention), in_slack (a
+        # Slack message whose text is not stored: the owner's words, or an answer from before C3 / past retention;
+        # the dashboard re-reads it, see _fill_words)
+        out['text_state'] = 'stored' if m['text'] is not None else 'expired'
         if m.get('channel') and m.get('ts'):  # C2: a Slack message (the console links to it; its text stays in Slack)
             out['slack'] = {'channel': m['channel'], 'ts': m['ts']}
             out['expired'] = False
+            out['text_state'] = 'in_slack'
         elif m['source'] == 'slack':
             out['slack'] = {'reply_ts': json.loads(m['facts'] or '{}').get('slack_ts')}
             out['expired'] = False
+            if m['text'] is None:
+                out['text_state'] = 'in_slack'
         if m['role'] == 'owner':
             out['relays'] = [{'task_id': r['task_id'], 'mode': r['mode'], 'at': _iso(r['at'])} for r in db.execute(
                 'SELECT task_id, mode, at FROM control_relays WHERE message_id=? ORDER BY at', (m['message_id'],))]
@@ -1162,6 +1220,95 @@ class Control:
             lines += ['', self.msg('control.relay.note', note=note)]
         lines += ['', self.msg('control.relay.tail', name=self.name)]
         return '\n'.join(lines) + '\n'
+
+
+class WordsUnavailable(Exception):
+    """No Slack words for the console now: `state` unreadable (无法读取原文) or busy (try again in `retry_after` s)."""
+
+    def __init__(self, state, code, retry_after=None):
+        super().__init__(code)
+        self.state, self.code, self.retry_after = state, code, retry_after
+
+
+class SlackWords:
+    """C3: Slack conversations' words for the console, re-read on demand with the owner's user token (read-only: one
+    conversations.replies of the conversation's thread), held only in this process's memory for WORDS_TTL (a failed
+    read WORDS_ERROR_TTL); at most WORDS_READS_PER_MINUTE reads a minute, one at a time per thread, and a 429 pauses
+    every read for its Retry-After. Nothing is written anywhere. `reader` has authorize() and request(method, params)
+    (the dashboard's preview service: the owner's user token, its identity checked)."""
+
+    def __init__(self, reader, clock=time.time):
+        self.reader, self.clock = reader, clock
+        self.lock = threading.Lock()
+        self.cache = OrderedDict()   # (channel, root) -> (expires, ({ts: message}, info) | WordsUnavailable)
+        self.reads = deque()         # times of the reads of the last minute
+        self.cooldown = 0.0
+        self.inflight = set()
+
+    def thread(self, channel, root):
+        """({ts: message}, info) of the thread rooted at `root`, from memory or one read; raises WordsUnavailable."""
+        if not (CHANNEL_RE.fullmatch(str(channel)) and TS_RE.fullmatch(str(root))):
+            raise WordsUnavailable('unreadable', 'invalid_thread')
+        key, now = (channel, str(root)), self.clock()
+        with self.lock:
+            for k, (expires, _) in list(self.cache.items()):
+                if expires <= now:
+                    self.cache.pop(k, None)
+            hit = self.cache.get(key)
+            if hit is not None:
+                if isinstance(hit[1], WordsUnavailable):
+                    raise hit[1]
+                return hit[1][0], {**hit[1][1], 'state': 'cached'}
+            if self.cooldown > now:
+                raise WordsUnavailable('busy', 'ratelimited', max(1, int(self.cooldown - now + 0.999)))
+            while self.reads and self.reads[0] <= now - 60:
+                self.reads.popleft()
+            if len(self.reads) >= WORDS_READS_PER_MINUTE:
+                raise WordsUnavailable('busy', 'read_budget', max(1, int(self.reads[0] + 60 - now + 0.999)))
+            if key in self.inflight:
+                raise WordsUnavailable('busy', 'read_in_progress', 2)
+            self.reads.append(now)
+            self.inflight.add(key)
+        entry = None
+        try:
+            self.reader.authorize()
+            page = self.reader.request('conversations.replies', {'channel': channel, 'ts': str(root), 'oldest': str(root),
+                                                                 'inclusive': True, 'limit': WORDS_PAGE})
+            found = {str(m['ts']): m for m in page.get('messages') or []
+                     if isinstance(m, dict) and TS_RE.fullmatch(str(m.get('ts') or ''))}
+            if str(root) not in found:
+                raise WordsUnavailable('unreadable', 'message_not_found')
+            info = {'state': 'read', 'read_at': _iso(now), 'expires_at': _iso(now + WORDS_TTL),
+                    'partial': bool(page.get('has_more'))}
+            entry = (now + WORDS_TTL, (found, info))
+            return found, info
+        except WordsUnavailable as exc:
+            entry = (now + WORDS_ERROR_TTL, exc)
+            raise
+        except Exception as exc:  # noqa: BLE001 - the page says 无法读取原文; the code names the kind only
+            code = getattr(exc, 'code', None)
+            if code == 429 or code == 'ratelimited' or 'ratelimited' in str(exc):
+                try:
+                    delay = max(WORDS_ERROR_TTL, int(float(exc.headers.get('Retry-After', 60))))
+                except (AttributeError, TypeError, ValueError):
+                    delay = 60
+                with self.lock:
+                    self.cooldown = max(self.cooldown, self.clock() + delay)
+                error = WordsUnavailable('busy', 'ratelimited', delay)
+            else:
+                delay = WORDS_ERROR_TTL
+                error = WordsUnavailable('unreadable', code if isinstance(code, str) and re.fullmatch(
+                    r'[a-z_]{1,60}', code) else type(exc).__name__)
+            entry = (now + delay, error)
+            raise error from None
+        finally:
+            with self.lock:
+                self.inflight.discard(key)
+                if entry is not None:
+                    self.cache[key] = entry
+                    self.cache.move_to_end(key)
+                    while len(self.cache) > WORDS_MAX_CACHED:
+                        self.cache.popitem(last=False)
 
 
 # ---- module helpers ------------------------------------------------------------------------------------------------

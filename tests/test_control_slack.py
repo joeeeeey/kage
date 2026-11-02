@@ -10,6 +10,7 @@ import tempfile
 import time
 import types
 import unittest
+import urllib.error
 import unittest.mock
 
 from kage.adapters.slack import envelope as SE
@@ -54,7 +55,8 @@ class FakeSlack:
                 msgs = [m for m in msgs if float(m['ts']) <= float(p['latest'])]
             return self.page(msgs, p)
         if endpoint == 'chat.postMessage':
-            ts = f'{9000 + len(self.posted)}.000001'
+            ts = f'{float(json_body["thread_ts"]) + 1 + len(self.posted):.6f}' if json_body.get('thread_ts') else \
+                f'{9000 + len(self.posted)}.000001'  # a reply comes after its thread's root, as in Slack
             self.posted.append({**json_body, 'ts': ts})
             if json_body.get('thread_ts'):
                 self.threads.setdefault(json_body['thread_ts'], []).append(
@@ -413,8 +415,9 @@ class SlackSourceTest(unittest.TestCase):
         self.assertIn((CHANNEL, 'control_reply'), self.rt.guarded)
         self.assertEqual(self.rt.sends[-1][2], 'control_reply')
         stored = self.db.execute("SELECT text, facts FROM control_messages WHERE role='control'").fetchone()
-        self.assertIsNone(stored['text'])
+        self.assertEqual(stored['text'], '已转给 release-task。')  # C3: the run's own answer is stored
         self.assertEqual(json.loads(stored['facts'])['slack_ts'], post['ts'])
+        self.assertIsNone(self.db.execute("SELECT text FROM control_messages WHERE role='owner'").fetchone()[0])
 
     def test_an_edited_message_is_never_relayed_and_confirm_slack_asks_first(self):
         self.rt.add_task('release-task', session=TARGET_SESSION)
@@ -451,6 +454,147 @@ class SlackSourceTest(unittest.TestCase):
         self.assertEqual(view['messages'][0]['slack'], {'channel': CHANNEL, 'ts': m['ts']})
         self.assertIsNone(view['messages'][0]['text'])
         self.assertFalse(view['messages'][0]['expired'])
+
+
+class Reader:
+    """The dashboard's preview service as SlackWords sees it: authorize() and request(); every read recorded."""
+
+    def __init__(self, slack, fail=None):
+        self.slack, self.fail, self.reads, self.authorized = slack, fail, [], 0
+
+    def authorize(self):
+        self.authorized += 1
+
+    def request(self, method, params):
+        self.reads.append((method, dict(params)))
+        if self.fail is not None:
+            raise self.fail
+        return self.slack.api_call(method, 'user-token', params)
+
+
+class ConsoleWordsTest(unittest.TestCase):
+    """C3: /control shows a Slack conversation: the run's own answers are stored; the owner's words are re-read from
+    Slack on view (memory only, a short TTL, a read budget), with a clear state when they cannot be read."""
+    setUp, push, hold = SlackSourceTest.setUp, SlackSourceTest.push, SlackSourceTest.hold
+
+    def config(self):
+        return json.loads((Path(self.tmp) / 'config.json').read_text())
+
+    def conversation(self, text='发布那件事进度如何？', at=10):
+        m = self.slack.say(self.t(at), text)
+        mid = self.push(m)['message_id']
+        return m, mid, self.c._row(self.db, mid)['conversation_id']
+
+    def view(self, conversation, words):
+        return self.c.overview(self.db, self.config(), conversation, words=words)
+
+    def dump(self):
+        return [tuple(r) for r in self.db.execute('SELECT * FROM control_messages ORDER BY rowid')]
+
+    def test_the_owners_words_are_read_from_slack_on_view_and_held_in_memory_only(self):
+        m, mid, cv = self.conversation()
+        self.hold()
+        self.c.reply(self.rt, self.db, 'db', mid, '明天上线。', now=self.now)
+        clock = [self.now]
+        reader = Reader(self.slack)
+        words = C.SlackWords(reader, clock=lambda: clock[0])
+        before = self.dump()
+        view = self.view(cv, words)
+        owner, answer = view['messages']
+        self.assertEqual((owner['text'], owner['text_state']), ('发布那件事进度如何？', 'slack'))
+        self.assertEqual((answer['text'], answer['text_state']), ('明天上线。', 'stored'))
+        self.assertEqual(view['conversation']['words']['state'], 'read')
+        self.assertEqual(reader.reads, [('conversations.replies', {'channel': CHANNEL, 'ts': m['ts'], 'oldest': m['ts'],
+                                                                   'inclusive': True, 'limit': C.WORDS_PAGE})])
+        self.assertEqual(self.dump(), before)  # nothing written: the words live in the reader's memory only
+        self.assertEqual(reader.authorized, 1)  # the owner's token, its identity checked by the preview service
+        clock[0] += C.WORDS_TTL - 1
+        self.assertEqual(self.view(cv, words)['conversation']['words']['state'], 'cached')
+        self.assertEqual(len(reader.reads), 1)
+        clock[0] += 2
+        self.assertEqual(self.view(cv, words)['messages'][0]['text_state'], 'slack')
+        self.assertEqual(len(reader.reads), 2)  # after the TTL: read again
+        # without a reader (another site's request, or none configured): the words stay in Slack
+        view = self.view(cv, None)
+        self.assertEqual((view['messages'][0]['text'], view['messages'][0]['text_state']), (None, 'in_slack'))
+        self.assertEqual(view['conversation']['words'], {'state': 'not_read'})
+
+    def test_an_edited_or_deleted_message_and_a_failed_read_say_so(self):
+        m, mid, cv = self.conversation('Hold the release.')
+        reader = Reader(self.slack)
+        clock = [self.now]
+        words = C.SlackWords(reader, clock=lambda: clock[0])
+        self.slack.top[m['ts']]['text'] = 'Delete the release branch.'
+        owner = self.view(cv, words)['messages'][0]
+        self.assertEqual((owner['text'], owner['text_state']), ('Delete the release branch.', 'slack_edited'))
+        del self.slack.top[m['ts']]  # deleted in Slack
+        clock[0] += C.WORDS_TTL + 1
+        view = self.view(cv, words)
+        self.assertEqual((view['messages'][0]['text'], view['messages'][0]['text_state']), (None, 'unreadable'))
+        self.assertEqual(view['conversation']['words']['error'], 'message_not_found')
+        _, _, cv2 = self.conversation('第二件', at=20)
+        failing = C.SlackWords(Reader(self.slack, fail=RuntimeError('Slack API error: channel_not_found')),
+                               clock=lambda: clock[0])
+        view = self.view(cv2, failing)
+        self.assertEqual(view['messages'][0]['text_state'], 'unreadable')
+        self.assertEqual(view['conversation']['words']['state'], 'unreadable')
+
+    def test_reads_are_rate_limited_and_a_429_pauses_them(self):
+        clock = [self.now]
+        reader = Reader(self.slack)
+        words = C.SlackWords(reader, clock=lambda: clock[0])
+        conversations = []
+        for k in range(C.WORDS_READS_PER_MINUTE + 1):
+            m = self.slack.say(self.t(100 + k), f'第 {k} 件')
+            conversations.append(self.c._row(self.db, self.push(m)['message_id'])['conversation_id'])
+        for cv in conversations[:-1]:
+            self.assertEqual(self.view(cv, words)['messages'][0]['text_state'], 'slack')
+        view = self.view(conversations[-1], words)
+        self.assertEqual(view['messages'][0]['text_state'], 'busy')
+        self.assertEqual(view['conversation']['words']['error'], 'read_budget')
+        self.assertTrue(1 <= view['messages'][0]['retry_after'] <= 60)
+        self.assertEqual(len(reader.reads), C.WORDS_READS_PER_MINUTE)
+        clock[0] += 61
+        self.assertEqual(self.view(conversations[-1], words)['messages'][0]['text_state'], 'slack')
+        error = urllib.error.HTTPError('https://slack.com/api', 429, 'rate limited', {'Retry-After': '120'}, None)
+        limited = C.SlackWords(Reader(self.slack, fail=error), clock=lambda: clock[0])
+        view = self.view(conversations[0], limited)
+        self.assertEqual((view['messages'][0]['text_state'], view['messages'][0]['retry_after']), ('busy', 120))
+        limited.reader.fail = None
+        clock[0] += 60
+        self.assertEqual(self.view(conversations[1], limited)['messages'][0]['text_state'], 'busy')  # paused for all
+        clock[0] += 61
+        self.assertEqual(self.view(conversations[1], limited)['messages'][0]['text_state'], 'slack')
+
+    def test_answers_from_before_c3_or_past_retention_are_read_back_from_the_thread(self):
+        m, mid, cv = self.conversation()
+        self.hold()
+        self.c.reply(self.rt, self.db, 'db', mid, '在做。', now=self.now)
+        with transaction(self.db):  # an answer recorded by C2 (its text not stored)
+            self.db.execute("UPDATE control_messages SET text=NULL WHERE role='control'")
+        view = self.view(cv, C.SlackWords(Reader(self.slack)))
+        self.assertEqual((view['messages'][1]['text'], view['messages'][1]['text_state']), ('在做。', 'slack'))
+        # retention: the stored answer text goes like a console answer's after retention_days
+        with transaction(self.db):
+            self.db.execute("UPDATE control_messages SET text='在做。' WHERE role='control'")
+        self.c.sweep(self.rt, self.db, now=self.now + 31 * 86400)
+        self.assertIsNone(self.db.execute("SELECT text FROM control_messages WHERE role='control'").fetchone()[0])
+
+    def test_the_endpoint_reads_slack_only_for_the_page_itself(self):
+        from tests.test_control import ConsoleEndpointTest
+        m, mid, cv = self.conversation()
+        endpoint = ConsoleEndpointTest('test_get_without_a_store_and_a_token_only_on_request')  # its server and call()
+        endpoint.setUp()
+        self.addCleanup(endpoint.doCleanups)
+        reader = Reader(self.slack)
+        endpoint.server.control_words = C.SlackWords(reader)
+        endpoint.server.db_path = Path(self.db.execute('PRAGMA database_list').fetchone()[2])  # this test's store
+        status, data = endpoint.call('GET', f'/api/control?conversation={cv}', headers={'Sec-Fetch-Site': 'cross-site'})
+        self.assertEqual(status, 200)
+        self.assertEqual((data['messages'][0]['text_state'], reader.reads), ('in_slack', []))
+        status, data = endpoint.call('GET', f'/api/control?conversation={cv}', headers={'Sec-Fetch-Site': 'same-origin'})
+        self.assertEqual((data['messages'][0]['text'], data['messages'][0]['text_state']), ('发布那件事进度如何？', 'slack'))
+        self.assertEqual(len(reader.reads), 1)
 
 
 class ReceiverRefsTest(unittest.TestCase):

@@ -335,6 +335,8 @@ class DashboardServer(ThreadingHTTPServer):
         self.page_tokens = {}  # settings page token -> expiry (monotonic)
         self.token_lock = threading.Lock()
         self.previews = self.core.previews.PreviewService(self.db_path)
+        # C3: the owner's Slack words for /api/control, re-read through the preview service's owner token (memory only)
+        self.control_words = _control.SlackWords(self.previews)
         self.cache_lock = threading.Lock()
         self.cached = None
         self.cached_at = 0
@@ -441,8 +443,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/control':  # Phase 2 C1: the control entry (a page token only when the page asks for one)
                 conversation = (query.get('conversation') or [None])[0]
                 token = self.server.issue_page_token() if (query.get('token') or [''])[0] == 'new' else None
+                # C3: a Slack conversation's words are re-read from Slack only for the page itself (or a local tool),
+                # never for another site's request
+                words = self.server.control_words if conversation and self.headers.get(
+                    'Sec-Fetch-Site', 'none') in ('same-origin', 'none') else None
                 try:
-                    return self.respond(200, self.server.core.control_state(self.server.db_path, conversation, token))
+                    return self.respond(200, self.server.core.control_state(self.server.db_path, conversation, token,
+                                                                            words=words))
                 except KeyError:
                     return self.respond(404, {'error': 'unknown_conversation'})
             if path == '/control':
@@ -1627,13 +1634,13 @@ class DashboardCore:
         except ValueError as exc:
             return {}, str(exc)
 
-    def control_state(self, path, conversation=None, token=None):
+    def control_state(self, path, conversation=None, token=None, words=None):
         """/api/control: the switch, model and limits, the conversations, one conversation's messages (text, state,
-        request facts, relays). Read-only."""
+        request facts, relays). Read-only. `words` (C3): a Slack conversation's words re-read from Slack, memory only."""
         config, error = self._control_config()
         db = read_db(path) if Path(path).is_file() else None
         try:
-            out = self._control().overview(db, config, conversation)
+            out = self._control().overview(db, config, conversation, words=words)
         finally:
             if db is not None:
                 db.close()

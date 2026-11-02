@@ -20,6 +20,7 @@ import time
 import uuid
 
 from kage import locale
+from kage.core.worker_config import control_settings as _control_settings
 
 HELD = 'dispatched'
 
@@ -367,9 +368,11 @@ class Dispatcher:
         return config
 
     def _control_task(self, d):
-        """True for a dispatch of the control task while the control entry is on."""
+        """True for a dispatch of the control task: while the control entry is on (its intake role), and also while it
+        is off (C3: control-bootstrap's first run, started before the switch, posts no run card either)."""
         try:
-            return self.rt.worker_config.intake_role(self.config(), d['task_id'] or d['task_key']) == 'control'
+            task = d['task_id'] or d['task_key']
+            return bool(task) and task == _control_settings(self.config(), self.core.key)['task']
         except Exception:  # noqa: BLE001 - a malformed config: the cards as before
             return False
 
