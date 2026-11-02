@@ -1516,7 +1516,11 @@ class Dispatcher:
         _write_private(run_dir / 'prompt.md', prompt)
         if system_prompt:
             _write_private(run_dir / 'system-prompt.md', system_prompt)
-        if layout == 'constant':
+        # B2: a resumed session may have begun with a constant first message, whose rule is to read the Run context from
+        # $<run_context_env> and to change nothing when it is unset; so a resumed run (a retry, a fallback, a new event)
+        # also writes its Run context there, the same block its own message carries.
+        context_file = layout == 'constant' or mode != 'fresh'
+        if context_file:
             _write_private(run_dir / RUN_CONTEXT_FILE, context)
         settings = extra = summary = None
         if provider == 'claude':
@@ -1548,10 +1552,10 @@ class Dispatcher:
                             'rules_sha256': hashlib.sha256(rules.encode()).hexdigest()[:16],
                             **({'first_message': 'constant', 'context_file': RUN_CONTEXT_FILE,
                                 'prompt_sha256': hashlib.sha256(prompt.encode()).hexdigest()[:16]}
-                               if layout == 'constant' else {})}}
+                               if layout == 'constant' else {'context_file': RUN_CONTEXT_FILE} if context_file else {})}}
         meta['cwd'] = cwd
         env = self._env(run_id, d['task_key'], hops, provider, config)
-        if layout == 'constant':
+        if context_file:
             env[rt.RUN_CONTEXT_ENV] = str(run_dir / RUN_CONTEXT_FILE)
         meta['env_injected'] = list(self.last_env_injected)  # names only, never values
         _write_private(run_dir / 'meta.json', json.dumps(meta, ensure_ascii=False, indent=2))
