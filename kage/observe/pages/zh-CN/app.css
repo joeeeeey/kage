@@ -1,6 +1,16 @@
-/* The scene page (index.html): map, HUD, drawer, sheets and inspector. Tokens and shared components: base.css. */
+/* The scene page (index.html, /scene): its toolbar, map, HUD, drawer, sheets and inspector. Tokens, the site bar and
+   the shared components: base.css. */
 
-.app { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.app { height: 100vh; height: 100dvh; display: grid; grid-template-rows: auto auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); }
+
+/* ---------- the scene's own toolbar, under the site bar ---------- */
+.scene-bar {
+  position: relative; z-index: 30; display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap;
+  padding: 8px var(--sp-5); background: rgba(255, 255, 255, .62); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.scene-filters { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; min-width: 0; }
+.tools { display: flex; align-items: center; gap: 8px; }
 
 .mt-ico { width: 9px; height: 9px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); }
 #motion-toggle[aria-pressed="false"] .mt-ico { background: var(--ink-3); box-shadow: none; }
@@ -577,10 +587,7 @@ dialog.sheet.bulk .sheet-body:focus-visible { outline-offset: -3px; }
 
 /* ---------- responsive ---------- */
 @media (max-width: 1600px) {
-  .topbar { gap: 8px 10px; }
-  .topbar .scope-btn small, .topbar .sync small { display: none; }
-  .topbar .field.search { max-width: 210px; }
-  .status-cluster { gap: 6px; }
+  .scene-bar .scope-btn small { display: none; }
 }
 @media (max-width: 1180px) {
   .hud-top { top: 84px; max-width: calc(100% - 100px); }
@@ -595,13 +602,10 @@ dialog.sheet.bulk .sheet-body:focus-visible { outline-offset: -3px; }
   .hud-bc { max-width: calc(100% - 200px); left: 16px; transform: none; }
 }
 @media (max-width: 760px) {
-  .brand { margin-right: auto; }
-  .status-cluster { order: 2; margin-left: 0; }
-  .tools { order: 3; }
-  .scope { order: 4; }
-  #state-field { order: 5; }
-  .field.search { order: 6; flex: 1 1 140px; max-width: none; }
-  .field.compact:not(#state-field) { order: 7; }
+  .scene-bar { padding: 6px 12px; gap: 6px; }
+  .scene-filters { gap: 6px; flex: 1 1 100%; }
+  .scene-filters .field.search { flex: 1 1 140px; max-width: none; }
+  .tools { order: -1; margin-left: auto; }
   #sup-label { display: none; }
   .hud-tl { left: 10px; top: 10px; padding: 7px 11px; max-width: calc(100% - 130px); }
   .hud-title { font-size: 16px; }

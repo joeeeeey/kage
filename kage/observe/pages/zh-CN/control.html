@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#eaf8ff">
-<title>Slack Followup · 总控</title>
+<title>Kage · 总控</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/base.css">
 <link rel="stylesheet" href="/app.css">
@@ -16,7 +16,7 @@
 <a class="skip" href="#ctl-main">跳到正文</a>
 <div class="ops-app">
   <header class="topbar">
-    <a class="brand ops-brand" href="/" aria-label="返回 Slack Followup 场景">
+    <a class="brand" href="/" aria-label="Kage · 总控">
       <svg class="brand-mark" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
         <defs>
           <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
@@ -28,23 +28,23 @@
         <path class="bm-star" d="M20 11.5l2.2 6.3 6.3 2.2-6.3 2.2-2.2 6.3-2.2-6.3-6.3-2.2 6.3-2.2z" fill="url(#bm-g)"/>
       </svg>
       <div class="brand-text">
-        <h1>Slack Followup</h1>
-        <p>数字员工 · 总控</p>
+        <h1>Kage</h1>
+        <p>影分身</p>
       </div>
     </a>
-    <nav class="ops-nav" aria-label="页面">
-      <a class="scope-btn" href="/"><span>联动场景</span><small>SCENE</small></a>
-      <a class="scope-btn" href="/control" data-nav="control" aria-pressed="true" aria-current="page"><span>总控</span><small>CONTROL</small></a>
-      <a class="scope-btn" href="/runs" data-nav="runs"><span>运行记录</span><small>RUNS</small></a>
-      <a class="scope-btn" href="/intake" data-nav="intake"><span>收件</span><small>INTAKE</small></a>
-      <a class="scope-btn" href="/rules" data-nav="rules"><span>规则</span><small>RULES</small></a>
-      <a class="scope-btn" href="/routines" data-nav="routines"><span>定时</span><small>ROUTINES</small></a>
-      <a class="scope-btn" href="/gaps" data-nav="gaps"><span>缺口</span><small>GAPS</small></a>
-      <a class="scope-btn" href="/learning" data-nav="learning"><span>学习</span><small>LEARNING</small></a>
-      <a class="scope-btn" href="/health" data-nav="health"><span>健康</span><small>HEALTH</small></a>
-      <a class="scope-btn" href="/design" data-nav="design"><span>设计</span><small>DESIGN</small></a>
-      <a class="scope-btn" href="/backlog" data-nav="backlog"><span>旧积压</span><small>BACKLOG</small></a>
-      <a class="scope-btn" href="/settings" data-nav="settings"><span>设置</span><small>SETTINGS</small></a>
+    <nav class="ops-nav site-nav" aria-label="页面">
+      <a class="scope-btn" href="/" data-nav="control" title="总控：问任何一件事的进度，或交代某个任务怎么做" aria-current="page" aria-pressed="true"><span>总控</span></a>
+      <a class="scope-btn" href="/scene" data-nav="scene" title="联动场景：AI 会话与 Slack 同事的联动全景"><span>联动场景</span></a>
+      <a class="scope-btn" href="/runs" data-nav="runs" title="数字员工的后台运行、实时日志"><span>运行记录</span></a>
+      <a class="scope-btn" href="/intake" data-nav="intake" title="收件处：私信、@{{owner_name}}、订阅频道的连发与分诊记录（只读）"><span>收件</span></a>
+      <a class="scope-btn" href="/rules" data-nav="rules" title="经验法则引擎：每周结论分布、批准耗时、{{owner_name}} 推翻、规则提议和回测（只读）"><span>规则</span></a>
+      <a class="scope-btn" href="/routines" data-nav="routines" title="各任务的定时任务：下次 / 上次触发、来源和状态（只读）"><span>定时</span></a>
+      <a class="scope-btn" href="/gaps" data-nav="gaps" title="能力阻塞与自动化缺口：按系统 / 类型统计、未解决的阻塞、最常见路径、skill 提议（只读）"><span>缺口</span></a>
+      <a class="scope-btn" href="/learning" data-nav="learning" title="从卡片反馈学规则：按 shape 统计、{{owner_name}} 推翻率、「要不要固化成规则」卡片与采纳（只读，无原文）"><span>学习</span></a>
+      <a class="scope-btn" href="/health" data-nav="health" title="守护进程健康：provider 过载与恢复、投递和领取"><span>健康</span></a>
+      <a class="scope-btn" href="/design" data-nav="design" title="架构设计文档：本地生成的评审页（只读，沙箱里展示，不联网）"><span>设计</span></a>
+      <a class="scope-btn" href="/backlog" data-nav="backlog" title="不会被自动唤醒的旧事件（只读）"><span>旧积压</span></a>
+      <a class="scope-btn" href="/settings" data-nav="settings" title="数字员工配置：模型、路由、调度开关"><span>设置</span></a>
     </nav>
     <div class="status-cluster">
       <div class="chip" id="ctl-chip" data-state="loading" role="status" aria-live="polite">
@@ -55,15 +55,21 @@
     </div>
   </header>
   <main id="ctl-main" class="ops-main ctl-main" tabindex="-1">
-    <section class="ops-head">
-      <p class="eyebrow">CONTROL · 总控</p>
-      <h2>总控</h2>
-      <p class="ops-note">问任何一件事的进度，或交代某个任务怎么做。总控会找到对应的任务，看完情况再回答你；要交代的事，它会把你的原话转给那个任务。</p>
+    <section class="ops-head ctl-head">
+      <div>
+        <p class="eyebrow">CONTROL · 总控</p>
+        <h2>总控</h2>
+        <p class="ops-note">问任何一件事的进度，或交代某个任务怎么做。总控会找到对应的任务，看完情况再回答你；要交代的事，它会把你的原话转给那个任务。</p>
+      </div>
     </section>
-    <div class="ctl-banner" id="ctl-banner" hidden></div>
+    <div class="ctl-banner" id="ctl-banner" role="status" hidden></div>
     <div class="ctl-layout">
       <aside class="ctl-side" aria-label="对话">
-        <button type="button" class="btn primary sm" id="ctl-new">新对话</button>
+        <button type="button" class="btn primary" id="ctl-new">
+          <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>新对话</span>
+        </button>
+        <p class="ctl-side-label">最近的对话</p>
         <ol class="ctl-convs" id="ctl-convs"></ol>
         <details class="ctl-settings" id="ctl-settings">
           <summary>总控设置</summary>
@@ -71,13 +77,17 @@
         </details>
       </aside>
       <section class="ctl-thread" aria-label="消息">
+        <header class="ctl-thread-head" id="ctl-thread-head"></header>
         <ol class="ctl-messages" id="ctl-messages" aria-live="polite"></ol>
         <form class="ctl-composer" id="ctl-form" autocomplete="off">
-          <label class="ctl-label" for="ctl-text">对总控说</label>
-          <textarea id="ctl-text" rows="3" maxlength="4000" placeholder="比如：某件事进度如何？或者：让某个任务换个方向，先停一下，等我明天看。"></textarea>
+          <label class="sr" for="ctl-text">对总控说</label>
+          <textarea id="ctl-text" rows="3" maxlength="4000" placeholder="问进度，或交代一件事。比如：今天有在做哪些事情？"></textarea>
           <div class="ctl-composer-foot">
             <small class="ctl-hint" id="ctl-hint">Ctrl / ⌘ + Enter 发送</small>
-            <button type="submit" class="btn primary" id="ctl-send">发送</button>
+            <button type="submit" class="btn primary" id="ctl-send">
+              <span>发送</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
           </div>
         </form>
       </section>
@@ -85,6 +95,8 @@
   </main>
 </div>
 <div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<script src="/shell.js"></script>
+<script src="/md.js"></script>
 <script src="/control.js"></script>
 </body>
 </html>

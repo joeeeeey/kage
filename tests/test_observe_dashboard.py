@@ -1,8 +1,10 @@
 """The dashboard (kage.observe.dashboard) and its pages (kage.observe.web), bound to a synthetic owner."""
 import json
 from pathlib import Path
+import re
 import shutil
 import sqlite3
+import subprocess
 import tempfile
 import types
 import unittest
@@ -119,6 +121,130 @@ class StylesTest(unittest.TestCase):
         self.assertEqual(get('/base.css', host='evil.example:8776')[0], 403)
         self.assertEqual(get('/tokens.css')[0], 404)
         self.assertEqual(get('/../base.css')[0], 404)
+
+
+def get(pages, target, host='127.0.0.1:8776'):
+    """GET through the handler without a socket (the tests are offline): (status, content type or Location, body)."""
+    handler = D.Handler.__new__(D.Handler)
+    handler.server = types.SimpleNamespace(web=pages, server_port=8776)
+    handler.headers, handler.path, sent, headers = {'Host': host}, target, [], {}
+    handler.respond = lambda status, payload, content_type=None, csp=None: sent.append((status, content_type, payload))
+    handler.send_response = lambda status, message=None: sent.append((status, None, b''))
+    handler.send_header = lambda key, value: headers.__setitem__(key, value)
+    handler.end_headers = lambda: None
+    handler.do_GET()
+    status, ctype, body = sent[0]
+    return (status, headers['Location'], headers) if status == 302 else (status, ctype, body)
+
+
+class ConsoleShellTest(unittest.TestCase):
+    """S2: the console is Kage. / is the control entry (总控) and the scene moved to /scene (an old scene URL redirects
+    there, its query kept); one global nav on every page, 总控 first; the shared shell script on every page; the
+    control answers through the safe Markdown subset (md.js); no page script writes HTML."""
+    NAV = ('control', 'scene', 'runs', 'intake', 'rules', 'routines', 'gaps', 'learning', 'health', 'design',
+           'backlog', 'settings')
+    PAGES = {'control.html': 'control', 'index.html': 'scene', 'ops.html': None}
+
+    def setUp(self):
+        self.pages = W.Pages.for_owner('zh-CN', VALUES)
+
+    def page(self, name):
+        return (self.pages / name).read_bytes()
+
+    def test_home_is_the_control_entry_and_the_scene_moved(self):
+        control, scene = self.page('control.html'), self.page('index.html')
+        for target in ('/', '/control', '/?conversation=cv1', '/control?conversation=cv1', '/control?scope=all'):
+            self.assertEqual(get(self.pages, target), (200, 'text/html; charset=utf-8', control), target)
+        self.assertEqual(get(self.pages, '/scene'), (200, 'text/html; charset=utf-8', scene))
+        self.assertEqual(get(self.pages, '/scene?scope=all'), (200, 'text/html; charset=utf-8', scene))
+        # an old scene URL keeps working: the scene, with its own query
+        for target, location in (('/index.html', '/scene'), ('/index.html?scope=all', '/scene?scope=all'),
+                                 ('/?scope=all&q=x', '/scene?scope=all&q=x'), ('/?q=', '/scene?q='),
+                                 ('/?conversation=cv1&scope=all', '/scene?conversation=cv1&scope=all')):
+            status, where, headers = get(self.pages, target)
+            self.assertEqual((status, where), (302, location), target)
+            self.assertEqual((headers['Content-Length'], headers['Cache-Control']), ('0', 'no-store'))
+            self.assertEqual(headers['Content-Security-Policy'], D.PAGE_CSP)
+        for target in ('/?a=b\r\nSet-Cookie:x', '/?a=b c', '/?a=b\\c', '/?q=' + 'x' * 2001):
+            self.assertEqual(get(self.pages, target)[0], 400, target[:20])
+        self.assertEqual(get(self.pages, '/', host='evil.example:8776')[0], 403)
+        self.assertEqual(get(self.pages, '/scene', host='evil.example:8776')[0], 403)
+
+    def test_brand_and_one_nav_on_every_page(self):
+        for name, current in self.PAGES.items():
+            html = self.page(name).decode()
+            self.assertIn('<title>Kage · ', html, name)
+            self.assertIn('<a class="brand" href="/" aria-label="Kage · 总控">', html, name)
+            self.assertIn('<h1>Kage</h1>', html, name)
+            self.assertIn('<p>影分身</p>', html, name)
+            nav = html[html.index('<nav class="ops-nav site-nav"'):html.index('</nav>', html.index('site-nav'))]
+            items = re.findall(r'<a class="scope-btn" href="([^"]+)" data-nav="([a-z]+)"', nav)
+            self.assertEqual([key for _, key in items], list(self.NAV), name)
+            self.assertEqual(dict((key, href) for href, key in items)['control'], '/')
+            self.assertEqual(dict((key, href) for href, key in items)['scene'], '/scene')
+            marked = re.findall(r'data-nav="([a-z]+)"[^>]*aria-current="page"', nav)
+            self.assertEqual(marked, [current] if current else [], name)  # ops.html: shell.js marks it from the path
+            scripts = re.findall(r'<script src="([^"]+)"></script>', html)
+            self.assertEqual(scripts[0], '/shell.js', name)
+            if name == 'control.html':
+                self.assertEqual(scripts, ['/shell.js', '/md.js', '/control.js'])
+            self.assertNotRegex(html, r'(?i)follow-?up observatory|slack followup')
+        for asset in ('/shell.js', '/md.js'):
+            status, ctype, body = get(self.pages, asset)
+            self.assertEqual((status, ctype, body), (200, 'text/javascript; charset=utf-8', self.page(asset[1:])))
+
+    def test_no_page_script_writes_html(self):
+        """Data reaches the page only as text nodes and checked attributes (createElement / textContent)."""
+        for path in sorted((Path(W.__file__).parent / 'pages' / 'zh-CN').glob('*.js')):
+            text = path.read_text(encoding='utf-8')
+            for sink in (r'\.innerHTML\b', r'\.outerHTML\b', r'insertAdjacentHTML', r'document\.write',
+                         r'\beval\s*\(', r'new\s+Function\b', r'DOMParser', r'createContextualFragment'):
+                self.assertIsNone(re.search(sink, text), f'{path.name}: {sink}')
+
+    @unittest.skipUnless(shutil.which('node'), 'node is not installed')
+    def test_markdown_answers_are_a_safe_subset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = Path(tmp) / 'md.js'
+            md.write_bytes(self.page('md.js'))
+            run = subprocess.run(['node', str(Path(__file__).with_name('md_cases.js')), str(md)],
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr[-800:])
+        out = json.loads(run.stdout)
+        # raw HTML is text; script / image / handler never become elements or attributes
+        self.assertEqual(out['script']['tags'], ['p'])
+        self.assertIn('<script>alert(1)</script>', json.loads(out['script']['text'])[0][2])
+        for case in ('script', 'js_link', 'host_relative', 'quote_injection', 'image', 'ok_links', 'ids', 'rich'):
+            self.assertFalse(set(out[case]['tags']) & {'script', 'img', 'iframe', 'style', 'object', 'svg'}, case)
+            self.assertTrue(set(out[case]['attrs']) <= {'href', 'rel', 'target', 'class', 'title'}, case)
+            for href in out[case]['hrefs']:
+                self.assertRegex(href, r'^(https?://[^/\s"\'<>]|/(?![/\\]))', (case, href))
+        self.assertEqual(out['js_link']['hrefs'], [])
+        self.assertEqual(out['host_relative']['hrefs'], [])
+        self.assertEqual(out['image']['hrefs'], [])
+        self.assertEqual(out['quote_injection']['hrefs'], ['https://ok.example/'])
+        self.assertEqual(out['ok_links']['hrefs'], ['https://example.com/a?b=1#c', 'https://example.com/z',
+                                                    'https://example.com/q', '/runs/r20260101T000000Z-0a1b2c'])
+        tree = json.loads(out['ok_links']['text'])[0]
+        for node in tree[2:]:
+            if isinstance(node, list) and node[1]['href'].startswith('http'):
+                self.assertEqual((node[1]['rel'], node[1]['target']), ('noopener noreferrer', '_blank'))
+        # record ids become links to their own pages; plain words that only look similar stay text
+        self.assertEqual(out['ids']['hrefs'], ['/runs/r20260101T000000Z-0a1b2c', '/gaps/bk0123456789abcd',
+                                               '/rules?check=rc0123456789abcd', '/rules?proposal=rp0123456789abcd',
+                                               '/runs?task=local-task-20260101-sample-task',
+                                               '/runs?task=TEAM-12-some-task'])
+        self.assertTrue(json.loads(out['ids']['text'])[0][-1].endswith('UTF-8 TEAM-12'))
+        self.assertEqual(out['rich']['tags'], ['h3', 'p', 'strong', 'em', 'del', 'code', 'ul', 'li', 'li', 'ul', 'li',
+                                               'ol', 'li', 'li', 'blockquote', 'p', 'div', 'table', 'thead', 'tr', 'th',
+                                               'th', 'tbody', 'tr', 'td', 'td', 'pre', 'code', 'hr'])
+        self.assertIn('"<b>raw</b>"', out['rich']['text'])  # a code block keeps its text, never markup
+        # bounded: a huge input is cut, deep and adversarial inputs stay fast (linear)
+        self.assertTrue(out['huge']['cut'])
+        for case in ('huge', 'deep', 'adversarial'):
+            self.assertLess(out[case]['ms'], 1500, case)
+        # render() builds only allowed elements and attributes, whatever tree it is handed
+        self.assertEqual(out['render']['tags'], ['p', 'a', 'a'])
+        self.assertEqual(out['render']['attrs'], [{'class': 'ok'}, {}, {'href': '/runs/x', 'rel': 'noopener noreferrer'}])
 
 
 class DashboardCoreTest(unittest.TestCase):

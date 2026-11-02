@@ -779,7 +779,7 @@
     return ["暂无" + kind, "快照中没有相关记录。"];
   }
 
-  /* ================= Slack Followup scene ================= */
+  /* ================= Kage scene (联动场景) ================= */
 
   const scene = {
     el: null, world: null, svg: null, nodeHost: null, zoneHost: null, routeHost: null, fxHost: null,
@@ -1657,6 +1657,13 @@
         } else if (!scene.user && scene.layout) fitAll(true);
         else if (scene.layout) { scene.cam = clampCam({ ...scene.cam }); applyCam(); }
       }).observe(sc);
+      // the legend card grows once its counts arrive: the map's fit keeps clear of its new size
+      const hud = document.querySelector(".hud-tl");
+      let hudH = 0;
+      if (hud) new ResizeObserver(() => {
+        const h = hud.offsetHeight;
+        if (Math.abs(h - hudH) > 2 && !scene.user && scene.layout) { hudH = h; fitAll(true); } else hudH = h;
+      }).observe(hud);
     }
     applyCam();
 
@@ -2279,7 +2286,7 @@
     const nums = sessionNumbers(s, wvs);
     const c = countStates(wvs);
     const lines = [
-      "Slack Followup 会话摘要",
+      "Kage 会话摘要",
       `标题：${str(s.label || s.id || s.key)}`,
       `服务方：${info.label}${s.provider ? `（${str(s.provider)}）` : ""}`,
       `会话 ID：${str(s.id) || "—"}`,

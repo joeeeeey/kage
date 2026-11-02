@@ -152,6 +152,9 @@ EDITABLE_KEYS = (
 )
 
 
+CONTROL_QUERY = {'conversation'}  # S2: the query keys the control page (/) reads; any other key on / is an old scene URL
+
+
 OPS_PAGES = ('/runs', '/backlog', '/settings', '/intake', '/rules', '/routines', '/gaps', '/learning', '/health',
              '/design')
 
@@ -452,8 +455,15 @@ class Handler(BaseHTTPRequestHandler):
                                                                             words=words))
                 except KeyError:
                     return self.respond(404, {'error': 'unknown_conversation'})
-            if path == '/control':
+            if path in ('/', '/control'):  # S2: the control entry (总控) is the console's home; /control stays as an alias
+                if path == '/' and set(parse_qs(urlsplit(self.path).query, keep_blank_values=True)) - CONTROL_QUERY:
+                    # an old scene URL with its own parameters: the scene
+                    return self.redirect('/scene', self.path.partition('?')[2])
                 return self.respond(200, (self.server.web/'control.html').read_bytes(), 'text/html; charset=utf-8')
+            if path in ('/scene', '/index.html'):  # S2: the scene (联动场景) moved from / to /scene
+                if path == '/index.html':
+                    return self.redirect('/scene', self.path.partition('?')[2])
+                return self.respond(200, (self.server.web/'index.html').read_bytes(), 'text/html; charset=utf-8')
             if path == '/api/runs':
                 run_filter = (query.get('filter') or ['all'])[0]
                 task = (query.get('task') or [None])[0]
@@ -534,9 +544,9 @@ class Handler(BaseHTTPRequestHandler):
             if path in OPS_PAGES or re.fullmatch(r'/runs/[A-Za-z0-9-]{1,40}', path) or \
                     re.fullmatch(r'/gaps/[a-z0-9]{1,40}', path):
                 return self.respond(200, (self.server.web/'ops.html').read_bytes(), 'text/html; charset=utf-8')
-            assets = {'/': ('index.html', 'text/html; charset=utf-8'),
-                      '/index.html': ('index.html', 'text/html; charset=utf-8'),
-                      '/base.css': ('base.css', 'text/css; charset=utf-8'),
+            assets = {'/base.css': ('base.css', 'text/css; charset=utf-8'),
+                      '/shell.js': ('shell.js', 'text/javascript; charset=utf-8'),
+                      '/md.js': ('md.js', 'text/javascript; charset=utf-8'),
                       '/app.css': ('app.css', 'text/css; charset=utf-8'),
                       '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
                       '/ops.css': ('ops.css', 'text/css; charset=utf-8'),
@@ -551,6 +561,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(404, {'error': 'not_found'})
         except (sqlite3.Error, ValueError, OSError, TypeError):
             return self.respond(503, {'error': 'local_state_unavailable'})
+
+    def redirect(self, target, query=''):
+        """S2: a same-origin redirect to one of the console's own pages (a fixed path), the request's raw query carried
+        over unchanged; a query with a control character, a space or a backslash is refused instead."""
+        if any(ord(c) < 32 or c in ' \\' for c in query) or len(query) > 2000:
+            return self.respond(400, {'error': 'invalid_query'})
+        location = target + ('?' + query if query else '')
+        self.send_response(302)
+        self.send_header('Location', location)
+        self.send_header('Content-Length', '0')
+        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Content-Security-Policy', PAGE_CSP)
+        self.end_headers()
 
     def design_doc(self):
         """GET /design/doc (P39): the generated design HTML's bytes, for the sandboxed iframe on /design, under a CSP that
@@ -1765,7 +1789,7 @@ def cli_main(argv=None, *, description, default_db, default_design_html, default
     os.umask(0o077)
     server = server_class(('127.0.0.1', args.port), args.db.expanduser(), enrich_profiles=not args.no_enrichment,
                           design_html=args.design_html.expanduser())
-    print(f'Follow-up Observatory: http://127.0.0.1:{server.server_port}', flush=True)
+    print(f'Kage console: http://127.0.0.1:{server.server_port}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

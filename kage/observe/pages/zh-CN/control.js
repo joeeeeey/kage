@@ -1,5 +1,6 @@
-// The console's control entry (总控, Phase 2 C1): conversations with the control task. Text is set with textContent
-// only; writes carry the page token and JSON (same-origin, kage.observe.dashboard post_control).
+// The console's control entry (总控, Phase 2 C1; the console's home since S2): conversations with the control task.
+// Text is set with textContent; a control answer goes through md.js (a safe Markdown subset built with createElement,
+// never parsed as HTML). Writes carry the page token and JSON (same-origin, kage.observe.dashboard post_control).
 (function () {
   'use strict';
   const $ = (id) => document.getElementById(id);
@@ -80,11 +81,49 @@
     return f.source || m.source;
   }
 
+  // C3: what the page can show of a message's words (stored, re-read from Slack, or why not)
+  const TEXT_NOTE = {
+    expired: '原文已过保留期', in_slack: '原文在 Slack', unreadable: '无法读取原文',
+  };
+  function bodyFor(m, mine) {
+    const body = h('div', { class: 'ctl-msg-body' });
+    const ts = m.text_state;
+    let placeholder = null;
+    if (ts) {
+      if (ts === 'busy') placeholder = '读取太频繁，' + (m.retry_after || 60) + ' 秒后再看';
+      else if (TEXT_NOTE[ts]) placeholder = TEXT_NOTE[ts];
+    } else if (m.slack && m.text === null) {
+      placeholder = mine ? 'Slack 卡片频道里的消息，原文在 Slack' : '回答在 Slack 讨论串里';
+    } else if (m.expired) {
+      placeholder = TEXT_NOTE.expired;
+    }
+    if (placeholder !== null) {
+      body.classList.add('is-placeholder');
+      body.append(h('span', { text: placeholder }));
+      const link = m.slack && m.slack.link;
+      if (link && (ts === 'in_slack' || ts === 'unreadable' || !ts)) {
+        body.append(' ', h('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: '在 Slack 里打开' }));
+      }
+      return body;
+    }
+    const text = m.text || '';
+    if (mine || m.runtime || !window.KageMd) {  // the owner's own words (and system lines) stay plain text
+      body.classList.add('is-plain');
+      body.textContent = text;
+    } else {  // a control answer: the safe Markdown subset (md.js; never parsed as HTML)
+      body.classList.add('md');
+      body.append(window.KageMd.render(window.KageMd.parse(text)));
+    }
+    return body;
+  }
+
   function messageItem(m) {
     const mine = m.role === 'owner';
-    const li = h('li', { class: 'ctl-msg ' + (mine ? 'is-owner' : 'is-control'), 'data-state': m.state });
+    const who = mine ? '你' : m.runtime ? '系统' : '总控';
+    const li = h('li', { class: 'ctl-msg ' + (mine ? 'is-owner' : m.runtime ? 'is-system' : 'is-control'), 'data-state': m.state });
+    const bubble = h('div', { class: 'ctl-bubble' });
     const head = h('div', { class: 'ctl-msg-head' },
-      h('b', { text: mine ? '你' : m.runtime ? '系统' : '总控' }),
+      h('b', { class: 'ctl-who', text: who }),
       h('time', { datetime: m.created_at, text: clock(m.created_at) }));
     if (mine) {
       head.append(h('span', { class: 'pill', 'data-tone': m.state === 'failed' ? 'bad' : m.state === 'answered' ? 'good' : 'warn',
@@ -92,39 +131,74 @@
     } else if (m.needs_answer) {
       head.append(h('span', { class: 'pill', 'data-tone': 'warn', text: '等你回答' }));
     }
-    li.append(head);
-    const body = h('div', { class: 'ctl-msg-body' });
-    const inSlack = m.slack && m.text === null;
-    body.textContent = inSlack ? (mine ? '（Slack 卡片频道里的消息，原文在 Slack）' : '（回答在 Slack 讨论串里）')
-      : m.expired ? '（原文已过保留期）' : (m.text || '');
-    if (inSlack) body.classList.add('is-slack');
-    li.append(body);
+    bubble.append(head, bodyFor(m, mine));
+    if (m.text_state === 'slack_edited') {
+      bubble.append(h('div', { class: 'ctl-msg-note', text: '已在 Slack 修改（未按修改后的内容执行）' }));
+    }
     if (mine) {
-      const facts = h('div', { class: 'ctl-msg-facts' + (m.facts && m.facts.source === 'console' && !m.facts.browser_like ? ' is-odd' : ''),
-        text: '来源：' + factsLine(m) });
-      li.append(facts);
       if (m.relays && m.relays.length) {
-        li.append(h('ul', { class: 'ctl-relays' }, m.relays.map((r) => h('li', {},
-          h('span', { text: r.mode === 'launch' ? '新开任务 ' : '已转给 ' }), h('code', { text: r.task_id }),
-          h('small', { text: ' · ' + clock(r.at) })))));
+        bubble.append(h('ul', { class: 'ctl-relays' }, m.relays.map((r) => h('li', { class: 'ctl-relay' },
+          h('span', { class: 'ctl-relay-kind', text: r.mode === 'launch' ? '新开任务' : '已转给' }),
+          h('a', { class: 'ctl-relay-task', href: '/runs?task=' + encodeURIComponent(r.task_id) }, h('code', { text: r.task_id })),
+          h('small', { text: clock(r.at) })))));
       }
       if (m.proposals && m.proposals.length) {
-        li.append(h('ul', { class: 'ctl-relays ctl-proposals' }, m.proposals.map((p) => h('li', { 'data-state': p.state },
-          h('span', { text: (p.kind === 'launch' ? '新开任务「' + (p.title || '') + '」' + (p.linear ? '（建工单）' : '') : '转给 ')
-            + (p.kind === 'launch' ? '' : '') }),
-          p.kind === 'launch' ? '' : h('code', { text: p.task_id || '' }),
-          h('small', { text: ' · ' + (PROPOSAL_LABEL[p.state] || p.state) + (p.error ? '：' + label(p.error) : '') })))));
+        bubble.append(h('ul', { class: 'ctl-relays ctl-proposals' }, m.proposals.map((p) => h('li', { class: 'ctl-relay', 'data-state': p.state },
+          h('span', { class: 'ctl-relay-kind', text: p.kind === 'launch' ? '新开任务' : '转给' }),
+          p.kind === 'launch' ? h('span', { class: 'ctl-relay-title', text: '「' + (p.title || '') + '」' + (p.linear ? '（建工单）' : '') })
+            : h('a', { class: 'ctl-relay-task', href: '/runs?task=' + encodeURIComponent(p.task_id || '') }, h('code', { text: p.task_id || '' })),
+          h('small', { text: (PROPOSAL_LABEL[p.state] || p.state) + (p.error ? '：' + label(p.error) : '') })))));
       }
+      bubble.append(h('div', { class: 'ctl-msg-facts' + (m.facts && m.facts.source === 'console' && !m.facts.browser_like ? ' is-odd' : ''),
+        text: '来源：' + factsLine(m) }));
       if (m.state === 'failed') {
-        li.append(h('div', { class: 'ctl-msg-error' },
-          h('span', { text: '没能完成：' + label(m.error || 'failed') + ' ' }),
+        bubble.append(h('div', { class: 'ctl-msg-error' },
+          h('span', { text: '没能完成：' + label(m.error || 'failed') }),
           h('button', { type: 'button', class: 'btn sm ghost', text: '重试', onclick: () => retry(m.id) })));
       } else if (m.state === 'received' && state.data && state.data.waiting) {
-        li.append(h('div', { class: 'ctl-msg-error', text: '在等：' + label(state.data.waiting) }));
+        bubble.append(h('div', { class: 'ctl-msg-error is-wait', text: '在等：' + label(state.data.waiting) }));
       }
-      if (m.run_id) li.append(h('a', { class: 'ctl-run', href: '/runs/' + m.run_id, text: '看这次运行' }));
+      if (m.run_id) bubble.append(h('a', { class: 'ctl-run', href: '/runs/' + m.run_id, text: '看这次运行 →' }));
     }
+    li.append(h('div', { class: 'ctl-avatar', 'aria-hidden': 'true', text: mine ? '你' : m.runtime ? '系' : '控' }), bubble);
     return li;
+  }
+
+  // C3: whether the owner's words of a Slack conversation were read this time
+  function wordsLine(w) {
+    if (!w || !w.state || w.state === 'none' || w.state === 'not_read') return null;
+    if (w.state === 'read' || w.state === 'cached') {
+      return (w.state === 'cached' ? 'Slack 原文（一分钟内的缓存）' : '已从 Slack 读取原文') + (w.partial ? '，有几条没读到' : '');
+    }
+    if (w.state === 'busy') return '读取太频繁，' + (w.retry_after || 60) + ' 秒后再看';
+    if (w.state === 'unreadable') return '无法读取 Slack 原文' + (w.error ? '（' + label(w.error) + '）' : '');
+    return null;
+  }
+
+  function threadHead(d) {
+    const head = $('ctl-thread-head');
+    if (!head) return;
+    const conv = d.conversation || null;
+    const title = conv ? (conv.title || (conv.source === 'slack' ? 'Slack 对话' : '对话')) : '新对话';
+    const sub = conv ? (conv.source === 'slack' ? '来自 Slack 卡片频道' : '来自控制台') : '写下你想问的事或要交代的事';
+    const kids = [h('div', { class: 'ctl-thread-title' }, h('b', { text: title }), h('small', { text: sub }))];
+    const side = h('div', { class: 'ctl-thread-side' });
+    const slack = conv && conv.slack;
+    if (slack && slack.link) side.append(h('a', { class: 'btn sm ghost', href: slack.link, target: '_blank', rel: 'noopener noreferrer', text: '在 Slack 打开' }));
+    const words = wordsLine(conv && conv.words);
+    if (words) side.prepend(h('span', { class: 'ctl-words' + (conv.words.state === 'busy' || conv.words.state === 'unreadable' ? ' is-warn' : ''), text: words }));
+    kids.push(side);
+    head.replaceChildren(...kids);
+  }
+
+  const SUGGEST = ['今天有在做哪些事情？', '哪个任务在等我决定？', '把某个任务先停一下，等我明天看'];
+  function emptyThread() {
+    return h('li', { class: 'ctl-empty' },
+      h('div', { class: 'ctl-empty-mark', 'aria-hidden': 'true' }),
+      h('b', { text: state.conversation ? '这个对话还没有消息' : '问进度，或交代一件事' }),
+      h('p', { text: '总控会找到对应的任务，看完情况再回答你；要交代的事，它会把你的原话转给那个任务。' }),
+      state.conversation ? null : h('div', { class: 'ctl-suggest' }, SUGGEST.map((t) => h('button', {
+        type: 'button', class: 'ctl-chip', text: t, onclick: () => { const ta = $('ctl-text'); ta.value = t; ta.focus(); } }))));
   }
 
   function renderConversations(d) {
@@ -193,18 +267,19 @@
     renderSettings(d);
     const list = $('ctl-messages');
     const msgs = d.messages || [];
+    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     list.replaceChildren(...msgs.map(messageItem));
-    const slack = d.conversation && d.conversation.slack;
-    if (slack && slack.link) {  // C2: a conversation that lives in a Slack thread
-      list.prepend(h('li', { class: 'ctl-slack-link' }, h('a', { href: slack.link, target: '_blank', rel: 'noopener',
-        text: '这段对话在 Slack 卡片频道的讨论串里，点这里打开' })));
-    }
-    if (!msgs.length) list.append(h('li', { class: 'empty', text: state.conversation ? '这个对话还没有消息' :
-      '新对话：在下面写下你想问的事或要交代的事。' }));
+    threadHead(d);
+    if (!msgs.length) list.append(emptyThread());
+    if (atEnd) list.scrollTop = list.scrollHeight;
     $('ctl-send').disabled = !d.enabled || state.sending;
     chip(d.enabled ? 'ok' : 'warn', d.enabled ? '总控已开启' : '总控未开启');
     const open = msgs.some((m) => m.role === 'owner' && OPEN.has(m.state));
-    schedule(open ? 2000 : 15000);
+    // C3: words not readable this time come back after retry_after seconds
+    const waits = [...msgs.filter((m) => m.text_state === 'busy').map((m) => m.retry_after || 60),
+      ...(d.conversation && d.conversation.words && d.conversation.words.state === 'busy' ? [d.conversation.words.retry_after || 60] : [])];
+    const again = open ? 2000 : 15000;
+    schedule(waits.length ? Math.min(again, Math.max(1, Math.min(...waits)) * 1000) : again);
   }
 
   function schedule(ms) {

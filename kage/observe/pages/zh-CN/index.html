@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#eaf8ff">
-<title>Slack Followup</title>
+<title>Kage · 联动场景</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/base.css">
 <link rel="stylesheet" href="/app.css">
 </head>
 <body data-motion="on">
-<a class="skip" href="#scene">跳到Slack Followup场景</a>
+<a class="skip" href="#scene">跳到联动场景</a>
 <div class="app">
 
-  <header class="topbar">
-    <div class="brand" aria-label="Slack Followup">
+  <header class="topbar site-bar">
+    <a class="brand" href="/" aria-label="Kage · 总控">
       <svg class="brand-mark" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
         <defs>
           <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
@@ -27,40 +27,24 @@
         <path class="bm-star" d="M20 11.5l2.2 6.3 6.3 2.2-6.3 2.2-2.2 6.3-2.2-6.3-6.3-2.2 6.3-2.2z" fill="url(#bm-g)"/>
       </svg>
       <div class="brand-text">
-        <h1>Slack Followup</h1>
-        <p>AGENT × SLACK</p>
+        <h1>Kage</h1>
+        <p>影分身</p>
       </div>
-    </div>
-
-    <div class="scope" role="group" aria-label="显示范围 Scope">
-      <button type="button" id="scope-running" class="scope-btn" aria-pressed="true">
-        <i class="scope-led" aria-hidden="true"></i><span>运行中</span><small>RUNNING</small>
-      </button>
-      <button type="button" id="scope-all" class="scope-btn" aria-pressed="false">
-        <span>历史记录 · 全部</span><small>ALL</small>
-      </button>
-    </div>
-    <label class="field compact" id="state-field" hidden>
-      <span class="sr">历史状态 State</span>
-      <select id="state-filter" aria-label="历史状态筛选">
-        <option value="all">全部状态</option>
-        <option value="running">运行中</option>
-        <option value="stopped">已停止</option>
-        <option value="expired">已过期</option>
-        <option value="other">其他</option>
-      </select>
-    </label>
-
-    <label class="field search">
-      <span class="sr">搜索 Search</span>
-      <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
-      <input type="search" id="search" placeholder="搜索会话 / 频道 / 同事" autocomplete="off" spellcheck="false">
-    </label>
-    <label class="field compact">
-      <span class="sr">服务方 Provider</span>
-      <select id="provider-filter" aria-label="服务方筛选"><option value="all">全部服务方</option></select>
-    </label>
-
+    </a>
+    <nav class="ops-nav site-nav" aria-label="页面">
+      <a class="scope-btn" href="/" data-nav="control" title="总控：问任何一件事的进度，或交代某个任务怎么做"><span>总控</span></a>
+      <a class="scope-btn" href="/scene" data-nav="scene" title="联动场景：AI 会话与 Slack 同事的联动全景" aria-current="page" aria-pressed="true"><span>联动场景</span></a>
+      <a class="scope-btn" href="/runs" data-nav="runs" title="数字员工的后台运行、实时日志"><span>运行记录</span></a>
+      <a class="scope-btn" href="/intake" data-nav="intake" title="收件处：私信、@{{owner_name}}、订阅频道的连发与分诊记录（只读）"><span>收件</span></a>
+      <a class="scope-btn" href="/rules" data-nav="rules" title="经验法则引擎：每周结论分布、批准耗时、{{owner_name}} 推翻、规则提议和回测（只读）"><span>规则</span></a>
+      <a class="scope-btn" href="/routines" data-nav="routines" title="各任务的定时任务：下次 / 上次触发、来源和状态（只读）"><span>定时</span></a>
+      <a class="scope-btn" href="/gaps" data-nav="gaps" title="能力阻塞与自动化缺口：按系统 / 类型统计、未解决的阻塞、最常见路径、skill 提议（只读）"><span>缺口</span></a>
+      <a class="scope-btn" href="/learning" data-nav="learning" title="从卡片反馈学规则：按 shape 统计、{{owner_name}} 推翻率、「要不要固化成规则」卡片与采纳（只读，无原文）"><span>学习</span></a>
+      <a class="scope-btn" href="/health" data-nav="health" title="守护进程健康：provider 过载与恢复、投递和领取"><span>健康</span></a>
+      <a class="scope-btn" href="/design" data-nav="design" title="架构设计文档：本地生成的评审页（只读，沙箱里展示，不联网）"><span>设计</span></a>
+      <a class="scope-btn" href="/backlog" data-nav="backlog" title="不会被自动唤醒的旧事件（只读）"><span>旧积压</span></a>
+      <a class="scope-btn" href="/settings" data-nav="settings" title="数字员工配置：模型、路由、调度开关"><span>设置</span></a>
+    </nav>
     <div class="status-cluster">
       <div class="chip" id="conn-chip" data-state="loading" role="status" aria-live="polite">
         <span class="led" aria-hidden="true"></span>
@@ -72,25 +56,56 @@
       </div>
       <span class="sync" title="最近同步 · 每 2 秒"><small>SYNC</small> <b id="sync-label">—</b></span>
     </div>
-
-    <div class="tools">
-      <button type="button" class="btn ghost" id="motion-toggle" aria-pressed="true">
-        <span class="mt-ico" aria-hidden="true"></span><span id="motion-label">动效 开</span>
-      </button>
-      <button type="button" class="btn ghost" id="refresh-btn" aria-label="立即刷新">
-        <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
-        <span class="lbl">刷新</span>
-      </button>
-      <button type="button" class="btn primary" id="drawer-toggle" aria-expanded="false" aria-controls="drawer">
-        <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg>
-        <span class="lbl">面板</span><span class="badge" id="drawer-badge" hidden>0</span>
-      </button>
-    </div>
   </header>
+  <div class="scene-bar" role="toolbar" aria-label="场景：范围、筛选与工具">
+    <div class="scene-filters">
+      <div class="scope" role="group" aria-label="显示范围 Scope">
+        <button type="button" id="scope-running" class="scope-btn" aria-pressed="true">
+          <i class="scope-led" aria-hidden="true"></i><span>运行中</span><small>RUNNING</small>
+        </button>
+        <button type="button" id="scope-all" class="scope-btn" aria-pressed="false">
+          <span>历史记录 · 全部</span><small>ALL</small>
+        </button>
+      </div>
+      <label class="field compact" id="state-field" hidden>
+        <span class="sr">历史状态 State</span>
+        <select id="state-filter" aria-label="历史状态筛选">
+          <option value="all">全部状态</option>
+          <option value="running">运行中</option>
+          <option value="stopped">已停止</option>
+          <option value="expired">已过期</option>
+          <option value="other">其他</option>
+        </select>
+      </label>
+
+      <label class="field search">
+        <span class="sr">搜索 Search</span>
+        <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+        <input type="search" id="search" placeholder="搜索会话 / 频道 / 同事" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="field compact">
+        <span class="sr">服务方 Provider</span>
+        <select id="provider-filter" aria-label="服务方筛选"><option value="all">全部服务方</option></select>
+      </label>
+    </div>
+      <div class="tools">
+        <button type="button" class="btn ghost" id="motion-toggle" aria-pressed="true">
+          <span class="mt-ico" aria-hidden="true"></span><span id="motion-label">动效 开</span>
+        </button>
+        <button type="button" class="btn ghost" id="refresh-btn" aria-label="立即刷新">
+          <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+          <span class="lbl">刷新</span>
+        </button>
+        <button type="button" class="btn primary" id="drawer-toggle" aria-expanded="false" aria-controls="drawer">
+          <svg viewBox="0 0 24 24" width="16" height="16" class="ico" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg>
+          <span class="lbl">面板</span><span class="badge" id="drawer-badge" hidden>0</span>
+        </button>
+      </div>
+  </div>
 
   <main id="main" class="stage">
     <section id="scene" class="scene" tabindex="0" role="region"
-             aria-label="Slack Followup场景：AI 会话与 Slack 同事的联动。触控板左右滑动平移，上下滑动缩放，拖拽移动；方向键平移，加号减号缩放，0 适配全景，Esc 返回。">
+             aria-label="联动场景：AI 会话与 Slack 同事的联动。触控板左右滑动平移，上下滑动缩放，拖拽移动；方向键平移，加号减号缩放，0 适配全景，Esc 返回。">
       <div class="scene-bg" aria-hidden="true">
         <i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i><i class="orb o4"></i><i class="orb o5"></i>
       </div>
@@ -123,18 +138,6 @@
           </p>
           <p class="hk-row"><i class="hk-sw" aria-hidden="true"></i><span>底色=48h窗口已过进度；新消息刷新</span></p>
         </div>
-        <nav class="hud-links" aria-label="数字员工：后台运行与设置">
-          <a id="nav-control" href="/control" title="总控：问任何一件事的进度，或交代某个任务怎么做">总控</a>
-          <a id="nav-runs" href="/runs" title="数字员工的后台运行、实时日志">运行记录</a>
-          <a id="nav-intake" href="/intake" title="收件处：私信、@{{owner_name}}、订阅频道的连发与分诊记录（只读）">收件</a>
-          <a id="nav-rules" href="/rules" title="经验法则引擎：每周结论分布、批准耗时、{{owner_name}} 推翻、规则提议和回测（只读）">规则</a>
-          <a id="nav-routines" href="/routines" title="各任务的定时任务：下次 / 上次触发、来源和状态（只读）">定时</a>
-          <a id="nav-gaps" href="/gaps" title="能力阻塞与自动化缺口：按系统 / 类型统计、未解决的阻塞、最常见路径、skill 提议（只读）">缺口</a>
-          <a id="nav-learning" href="/learning" title="从卡片反馈学规则：按 shape 统计、{{owner_name}} 推翻率、「要不要固化成规则」卡片与采纳（只读，无原文）">学习</a>
-          <a id="nav-design" href="/design" title="架构设计文档：本地生成的评审页（只读，沙箱里展示，不联网）">设计</a>
-          <a id="nav-backlog" href="/backlog" title="不会被自动唤醒的旧事件（只读）">旧积压</a>
-          <a id="nav-settings" href="/settings" title="数字员工配置：模型、路由、调度开关">设置</a>
-        </nav>
       </div>
 
       <div class="hud hud-top" id="hud-top">
@@ -321,6 +324,7 @@
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true" hidden></div>
 <div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<script src="/shell.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

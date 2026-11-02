@@ -1,4 +1,4 @@
-/* Slack Followup · 收件轨迹 (P48): inbox rows with an 8-stage pipeline, and the trace drawer. Builds on app.css tokens.
+/* Kage · 收件轨迹 (P48): inbox rows with an 8-stage pipeline, and the trace drawer. Builds on app.css tokens.
    Five status colours everywhere: done (green), active (blue), {{owner_key}} = waiting on {{owner_name}} (amber), failed (coral),
    skip = not reached (grey, dashed). Motion follows app.css (prefers-reduced-motion / body[data-motion="off"]). */
 :root {
@@ -24,6 +24,7 @@
 .tr-sync .scope-led { width: 7px; height: 7px; }
 .tr-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
 .tr-views { flex-wrap: wrap; }
+.tr-views .scope-btn small { display: none; }
 .tr-views .scope-btn .count { margin-left: 2px; background: rgba(255, 255, 255, .55); }
 .tr-views .scope-btn[aria-pressed="true"] .count { background: rgba(255, 255, 255, .25); color: #fff; }
 .tr-views .scope-btn[data-view="{{owner_key}}"] .count:not(:empty) { color: var(--amber-d); }
@@ -57,11 +58,11 @@
 .tr-stripe { align-self: stretch; border-radius: 0 4px 4px 0; background: var(--st); }
 .tr-row[data-status="done"] .tr-stripe { opacity: .55; }
 .tr-when { display: grid; line-height: 1.2; }
-.tr-when b { font: 800 15px var(--display); font-variant-numeric: tabular-nums; }
+.tr-when b { font: 650 15px var(--sans); font-variant-numeric: tabular-nums; }
 .tr-when small { color: var(--ink-3); white-space: nowrap; }
 .tr-who { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .tr-who > span { display: grid; min-width: 0; line-height: 1.25; }
-.tr-who b { font: 800 13.5px var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tr-who b { font: 650 13.5px var(--sans); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-who small { color: var(--ink-3); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tr-av { width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center; object-fit: cover;
   font: 800 13px var(--display); color: #fff; background: hsl(var(--h, 220) 70% 56%); box-shadow: 0 0 0 2px #fff, 0 2px 6px -2px rgba(13, 28, 58, .4); }
@@ -102,11 +103,11 @@ body.tr-locked { overflow: hidden; }
 }
 .tr-drawer.open { transform: none; }
 .tr-drawer::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--st, var(--cobalt)); opacity: .8; }
-.tr-dhead { display: flex; align-items: flex-start; gap: 14px; padding: 16px 20px 14px 24px; border-bottom: 2px solid var(--line);
+.tr-dhead { display: flex; align-items: flex-start; gap: 14px; padding: 16px 20px 14px 24px; border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, .82); backdrop-filter: blur(8px); }
 .tr-dtitle { flex: 1; min-width: 0; }
 .tr-dtitle .eyebrow { font: 700 var(--fs-2xs) var(--mono); letter-spacing: .16em; color: var(--accent); }
-.tr-dtitle h2 { font: 800 21px/1.25 var(--display); margin: 2px 0; overflow-wrap: anywhere; }
+.tr-dtitle h2 { font: 700 20px/1.3 var(--sans); margin: 2px 0; overflow-wrap: anywhere; }
 .tr-dwhere { font: 600 13px var(--mono); color: var(--ink-3); }
 .tr-dmeta { font-size: 12px; color: var(--ink-3); overflow-wrap: anywhere; }
 .tr-dmeta code { font: 11.5px var(--mono); color: var(--ink-2); }
@@ -146,7 +147,7 @@ body.tr-locked { overflow: hidden; }
 .tr-fn em { font: 600 10.5px var(--mono); font-style: normal; color: var(--st); }
 .tr-fn[data-status="skip"] em, .tr-fn[data-status="skip"] b { color: var(--ink-3); }
 
-.tr-sec { font: 800 14px var(--display); margin: 22px 0 10px; display: flex; align-items: baseline; gap: 8px; }
+.tr-sec { font: 650 14.5px var(--sans); margin: 22px 0 10px; display: flex; align-items: baseline; gap: 8px; }
 .tr-sec small { font: 11px var(--sans); color: var(--ink-3); font-weight: 400; }
 
 /* the timeline: every step in time order, the rail coloured by status */
@@ -227,5 +228,9 @@ body.tr-locked { overflow: hidden; }
   .tr-facts dt { margin-top: 4px; }
   .tr-dbody { padding: 14px 14px 30px 18px; }
   .tr-dactions .btn:not(.tr-x) { display: none; }
+  /* the filters fill the card's width: the two selects share a row, the search box takes its own */
+  .tr-tools-2 { flex-basis: 100%; justify-content: stretch; }
+  .tr-tools-2 .tr-select { flex: 1 1 140px; max-width: none; }
+  .tr-search { flex-basis: 100%; min-width: 0; max-width: none; }
 }
 @media print { .tr-scrim, .tr-drawer { display: none !important; } }

@@ -1,4 +1,4 @@
-/* Slack Followup · 数字员工运行页 / 旧积压 / 设置 (P1b) / 收件 (P2; P48 收件轨迹: trace.js) / 规则 · 定时 (P3) / 缺口 (P3.1) / 健康 (P38) / 设计 (P39). Vanilla JS, same-origin only, no innerHTML for data. */
+/* Kage · 数字员工运行页 / 旧积压 / 设置 (P1b) / 收件 (P2; P48 收件轨迹: trace.js) / 规则 · 定时 (P3) / 缺口 (P3.1) / 健康 (P38) / 设计 (P39). Vanilla JS, same-origin only, no innerHTML for data. */
 'use strict';
 
 (() => {
@@ -12,8 +12,8 @@
   const PROVIDER = { codex: 'Codex', claude: 'Claude' };
   const RUN_STATE = { running: '运行中', ended: '已结束' };
   const OUTCOME = {
-    success: ['✅ 成功', 'good'], failed: ['⚠️ 失败', 'bad'], partial: ['◑ 部分处理', 'warn'],
-    unresolved: ['⚠️ 未处理完', 'bad'], stopped: ['⏹ 已停止', 'warn'],
+    success: ['成功', 'good'], failed: ['失败', 'bad'], partial: ['部分处理', 'warn'],
+    unresolved: ['未处理完', 'bad'], stopped: ['已停止', 'warn'],
   };
   const DISPATCH_STATE = {
     waiting: ['等待开始', 'warn'], running: ['运行中', 'live'], paused: ['已暂停', 'warn'], failed: ['失败 · 等你处理', 'bad'],
@@ -65,6 +65,17 @@
     for (const kid of kids.flat(Infinity)) if (kid !== null && kid !== undefined && kid !== false) el.append(kid);
     return el;
   }
+  // no value: nothing, an empty string, or an element with no text (a list that came back empty)
+  const nil = (v) => v === null || v === undefined || v === '' || (v instanceof Element && !v.textContent.trim()) ? '—' : v;
+  // label / value rows: [label, value, class, tooltip]; a null row is skipped
+  function kv(rows) {
+    return h('dl', { class: 'kv' }, rows.filter(Boolean).map(([k, v, cls, tip]) => [h('dt', {}, k), h('dd', { class: cls || null, title: tip || null }, nil(v))]));
+  }
+  // a detail page's key facts at a glance: the same rows as a grid, each label over its value
+  function factGrid(rows) {
+    return h('dl', { class: 'facts' }, rows.filter(Boolean).map(([k, v, cls, tip]) => h('div', { class: 'fact' },
+      h('dt', {}, k), h('dd', { class: cls || null, title: tip || null }, nil(v)))));
+  }
 
   function toast(text, tone) {
     const t = h('div', { class: 'toast', 'data-tone': tone || null }, text);
@@ -75,8 +86,21 @@
   // ---------- formatting ----------
   const fmtDT = new Intl.DateTimeFormat('zh-CN', { timeZone: TZ, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
   const fmtClockF = new Intl.DateTimeFormat('zh-CN', { timeZone: TZ, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const fmtHM = new Intl.DateTimeFormat('zh-CN', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+  const fmtDayKey = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
+  const fmtWeekday = new Intl.DateTimeFormat('zh-CN', { timeZone: TZ, weekday: 'short' });
   const when = (ts) => ts ? fmtDT.format(new Date(ts * 1000)) : '—';
   const clock = (ts) => ts ? fmtClockF.format(new Date(ts * 1000)) : '—';
+  const hm = (ts) => ts ? fmtHM.format(new Date(ts * 1000)) : '—';
+  // the owner's calendar day of a time: its key (YYYY-MM-DD), and a heading for a list grouped by day
+  const dayKey = (ts) => fmtDayKey.format(new Date(ts * 1000));
+  function dayLabel(ts) {
+    const key = dayKey(ts), now = Date.now() / 1000;
+    const date = `${key.slice(5)} ${fmtWeekday.format(new Date(ts * 1000))}`;
+    if (key === dayKey(now)) return ['今天', date];
+    if (key === dayKey(now - 86400)) return ['昨天', date];
+    return [date, null];
+  }
   function dur(sec) {
     sec = Math.max(0, Math.round(sec || 0));
     if (sec < 60) return `${sec} 秒`;
@@ -132,6 +156,14 @@
     return h('section', { class: 'ops-head' },
       h('div', {}, h('p', { class: 'eyebrow' }, eyebrow), h('h2', {}, title), note ? h('p', { class: 'ops-note' }, note) : null),
       extra || null);
+  }
+  // a detail page's head: the record's id as the title and its state beside it (the page fills the slot once it loads)
+  function detailHead(title, eyebrow, note) {
+    const status = h('span', { class: 'head-status' });
+    const head = h('section', { class: 'ops-head' },
+      h('div', {}, h('p', { class: 'eyebrow' }, eyebrow), h('div', { class: 'title-row' }, h('h2', {}, title), status),
+        note ? h('p', { class: 'ops-note' }, note) : null));
+    return [head, status];
   }
 
   // =====================================================================
@@ -202,7 +234,7 @@
               h('td', { class: 'num' }, d.held_events),
               h('td', {}, d.next_provider ? `${PROVIDER[d.next_provider] || d.next_provider} · ${d.next_mode === 'resume' ? '恢复会话' : '新会话'}` : '—'),
               h('td', {}, ERROR_LABEL[d.error_class] || d.error_class || '—'),
-              h('td', {}, ext(d.card_url, '运行卡片 ↗'), ' ', ext(d.fail_card_url, '失败卡片 ↗')));
+              h('td', { class: 'links' }, ext(d.card_url, '运行卡片 ↗'), ext(d.fail_card_url, '失败卡片 ↗')));
           }))));
     }
 
@@ -217,25 +249,44 @@
         list.append(h('div', { class: 'empty' }, h('b', {}, '没有符合条件的运行'), state.filter === 'running' ? '现在没有正在后台运行的会话。' : '换个筛选试试。'));
         return;
       }
+      const COLS = ['状态', '任务', '执行', '触发', '开始', '用时', '步骤', '事件', '最新一步', ''];
+      const rows = [];
+      const keyOf = (r) => r.started_at ? dayKey(r.started_at) : '';
+      const perDay = {};
+      for (const r of runs) perDay[keyOf(r)] = (perDay[keyOf(r)] || 0) + 1;
+      let day = null;
+      for (const r of runs) {
+        // the list is grouped by the owner's day: a heading row where the day changes
+        const key = keyOf(r);
+        if (key !== day) {
+          day = key;
+          const [label, date] = r.started_at ? dayLabel(r.started_at) : ['时间未知', null];
+          const n = perDay[key];
+          rows.push(h('tr', { class: 'day-sep' }, h('th', { scope: 'rowgroup', colspan: COLS.length },
+            h('span', {}, label), date ? h('small', {}, date) : null, h('small', { class: 'day-n' }, `${n} 次`))));
+        }
+        const href = '/runs/' + encodeURIComponent(r.run_id);
+        const model = [r.model, r.effort].filter(Boolean).join(' · ');
+        rows.push(h('tr', { class: 'run-row', 'data-state': r.state, tabindex: '0',
+          onclick: (ev) => { if (!ev.target.closest('a')) location.href = href; },
+          onkeydown: (ev) => { if (ev.key === 'Enter') location.href = href; } },
+        h('td', { class: 'state' }, outcomePill(r), r.error_class && r.outcome !== 'success' ? h('div', { class: 'sub' }, ERROR_LABEL[r.error_class] || r.error_class) : null),
+        h('td', { class: 'mono task' }, r.task),
+        // one line: provider, the model (cut; model and effort in the tooltip), then new or resumed session
+        h('td', { class: 'exec' }, h('div', { class: 'exec-line' }, provChip(r.provider),
+          model ? h('span', { class: 'exec-model', title: model }, r.model || r.effort) : null,
+          h('span', { class: 'tag', title: r.mode === 'resume' ? '恢复会话 ' + (r.session || '') : '新会话' }, r.mode === 'resume' ? '恢复' : '新会话'))),
+        h('td', { class: 'nowrap meta trig' }, TRIGGER[r.trigger] || r.trigger || '—', r.attempt > 1 ? h('div', { class: 'sub' }, `第 ${r.attempt} 次尝试`) : null),
+        h('td', { class: 'num meta', title: when(r.started_at) }, hm(r.started_at)),
+        h('td', { class: 'num meta' }, dur(r.elapsed_seconds)),
+        h('td', { class: 'num meta counted' }, r.steps || '—'),
+        h('td', { class: 'num meta counted' }, `${r.handled}/${r.events}`),
+        h('td', { class: 'summary' }, r.last_summary || (r.has_log ? '—' : '（没有日志）')),
+        h('td', { class: 'links' }, h('a', { href }, '详情'), ext(r.card_url, '卡片 ↗'))));
+      }
       list.append(h('table', { class: 'ops-table runs' },
-        h('thead', {}, h('tr', {}, ['状态', '任务', '执行', '触发', '开始', '用时', '步骤', '事件', '最新一步', ''].map((t) => h('th', { scope: 'col' }, t)))),
-        h('tbody', {}, runs.map((r) => {
-          const href = '/runs/' + encodeURIComponent(r.run_id);
-          const row = h('tr', { class: 'run-row', 'data-state': r.state, tabindex: '0',
-            onclick: (ev) => { if (!ev.target.closest('a')) location.href = href; },
-            onkeydown: (ev) => { if (ev.key === 'Enter') location.href = href; } },
-          h('td', {}, outcomePill(r), r.error_class && r.outcome !== 'success' ? h('div', { class: 'sub' }, ERROR_LABEL[r.error_class] || r.error_class) : null),
-          h('td', { class: 'mono task' }, r.task),
-          h('td', {}, provChip(r.provider), h('div', { class: 'sub' }, [r.model, r.effort, r.mode === 'resume' ? '恢复 ' + short(r.session) : '新会话'].filter(Boolean).join(' · '))),
-          h('td', { class: 'nowrap' }, TRIGGER[r.trigger] || r.trigger || '—', r.attempt > 1 ? h('div', { class: 'sub' }, `第 ${r.attempt} 次尝试`) : null),
-          h('td', { class: 'num' }, when(r.started_at)),
-          h('td', { class: 'num' }, dur(r.elapsed_seconds)),
-          h('td', { class: 'num' }, r.steps || '—'),
-          h('td', { class: 'num' }, `${r.handled}/${r.events}`),
-          h('td', { class: 'summary' }, r.last_summary || (r.has_log ? '—' : '（没有日志）')),
-          h('td', { class: 'links' }, h('a', { href }, '详情'), ext(r.card_url, '卡片 ↗')));
-          return row;
-        }))));
+        h('thead', {}, h('tr', {}, COLS.map((t) => h('th', { scope: 'col' }, t)))),
+        h('tbody', {}, rows)));
     }
     sync();
     every(3000, load);
@@ -245,6 +296,8 @@
   // Run detail + live log
   // =====================================================================
   function RunDetail(runId) {
+    const [head, headStatus] = detailHead('run ' + runId, 'RUN · 运行详情', null);
+    const summary = h('section', { class: 'ops-card summary', id: 'run-summary' });
     const facts = h('section', { class: 'ops-card', id: 'run-facts' });
     const events = h('section', { class: 'ops-card', id: 'run-events' });
     const logList = h('ol', { class: 'log', id: 'run-log', 'aria-label': '可读日志（已脱敏）', tabindex: '0' });
@@ -258,8 +311,7 @@
         h('label', { class: 'toggle' }, follow, h('span', {}, '跟随最新')), copyBtn),
       h('div', { class: 'log-wrap' }, logList));
     clear(main).append(
-      h('nav', { class: 'crumbs' }, h('a', { href: '/runs' }, '← 运行记录')),
-      pageHead('run ' + runId, 'RUN · 运行详情', null),
+      h('nav', { class: 'crumbs' }, h('a', { href: '/runs' }, '← 运行记录')), head, summary,
       h('div', { class: 'detail-grid' }, h('div', { class: 'detail-side' }, facts, events), logCard));
 
     let cursor = null, done = false, detail = null, lines = 0;
@@ -300,31 +352,30 @@
       try { detail = await api(`/api/runs/${encodeURIComponent(runId)}`); } catch (e) { return; }
       renderFacts(detail);
     }
-    function kv(rows) {
-      return h('dl', { class: 'kv' }, rows.filter(Boolean).map(([k, v, cls]) => [h('dt', {}, k), h('dd', { class: cls || null }, v === null || v === undefined || v === '' ? '—' : v)]));
-    }
     function renderFacts(d) {
-      clear(facts).append(
-        h('div', { class: 'ins-hero' }, outcomePill(d), provChip(d.provider), d.error_class && d.outcome !== 'success' ? pill(ERROR_LABEL[d.error_class] || d.error_class, 'bad') : null),
-        kv([
-          ['任务', d.task, 'mono'],
-          ['执行', [PROVIDER[d.provider] || d.provider, d.model, d.effort].filter(Boolean).join(' · ')],
-          ['模式', d.mode === 'resume' ? '恢复会话' : '新会话'],
-          ['会话', d.session, 'mono'],
-          ['触发', (TRIGGER[d.trigger] || d.trigger || '—') + (d.attempt > 1 ? ` · 第 ${d.attempt} 次尝试` : '')],
-          ['开始', when(d.started_at)],
-          ['结束', d.ended_at ? when(d.ended_at) : (d.state === 'running' ? '仍在运行' : '—')],
-          ['用时', dur(d.elapsed_seconds)],
-          ['步骤', d.steps ? String(d.steps) : '—'],
-          ['事件', `已处理 ${d.handled} / 共 ${d.events}`],
-          ['退出码', d.exit ? String(d.exit.exit_code) + (d.exit.stopped ? '（被停止）' : '') : '—'],
-          ['工作目录', d.cwd, 'mono'],
-          d.env_injected && d.env_injected.length ? ['注入变量名', d.env_injected.join(', '), 'mono'] : null,
-          ['Slack', h('span', {}, ext(d.card_url, '运行卡片 ↗') || '—', ' ', ext(d.fail_card_url, '失败卡片 ↗'))],
-          d.dispatch ? ['调度', h('span', {}, `${(DISPATCH_STATE[d.dispatch.state] || [d.dispatch.state])[0]} · `,
-            ...d.dispatch.runs.map((r, i) => [i ? ' · ' : '', r === d.run_id ? h('b', {}, short(r.split('-').pop(), 6)) : h('a', { href: '/runs/' + r }, short(r.split('-').pop(), 6))]))] : null,
-          d.progress ? ['进度行', d.progress.stage ? `${d.progress.stage}${d.progress.posted_at ? ' · ' + clock(d.progress.posted_at) : ''}` : '—'] : null,
-        ]));
+      fill(headStatus, outcomePill(d), d.error_class && d.outcome !== 'success' ? pill(ERROR_LABEL[d.error_class] || d.error_class, 'bad') : null);
+      const model = [d.model, d.effort].filter(Boolean).join(' · ');
+      fill(summary, factGrid([
+        ['任务', d.task, 'mono'],
+        ['执行', h('span', { class: 'exec-line' }, provChip(d.provider), model ? h('span', { class: 'exec-model', title: model }, model) : null)],
+        ['模式', d.mode === 'resume' ? '恢复会话' : '新会话'],
+        ['触发', (TRIGGER[d.trigger] || d.trigger || '—') + (d.attempt > 1 ? ` · 第 ${d.attempt} 次尝试` : '')],
+        ['开始', when(d.started_at)],
+        ['用时', dur(d.elapsed_seconds)],
+        ['步骤', d.steps ? String(d.steps) : '—'],
+        ['事件', `已处理 ${d.handled} / 共 ${d.events}`],
+      ]));
+      fill(facts, h('h3', {}, '运行信息'), kv([
+        ['会话', d.session, 'mono'],
+        ['结束', d.ended_at ? when(d.ended_at) : (d.state === 'running' ? '仍在运行' : '—')],
+        ['退出码', d.exit ? String(d.exit.exit_code) + (d.exit.stopped ? '（被停止）' : '') : '—'],
+        ['工作目录', d.cwd, 'mono'],
+        d.env_injected && d.env_injected.length ? ['注入变量名', d.env_injected.join(', '), 'mono'] : null,
+        ['Slack', h('span', {}, ext(d.card_url, '运行卡片 ↗') || '—', ' ', ext(d.fail_card_url, '失败卡片 ↗'))],
+        d.dispatch ? ['调度', h('span', {}, `${(DISPATCH_STATE[d.dispatch.state] || [d.dispatch.state])[0]} · `,
+          ...d.dispatch.runs.map((r, i) => [i ? ' · ' : '', r === d.run_id ? h('b', {}, short(r.split('-').pop(), 6)) : h('a', { href: '/runs/' + r }, short(r.split('-').pop(), 6))]))] : null,
+        d.progress ? ['进度行', d.progress.stage ? `${d.progress.stage}${d.progress.posted_at ? ' · ' + clock(d.progress.posted_at) : ''}` : '—'] : null,
+      ]));
       fill(events, h('h3', {}, '事件 ', h('span', { class: 'count' }, (d.event_list || []).length)),
         (d.event_list || []).length ? h('ul', { class: 'ev-list' }, d.event_list.map((e) => h('li', {},
           h('code', {}, short(e.id, 10)), ' ', statusPill(e.status),
@@ -681,11 +732,12 @@
     {{owner_key}}_typed: '你在卡片 thread 里亲手打的指示' };
   function RuleCheckDetail(id) {
     const crumbs = h('nav', { class: 'crumbs' }, h('a', { href: '/rules' }, '← 规则'));
-    const facts = h('section', { class: 'ops-card', id: 'check-detail' });
+    const [head, headStatus] = detailHead('检查 ' + id, 'RULE CHECK · 检查详情',
+      'Slack 卡片只写一句话；命中的规则、没通过的检查、事实、批准人和计划都在这里。');
+    const facts = h('section', { class: 'ops-card summary', id: 'check-detail' });
     const why = h('section', { class: 'ops-card', id: 'check-why' });
     const planCard = h('section', { class: 'ops-card', id: 'check-plan' });
-    clear(main).append(crumbs, pageHead('检查 ' + id, 'RULE CHECK · 检查详情',
-      'Slack 卡片只写一句话；命中的规则、没通过的检查、事实、批准人和计划都在这里。'), facts, why, planCard);
+    clear(main).append(crumbs, head, facts, why, planCard);
     async function load() {
       let d;
       try { d = await api('/api/rules/checks/' + encodeURIComponent(id)); online(true); } catch (e) {
@@ -697,21 +749,26 @@
       const a = c.approval || {};
       const [alabel, atone] = APPROVAL[a.status] || [a.status || '—', null];
       const nameOf = (uid) => ((c.approvers || []).find((x) => x.id === uid) || {}).name || uid;
-      fill(facts, h('dl', { class: 'kv' },
-        h('dt', {}, 'agent 的一句话'), h('dd', { class: 'gap-text' }, c.summary || '（没写：这条检查没有发卡片）'),
-        h('dt', {}, '做什么'), h('dd', {}, `${c.what.system_zh} · ${c.what.action_zh} · ${c.what.kind_zh}`, h('div', { class: 'sub mono' }, `${c.what.system} · ${c.what.action} · ${c.what.kind}`)),
-        h('dt', {}, '结论'), h('dd', {}, outcomePillRule(c.outcome), ' ', c.outcome_zh, c.smoke ? [' ', pill('TEST', 'warn')] : null),
-        h('dt', {}, '批准'), h('dd', {}, pill(alabel, atone), a.actor ? ` · ${nameOf(a.actor)} · ${when(a.decided_at)}` : '',
+      fill(headStatus, outcomePillRule(c.outcome), pill(alabel, atone), c.smoke ? pill('TEST', 'warn') : null);
+      fill(facts, h('div', { class: 'lead' }, h('span', { class: 'lead-label' }, 'agent 的一句话'),
+        h('p', { class: 'gap-text' }, c.summary || '（没写：这条检查没有发卡片）')),
+      factGrid([
+        // the codes behind the words stay in the tooltip
+        ['做什么', `${c.what.system_zh} · ${c.what.action_zh} · ${c.what.kind_zh}`, null, `${c.what.system} · ${c.what.action} · ${c.what.kind}`],
+        ['结论', c.outcome_zh],
+        ['批准', h('span', {}, a.actor ? `${nameOf(a.actor)} · ${when(a.decided_at)}` : alabel,
           a.provenance ? h('div', { class: 'sub' }, '方式：' + (PROVENANCE_LABEL[a.provenance] || a.provenance), a.source ? [' · ', ext(a.source, '那条消息 ↗')] : null) : null,
-          a.note ? h('div', { class: 'sub' }, '附条件：' + a.note) : null),
-        h('dt', {}, '结果'), h('dd', {}, c.result ? `${RESULT_LABEL[c.result.result] || c.result.result} · ${when(c.result.at)} · ${c.result.by || ''}` : '—',
-          c.result && c.result.note ? h('div', { class: 'sub' }, c.result.note) : null,
-          c.correction ? h('div', {}, pill('{{owner_name}} 已纠正：' + (c.correction.outcome || ''), 'warn')) : null),
-        h('dt', {}, '任务'), h('dd', { class: 'mono' }, c.task_id || '—', h('div', { class: 'sub' }, `${when(c.created_at)} · ${c.caller}`)),
-        h('dt', {}, '卡片'), h('dd', {}, c.card ? [ext(c.card.slack_url, 'Slack ↗'), ' · ', when(c.card.posted_at)] : '没发卡片'),
-        h('dt', {}, '规则版本'), h('dd', { class: 'mono' }, `${c.category} v${c.spec_version || '?'} · ${c.spec_digest || ''}`),
-        h('dt', {}, '批准人'), h('dd', {}, (c.approvers || []).map((x) => pill(x.name || x.id, x.id === c.recipient_slack ? 'bad' : null)),
-          c.recipient_slack && (c.approvers || []).some((x) => x.id === c.recipient_slack) ? h('div', { class: 'sub' }, '当事人是批准人：不能自己批准这一项') : null)));
+          a.note ? h('div', { class: 'sub' }, '附条件：' + a.note) : null)],
+        ['结果', h('span', {}, c.result ? `${RESULT_LABEL[c.result.result] || c.result.result} · ${when(c.result.at)}` : '—',
+          c.result && c.result.by ? h('div', { class: 'sub mono' }, c.result.by) : null,
+          c.correction ? h('div', {}, pill('{{owner_name}} 已纠正：' + (c.correction.outcome || ''), 'warn')) : null)],
+        ['任务', h('span', {}, h('span', { class: 'mono' }, c.task_id || '—'), h('div', { class: 'sub' }, `${when(c.created_at)} · ${c.caller}`))],
+        ['卡片', c.card ? h('span', {}, ext(c.card.slack_url, 'Slack ↗'), ' · ', when(c.card.posted_at)) : '没发卡片'],
+        ['规则版本', h('span', {}, `${c.category} v${c.spec_version || '?'}`, c.spec_digest ? h('div', { class: 'sub' }, c.spec_digest) : null), 'mono'],
+        ['批准人', h('span', {}, (c.approvers || []).map((x) => pill(x.name || x.id, x.id === c.recipient_slack ? 'bad' : null)),
+          c.recipient_slack && (c.approvers || []).some((x) => x.id === c.recipient_slack) ? h('div', { class: 'sub' }, '当事人是批准人：不能自己批准这一项') : null)],
+      ]),
+      c.result && c.result.note ? h('div', { class: 'lead' }, h('span', { class: 'lead-label' }, '执行结果说明'), h('p', { class: 'gap-text' }, c.result.note)) : null);
       fill(why, h('h3', {}, '为什么是这个结论'),
         h('table', { class: 'ops-table', id: 'check-rules' },
           h('thead', {}, h('tr', {}, ['规则', '说明'].map((t) => h('th', { scope: 'col' }, t)))),
@@ -732,8 +789,10 @@
 
   function RuleProposalDetail(id) {
     const crumbs = h('nav', { class: 'crumbs' }, h('a', { href: '/rules' }, '← 规则'));
-    const card = h('section', { class: 'ops-card', id: 'proposal-detail' });
-    clear(main).append(crumbs, pageHead('提议 ' + id, 'RULE PROPOSAL · 规则提议详情', '卡片上只写一句话和理由；改动的具体内容在这里。'), card);
+    const [head, headStatus] = detailHead('提议 ' + id, 'RULE PROPOSAL · 规则提议详情', '卡片上只写一句话和理由；改动的具体内容在这里。');
+    const card = h('section', { class: 'ops-card summary', id: 'proposal-detail' });
+    const body = h('section', { class: 'ops-card', id: 'proposal-body' });
+    clear(main).append(crumbs, head, card, body);
     async function load() {
       let d;
       try { d = await api('/api/rules/proposals/' + encodeURIComponent(id)); online(true); } catch (e) {
@@ -744,17 +803,22 @@
       const x = d.proposal;
       const [label, tone] = PROPOSAL_STATUS[x.status] || [x.status, null];
       const ev = x.evidence || {};
-      fill(card, h('dl', { class: 'kv' },
-        h('dt', {}, '标题'), h('dd', {}, x.title_zh, x.smoke ? [' ', pill('TEST', 'warn')] : null),
-        h('dt', {}, '类型'), h('dd', {}, x.kind === 'rule_patch' ? '规则补丁' : '分诊补充规则'),
-        h('dt', {}, '状态'), h('dd', {}, pill(label, tone), x.error ? h('div', { class: 'sub' }, x.error) : null),
-        h('dt', {}, '理由'), h('dd', { class: 'gap-text' }, x.rationale_zh || '—'),
-        x.text_zh ? [h('dt', {}, '要加的这句'), h('dd', { class: 'gap-text' }, x.text_zh)] : null,
-        x.kind === 'rule_patch' ? [h('dt', {}, '改动'), h('dd', {}, (x.lines || []).length ? h('ul', {}, x.lines.map((l) => h('li', { class: 'mono' }, l))) : h('pre', { class: 'json' }, JSON.stringify(x.patch, null, 2)))] : null,
-        h('dt', {}, '依据'), h('dd', {}, Object.entries(ev.counts || {}).map(([k, v]) => pill(`${k} ${v}`, null)),
-          (ev.check_ids || []).map((cid) => [' ', h('a', { class: 'mono', href: '/rules?check=' + cid }, cid)])),
-        h('dt', {}, '版本'), h('dd', { class: 'mono' }, x.applied_version ? `v${x.base_version} → v${x.applied_version}` : (x.base_version ? `基于 v${x.base_version}` : '—')),
-        h('dt', {}, '时间'), h('dd', {}, `${when(x.created_at)} · ${x.proposer || ''}`, x.decided_at ? h('div', { class: 'sub' }, `决定：${when(x.decided_at)} · ${x.decided_by || ''}`) : null)));
+      fill(headStatus, pill(label, tone), x.smoke ? pill('TEST', 'warn') : null);
+      fill(card, h('div', { class: 'lead' }, h('span', { class: 'lead-label' }, '标题'), h('p', { class: 'lead-title' }, x.title_zh)),
+        factGrid([
+          ['类型', x.kind === 'rule_patch' ? '规则补丁' : '分诊补充规则'],
+          ['状态', h('span', {}, label, x.error ? h('div', { class: 'sub' }, x.error) : null)],
+          ['版本', x.applied_version ? `v${x.base_version} → v${x.applied_version}` : (x.base_version ? `基于 v${x.base_version}` : '—'), 'mono'],
+          ['提出', h('span', {}, when(x.created_at), x.proposer ? h('div', { class: 'sub' }, x.proposer) : null)],
+          ['决定', x.decided_at ? h('span', {}, when(x.decided_at), x.decided_by ? h('div', { class: 'sub' }, x.decided_by) : null) : '还没决定'],
+        ]));
+      fill(body, h('h3', {}, '内容'), kv([
+        ['理由', x.rationale_zh, 'gap-text'],
+        x.text_zh ? ['要加的这句', x.text_zh, 'gap-text'] : null,
+        x.kind === 'rule_patch' ? ['改动', (x.lines || []).length ? h('ul', { class: 'patch-lines' }, x.lines.map((l) => h('li', { class: 'mono' }, l))) : h('pre', { class: 'json' }, JSON.stringify(x.patch, null, 2))] : null,
+        ['依据', h('span', {}, Object.entries(ev.counts || {}).map(([k, v]) => pill(`${k} ${v}`, null)),
+          (ev.check_ids || []).map((cid) => [' ', h('a', { class: 'mono', href: '/rules?check=' + cid }, cid)]))],
+      ]));
     }
     every(15000, load);
   }
@@ -1021,9 +1085,11 @@
 
   function GapDetail(id) {
     const crumbs = h('nav', { class: 'crumbs' }, h('a', { href: '/gaps' }, '← 缺口'));
-    const facts = h('section', { class: 'ops-card', id: 'gap-detail' });
+    const [head, headStatus] = detailHead('阻塞 ' + id, 'GAP · 能力阻塞详情', '“试过什么 / 怎样能解开”是 agent 写的说明（发卡片前查过不含凭据）；验证码从不存储。');
+    const facts = h('section', { class: 'ops-card summary', id: 'gap-detail' });
     const texts = h('section', { class: 'ops-card', id: 'gap-texts' });
-    clear(main).append(crumbs, pageHead('阻塞 ' + id, 'GAP · 能力阻塞详情', '“试过什么 / 怎样能解开”是 agent 写的说明（发卡片前查过不含凭据）；验证码从不存储。'), facts, texts);
+    const more = h('section', { class: 'ops-card', id: 'gap-more' });
+    clear(main).append(crumbs, head, facts, texts, more);
     async function load() {
       let d;
       try { d = await api('/api/gaps/' + encodeURIComponent(id)); online(true); } catch (e) {
@@ -1033,26 +1099,31 @@
       }
       const g = d.gap;
       const optionLabel = (oid) => ((g.options || []).find((o) => o.id === oid) || {}).label || oid;
-      fill(facts, h('dl', { class: 'kv' },
-        h('dt', {}, '状态'), h('dd', {}, gapStatus(g)),
-        h('dt', {}, '任务'), h('dd', { class: 'mono' }, g.task_id),
-        h('dt', {}, '系统 · 操作'), h('dd', {}, h('span', { class: 'mono' }, g.system), ' · ', g.operation),
-        h('dt', {}, '类型'), h('dd', {}, typePill(g.type)),
-        h('dt', {}, '报告'), h('dd', {}, `${when(g.created_at)} · ${g.reporter}`, g.run_id ? h('div', { class: 'sub' }, h('a', { href: '/runs/' + g.run_id }, 'run ' + g.run_id)) : null,
-          g.occurrences > 1 ? h('div', { class: 'sub' }, `同一路径报告了 ${g.occurrences} 次（没有重复发卡片）`) : null),
-        h('dt', {}, '第几次'), h('dd', {}, `第 ${g.attempt} 次`, g.previous_id ? [' · 上一条 ', h('a', { class: 'mono', href: '/gaps/' + g.previous_id }, g.previous_id)] : null,
-          g.superseded_by ? [' · 被 ', h('a', { class: 'mono', href: '/gaps/' + g.superseded_by }, g.superseded_by), ' 取代'] : null),
-        h('dt', {}, '卡片'), h('dd', {}, (g.cards || []).length ? g.cards.map((c) => h('div', {}, c.stage === 1 ? '阻塞卡片 ' : '“已完成”卡片 ', ext(c.slack_url, 'Slack ↗'), ' · ', when(c.posted_at))) : (g.card_error ? `没发出去：${g.card_error}` : '—'),
-          (g.reminders || []).length ? h('div', { class: 'sub' }, '已提醒：' + g.reminders.map(when).join('、')) : null),
-        h('dt', {}, '{{owner_name}} 的选择'), h('dd', {}, g.choice ? `${optionLabel(g.choice)} · ${when(g.chosen_at)}` : '还没选',
-          g.stage2_choice ? h('div', { class: 'sub' }, `第二张卡片：${g.stage2_choice === 'done' ? '✅ 已完成' : '❌ 做不了'} · ${when(g.stage2_at)}`) : null),
-        h('dt', {}, '解决'), h('dd', {}, g.resolution ? `${GAP_RESOLUTION[g.resolution] || g.resolution} · ${when(g.resolved_at)} · ${g.resolved_by || ''}` : '—',
+      const [slabel, stone] = GAP_STATUS[g.status] || [g.status, null];
+      fill(headStatus, pill(slabel, stone), typePill(g.type), g.smoke ? pill('TEST', 'warn') : null);
+      fill(facts, factGrid([
+        ['状态', h('span', {}, slabel, gapStatus(g)[1])],
+        ['任务', g.task_id, 'mono'],
+        ['系统 · 操作', h('span', {}, h('span', { class: 'mono' }, g.system), ' · ', g.operation)],
+        ['报告', h('span', {}, `${when(g.created_at)} · ${g.reporter}`, g.run_id ? h('div', { class: 'sub' }, h('a', { href: '/runs/' + g.run_id }, 'run ' + g.run_id)) : null,
+          g.occurrences > 1 ? h('div', { class: 'sub' }, `同一路径报告了 ${g.occurrences} 次（没有重复发卡片）`) : null)],
+        ['第几次', h('span', {}, `第 ${g.attempt} 次`, g.previous_id ? [' · 上一条 ', h('a', { class: 'mono', href: '/gaps/' + g.previous_id }, g.previous_id)] : null,
+          g.superseded_by ? [' · 被 ', h('a', { class: 'mono', href: '/gaps/' + g.superseded_by }, g.superseded_by), ' 取代'] : null)],
+        ['{{owner_name}} 的选择', h('span', {}, g.choice ? `${optionLabel(g.choice)} · ${when(g.chosen_at)}` : '还没选',
+          g.stage2_choice ? h('div', { class: 'sub' }, `第二张卡片：${g.stage2_choice === 'done' ? '已完成' : '做不了'} · ${when(g.stage2_at)}`) : null)],
+        ['解决', h('span', {}, g.resolution ? `${GAP_RESOLUTION[g.resolution] || g.resolution} · ${when(g.resolved_at)} · ${g.resolved_by || ''}` : '—',
           g.{{owner_key}}_manual ? h('div', {}, pill('{{owner_name}} 人工接手', 'warn')) : null,
-          g.resolution_note ? h('div', { class: 'sub' }, g.resolution_note) : null),
-        h('dt', {}, '选项'), h('dd', {}, (g.options || []).map((o) => pill(`${o.label} → ${GAP_RESOLUTION[o.resolution] || o.resolution}`, null)))));
-      fill(texts, h('h3', {}, '说明'), h('dl', { class: 'kv' },
-        h('dt', {}, '试过什么'), h('dd', { class: 'gap-text' }, g.tried),
-        h('dt', {}, '怎样能解开'), h('dd', { class: 'gap-text' }, g.unblock)));
+          g.resolution_note ? h('div', { class: 'sub' }, g.resolution_note) : null)],
+      ]));
+      fill(texts, h('h3', {}, '说明'), kv([
+        ['试过什么', g.tried, 'gap-text'],
+        ['怎样能解开', g.unblock, 'gap-text'],
+      ]));
+      fill(more, h('h3', {}, '卡片与选项'), kv([
+        ['卡片', (g.cards || []).length ? h('span', {}, g.cards.map((c) => h('div', {}, c.stage === 1 ? '阻塞卡片 ' : '“已完成”卡片 ', ext(c.slack_url, 'Slack ↗'), ' · ', when(c.posted_at))),
+          (g.reminders || []).length ? h('div', { class: 'sub' }, '已提醒：' + g.reminders.map(when).join('、')) : null) : (g.card_error ? `没发出去：${g.card_error}` : '—')],
+        ['选项', (g.options || []).length ? h('span', {}, g.options.map((o) => pill(`${o.label} → ${GAP_RESOLUTION[o.resolution] || o.resolution}`, null))) : '—'],
+      ]));
     }
     every(15000, load);
   }
@@ -1487,7 +1558,11 @@
     const errBox = h('div', { class: 'err-box', id: 'settings-error', role: 'alert', hidden: true });
     const logCard = h('section', { class: 'ops-card', id: 'settings-log' });
     const info = h('p', { class: 'ops-note', id: 'settings-info' });
-    clear(main).append(pageHead('设置', 'SETTINGS · 数字员工配置', null, info), errBox, form, logCard);
+    const head = pageHead('设置', 'SETTINGS · 数字员工配置', null);
+    head.firstChild.append(info);
+    // a section index on the left (sticky), the form in one column on the right
+    const index = h('nav', { class: 'set-index', 'aria-label': '设置分组' });
+    clear(main).append(head, errBox, h('div', { class: 'set-layout' }, index, h('div', { class: 'set-col' }, form, logCard)));
     const dialog = document.getElementById('ops-confirm');
     const dialogBody = document.getElementById('ops-confirm-body');
     let pending = null;
@@ -1500,12 +1575,15 @@
     function field(key, control, hint) {
       const dflt = get(st.defaults, key);
       const cur = get(st.config, key);
+      // a row: the label, its config key as a caption and the hint on the left; the control on the right
       const lab = h('label', { class: 'set-field', 'data-key': key },
-        h('span', { class: 'set-label' }, FIELD_LABEL[key] || key, h('code', { class: 'set-key' }, key)),
-        control,
-        h('span', { class: 'set-hint' }, (hint ? hint + ' · ' : '') + '默认：' + (dflt === undefined ? '—' : showDefault(dflt)),
-          !same(cur, dflt) ? h('span', { class: 'pill', 'data-tone': 'warn' }, '≠ 默认') : null,
-          h('span', { class: 'pill dirty', 'data-tone': 'bad', hidden: true }, '未保存')));
+        h('span', { class: 'set-meta' },
+          h('span', { class: 'set-label' }, FIELD_LABEL[key] || key,
+            !same(cur, dflt) ? h('span', { class: 'pill', 'data-tone': 'warn' }, '≠ 默认') : null,
+            h('span', { class: 'pill dirty', 'data-tone': 'bad', hidden: true }, '未保存')),
+          h('code', { class: 'set-key' }, key),
+          h('span', { class: 'set-hint' }, (hint ? hint + ' · ' : '') + '默认：' + (dflt === undefined ? '—' : showDefault(dflt)))),
+        h('span', { class: 'set-control' }, control));
       return lab;
     }
     function text(key, attrs) {
@@ -1572,8 +1650,43 @@
     }
 
     function section(title, en, kids, note) {
-      return h('fieldset', { class: 'ops-card set-section' }, h('legend', {}, title, h('small', {}, en)), note ? h('p', { class: 'note' }, note) : null, kids);
+      const id = 'set-' + en.toLowerCase().replace(/[^a-z]+/g, '-').replace(/^-|-$/g, '');
+      return h('fieldset', { class: 'ops-card set-section', id }, h('legend', {}, title, h('small', {}, en)), note ? h('p', { class: 'note' }, note) : null, kids);
     }
+    // the index lists the sections; the one at the top of the screen is marked, a section with unsaved changes has a dot
+    function renderIndex() {
+      const targets = [...form.querySelectorAll('.set-section'), form.querySelector('.set-readonly'), logCard].filter(Boolean);
+      fill(index, targets.map((sec) => {
+        const title = sec.matches('.set-section') ? sec.querySelector('legend').firstChild.textContent
+          : sec === logCard ? '修改记录' : '其他（只读）';
+        return h('a', { href: '#' + sec.id, 'data-target': sec.id, onclick: (ev) => {
+          ev.preventDefault();
+          if (sec.tagName === 'DETAILS') sec.open = true;
+          sec.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        } }, title);
+      }));
+      spy();
+    }
+    function spy() {
+      const links = [...index.querySelectorAll('a')];
+      const line = document.querySelector('.site-bar') ? document.querySelector('.site-bar').getBoundingClientRect().bottom + 40 : 100;
+      let cur = links[0];
+      for (const a of links) {
+        const el = document.getElementById(a.dataset.target);
+        if (el && el.getBoundingClientRect().top <= line) cur = a;
+      }
+      // at the bottom of the page the last section is the current one, even when it is too short to reach the top
+      if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) cur = links[links.length - 1];
+      for (const a of links) {
+        if (a === cur) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current');
+      }
+    }
+    let spyQueued = false;
+    addEventListener('scroll', () => {
+      if (spyQueued) return;
+      spyQueued = true;
+      requestAnimationFrame(() => { spyQueued = false; spy(); });
+    }, { passive: true });
     function changes() {
       const out = [];
       for (const key of st.editable) {
@@ -1591,9 +1704,18 @@
       }
       saveBtn.disabled = !dirty.size;
       resetBtn.disabled = !dirty.size;
+      // the save bar shows only while something is unsaved
+      form.classList.toggle('is-dirty', dirty.size > 0);
+      dirtyNote.textContent = dirty.size ? `${dirty.size} 项修改还没保存` : '';
+      for (const a of index.querySelectorAll('a')) {
+        const sec = document.getElementById(a.dataset.target);
+        const n = sec && sec.matches('.set-section') ? [...sec.querySelectorAll('.set-field')].filter((f) => dirty.has(f.dataset.key)).length : 0;
+        if (n) a.dataset.dirty = String(n); else delete a.dataset.dirty;
+      }
     }
     const saveBtn = h('button', { type: 'submit', class: 'btn primary', id: 'settings-save', disabled: true }, '检查并保存…');
     const resetBtn = h('button', { type: 'button', class: 'btn ghost', id: 'settings-reset', disabled: true, onclick: () => render() }, '撤销修改');
+    const dirtyNote = h('span', { class: 'set-dirty-note', 'aria-live': 'polite' });
 
     function render() {
       errBox.hidden = true;
@@ -1673,7 +1795,8 @@
           field('dispatch.unresolved_retries', num('dispatch.unresolved_retries', 0, 5), 'provider 出过错后又有事件没处理完：恢复后最多再跑几次才发卡片；0 = 立刻发卡片'),
         ], 'Claude / Codex 返回 5xx、超时、限流或额度用完，重试和换 provider 都没用时，不发卡片给你：守护进程用一个极小的请求定时探测，恢复了就自动接着处理，期间的新消息都排着不会丢。'),
         readOnly(),
-        h('div', { class: 'set-actions' }, resetBtn, saveBtn));
+        h('div', { class: 'set-actions' }, dirtyNote, h('span', { class: 'set-buttons' }, resetBtn, saveBtn)));
+      renderIndex();
       markDirty();
     }
     function readOnly() {
@@ -1693,8 +1816,10 @@
         ['blockers.skill_proposal_suppress_days', (st.config.blockers || {}).skill_proposal_suppress_days],
         ['blockers.max_skill_proposals_per_run', (st.config.blockers || {}).max_skill_proposals_per_run],
       ];
-      return h('details', { class: 'ops-card set-readonly' }, h('summary', {}, '其他设置（只读，用 config set 修改）'),
-        h('dl', { class: 'kv' }, rows.map(([k, v]) => [h('dt', {}, k), h('dd', { class: 'mono' }, show(v))])));
+      // a key with a name shows the name, its key as the caption
+      return h('details', { class: 'ops-card set-readonly', id: 'set-readonly' }, h('summary', {}, '其他设置（只读，用 config set 修改）'),
+        h('dl', { class: 'kv' }, rows.map(([k, v]) => [h('dt', {}, FIELD_LABEL[k] ? [FIELD_LABEL[k], h('code', { class: 'set-key' }, k)] : h('code', { class: 'set-key' }, k)),
+          h('dd', { class: 'mono' }, show(v))])));
     }
     function renderLog(log) {
       clear(logCard).append(h('h3', {}, '修改记录 ', h('span', { class: 'count' }, log.length)),
@@ -1855,24 +1980,24 @@
   }
   const m = /^\/runs\/([A-Za-z0-9-]{1,40})$/.exec(path);
   const g = /^\/gaps\/([a-z0-9]{1,40})$/.exec(path);
-  if (m) { document.title = 'Slack Followup · run ' + m[1]; RunDetail(m[1]); }
-  else if (g) { document.title = 'Slack Followup · 阻塞 ' + g[1]; GapDetail(g[1]); }
-  else if (path === '/gaps') { document.title = 'Slack Followup · 缺口'; Gaps(); }
-  else if (path === '/runs') { document.title = 'Slack Followup · 运行记录'; Runs(); }
-  else if (path === '/backlog') { document.title = 'Slack Followup · 旧积压'; Backlog(); }
-  else if (path === '/intake') { document.title = 'Slack Followup · 收件'; Intake(); }
+  if (m) { document.title = 'Kage · run ' + m[1]; RunDetail(m[1]); }
+  else if (g) { document.title = 'Kage · 阻塞 ' + g[1]; GapDetail(g[1]); }
+  else if (path === '/gaps') { document.title = 'Kage · 缺口'; Gaps(); }
+  else if (path === '/runs') { document.title = 'Kage · 运行记录'; Runs(); }
+  else if (path === '/backlog') { document.title = 'Kage · 旧积压'; Backlog(); }
+  else if (path === '/intake') { document.title = 'Kage · 收件'; Intake(); }
   else if (path === '/rules') {
     const q = new URLSearchParams(location.search);
     const check = q.get('check');
     const prop = q.get('proposal');
-    if (check && /^rc[0-9a-f]{14}$/.test(check)) { document.title = 'Slack Followup · 检查 ' + check; RuleCheckDetail(check); }
-    else if (prop && /^rp[0-9a-f]{14}$/.test(prop)) { document.title = 'Slack Followup · 提议 ' + prop; RuleProposalDetail(prop); }
-    else { document.title = 'Slack Followup · 规则'; Rules(); }
+    if (check && /^rc[0-9a-f]{14}$/.test(check)) { document.title = 'Kage · 检查 ' + check; RuleCheckDetail(check); }
+    else if (prop && /^rp[0-9a-f]{14}$/.test(prop)) { document.title = 'Kage · 提议 ' + prop; RuleProposalDetail(prop); }
+    else { document.title = 'Kage · 规则'; Rules(); }
   }
-  else if (path === '/routines') { document.title = 'Slack Followup · 定时任务'; Routines(); }
-  else if (path === '/learning') { document.title = 'Slack Followup · 学习'; Learning(); }
-  else if (path === '/health') { document.title = 'Slack Followup · 健康'; Health(); }
-  else if (path === '/design') { document.title = 'Slack Followup · 设计'; Design(); }
-  else if (path === '/settings') { document.title = 'Slack Followup · 设置'; Settings(); }
+  else if (path === '/routines') { document.title = 'Kage · 定时任务'; Routines(); }
+  else if (path === '/learning') { document.title = 'Kage · 学习'; Learning(); }
+  else if (path === '/health') { document.title = 'Kage · 健康'; Health(); }
+  else if (path === '/design') { document.title = 'Kage · 设计'; Design(); }
+  else if (path === '/settings') { document.title = 'Kage · 设置'; Settings(); }
   else { clear(main).append(h('div', { class: 'empty' }, h('b', {}, '页面不存在'), h('a', { href: '/runs' }, '去运行记录'))); }
 })();

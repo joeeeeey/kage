@@ -1,4 +1,4 @@
-/* Slack Followup · 收件轨迹 (P48): the inbox list with each message's 8-stage pipeline, and the trace drawer that shows
+/* Kage · 收件轨迹 (P48): the inbox list with each message's 8-stage pipeline, and the trace drawer that shows
    its whole chain (收到 → 过滤 / 合并 → 分诊 → 路由 → 派发 → 卡片 → 回复 → 结清). Vanilla JS, same-origin only, never parses HTML:
    data is always set as text; the icons are fixed inline SVG paths. Mounted by ops.js Intake(); the helpers come from there. */
 'use strict';
