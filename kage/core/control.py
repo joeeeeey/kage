@@ -68,6 +68,8 @@ WORDS_READS_PER_MINUTE = 6             # Slack reads the console may make a minu
 WORDS_MAX_CACHED = 32                  # conversations held in memory
 WORDS_PAGE = 200                       # messages of one conversation's thread read at once
 TEXT_STATES = ('stored', 'expired', 'in_slack', 'slack', 'slack_edited', 'unreadable', 'busy')
+SLACK_MARKUP_RE = re.compile(r'<([^<>]*)>')   # C3.1: Slack's markup in a message's stored text (see slack_plain)
+SLACK_URL_RE = re.compile(r'(?:https?|mailto|ftp|tel):', re.I)
 TS_RE = re.compile(r'\d+\.\d+')
 CHANNEL_RE = re.compile(r'[CG][A-Z0-9]{2,}')
 USER_RE = re.compile(r'[UW][A-Z0-9]{2,}')
@@ -325,7 +327,8 @@ class Control:
                             (now - 3600,)).fetchone()[0]
         if recent >= cfg['messages_per_hour']:
             return None
-        facts = {'source': 'slack', 'channel': channel, 'via': via, 'hand_typed': True, 'root': root or ts}
+        facts = {'source': 'slack', 'channel': channel, 'via': via, 'hand_typed': True, 'root': root or ts,
+                 'plain_digest': digest(slack_plain(text))}  # C3.1: the words as typed (Slack may re-render its markup)
         mid = _new_id('cm')
         with _transaction(db):
             if db.execute("SELECT 1 FROM control_messages WHERE channel=? AND ts=? AND role='owner'", (channel, ts)).fetchone():
@@ -1108,9 +1111,14 @@ class Control:
             if m is None:
                 p['text_state'] = 'unreadable'
                 continue
-            raw = m.get('text') or ''
-            p['text'] = html.unescape(str(raw))[:MAX_REPLY]
-            p['text_state'] = 'slack' if digest(raw) == r['digest'] else 'slack_edited'
+            raw = str(m.get('text') or '')
+            plain = slack_plain(raw)
+            p['text'] = plain[:MAX_REPLY]
+            if r['role'] != 'owner':  # C3.1: the run's own words as Slack keeps them (link markup, escaping): never 'edited'
+                p['text_state'] = 'slack'
+            else:  # the owner's words: unchanged when the raw text, or the same words as typed, match what was recorded
+                recorded = {r['digest'], json.loads(r['facts'] or '{}').get('plain_digest')}
+                p['text_state'] = 'slack' if recorded & {digest(raw), digest(plain)} else 'slack_edited'
         return info
 
     def public(self, db, m):
@@ -1118,7 +1126,8 @@ class Control:
         out = {'id': m['message_id'], 'conversation': m['conversation_id'], 'role': m['role'], 'source': m['source'],
                'text': m['text'], 'expired': m['text'] is None, 'state': m['state'],
                'needs_answer': bool(m['needs_answer']), 'reply_to': m['reply_to'], 'error': m['error'],
-               'run_id': m['run_id'], 'facts': json.loads(m['facts'] or '{}'), 'created_at': _iso(m['created_at']),
+               'run_id': m['run_id'], 'facts': {k: v for k, v in json.loads(m['facts'] or '{}').items() if k != 'plain_digest'},
+               'created_at': _iso(m['created_at']),
                'updated_at': _iso(m['updated_at']), 'relays': []}
         # C3: where the text comes from: stored (console words, the run's answers), expired (past retention), in_slack (a
         # Slack message whose text is not stored: the owner's words, or an answer from before C3 / past retention;
@@ -1220,6 +1229,37 @@ class Control:
             lines += ['', self.msg('control.relay.note', note=note)]
         lines += ['', self.msg('control.relay.tail', name=self.name)]
         return '\n'.join(lines) + '\n'
+
+
+def slack_plain(raw):
+    """A message's text as it was typed, from the form Slack stores (C3.1). Every <…> in Slack's stored text is markup
+    (a typed < > & arrives escaped), so each becomes plain text, then &amp; &lt; &gt; are undone:
+    - links: <url> -> url; <url|label> -> the label when it is the url (with or without its scheme), else 'label (url)';
+    - people and channels: <@U…> -> @U…, <@U…|name> -> @name; <#C…|name> -> #name (#C… without a name);
+    - <!here> / <!channel> / <!everyone> -> @here / @channel / @everyone; <!subteam^S…|@team> -> its label;
+      <!date^…|fallback> -> the fallback; any other <!…|label> -> the label.
+    No markup form leaves a < or >; the result is plain text (the page escapes it)."""
+    def token(m):
+        body, _, label = m.group(1).partition('|')
+        if body[:2] in ('@U', '@W', '@B'):
+            return '@' + (label or body[1:])
+        if body[:2] in ('#C', '#G', '#D'):
+            return '#' + (label or body[1:])
+        if body.startswith('!'):
+            word = body[1:]
+            if word in ('here', 'channel', 'everyone'):
+                return '@' + word
+            if word.startswith('subteam^'):
+                return label or '@' + word.split('^', 1)[1]
+            if word.startswith('date^'):
+                return label or word.split('^')[1]
+            return label or '@' + word
+        if SLACK_URL_RE.match(body):
+            if not label or label == body or label.rstrip('/') == body.split(':', 1)[-1].lstrip('/').rstrip('/'):
+                return label or body
+            return f'{label} ({body})'
+        return label or body
+    return html.unescape(SLACK_MARKUP_RE.sub(token, str(raw)))
 
 
 class WordsUnavailable(Exception):

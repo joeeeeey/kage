@@ -539,6 +539,65 @@ class ConsoleWordsTest(unittest.TestCase):
         self.assertEqual(view['messages'][0]['text_state'], 'unreadable')
         self.assertEqual(view['conversation']['words']['state'], 'unreadable')
 
+    def test_slack_markup_and_escaping_are_not_edits(self):
+        typed = 'R&D <ship> > now, see http://example.com/a?b=1&c=2 with <@U0000OWNER1|mira>'
+        raw = 'R&amp;D &lt;ship&gt; &gt; now, see <http://example.com/a?b=1&amp;c=2> with <@U0000OWNER1|mira>'
+        m = self.slack.say(self.t(10), raw)  # as Slack stores what the owner typed
+        mid = self.push(m)['message_id']
+        cv = self.c._row(self.db, mid)['conversation_id']
+        self.assertNotIn('plain_digest', self.view(cv, None)['messages'][0]['facts'])  # internal, not for the page
+        clock = [self.now]
+        words = C.SlackWords(Reader(self.slack), clock=lambda: clock[0])
+        owner = self.view(cv, words)['messages'][0]
+        self.assertEqual((owner['text'], owner['text_state']), (typed.replace('<@U0000OWNER1|mira>', '@mira'), 'slack'))
+        # Slack renders the same words with other markup later (a labelled link, the mention without its label)
+        self.slack.top[m['ts']]['text'] = ('R&amp;D &lt;ship&gt; &gt; now, see <http://example.com/a?b=1&amp;c=2|'
+                                           'http://example.com/a?b=1&amp;c=2> with <@U0000OWNER1|mira>')
+        clock[0] += C.WORDS_TTL + 1
+        self.assertEqual(self.view(cv, words)['messages'][0]['text_state'], 'slack')
+        self.slack.top[m['ts']]['text'] = 'R&amp;D &lt;ship&gt; &gt; tomorrow'  # a real edit
+        clock[0] += C.WORDS_TTL + 1
+        owner = self.view(cv, words)['messages'][0]
+        self.assertEqual((owner['text'], owner['text_state']), ('R&D <ship> > tomorrow', 'slack_edited'))
+
+    def test_a_slack_escaped_answer_is_ours_and_never_edited(self):
+        m, mid, cv = self.conversation()
+        self.hold()
+        answer = 'A & B < C > D, see http://example.com/x?a=1&b=2'
+        self.c.reply(self.rt, self.db, 'db', mid, answer, now=self.now)
+        posted = self.slack.threads[m['ts']][-1]
+        posted['text'] = 'A &amp; B &lt; C &gt; D, see <http://example.com/x?a=1&amp;b=2>'  # as Slack keeps our post
+        with transaction(self.db):  # an answer from C2: its text not stored, read back from the thread
+            self.db.execute("UPDATE control_messages SET text=NULL WHERE role='control'")
+        clock = [self.now]
+        words = C.SlackWords(Reader(self.slack), clock=lambda: clock[0])
+        view = self.view(cv, words)['messages'][1]
+        self.assertEqual((view['text'], view['text_state']), (answer, 'slack'))
+        posted['text'] = 'something else entirely'  # even then: our own words are never shown as edited
+        clock[0] += C.WORDS_TTL + 1
+        self.assertEqual(self.view(cv, words)['messages'][1]['text_state'], 'slack')
+
+    def test_every_slack_markup_form_becomes_plain_text(self):
+        forms = {
+            '<http://example.com/a>': 'http://example.com/a',
+            '<http://example.com|example.com>': 'example.com',
+            '<https://example.com/doc|the doc>': 'the doc (https://example.com/doc)',
+            '<mailto:someone@example.com|someone@example.com>': 'someone@example.com',
+            '<@U0000OWNER1>': '@U0000OWNER1',
+            '<@U0000OWNER1|mira>': '@mira',
+            '<#C0000CARDS1|cards>': '#cards',
+            '<#C0000CARDS1>': '#C0000CARDS1',
+            '<!here>': '@here', '<!channel>': '@channel', '<!everyone>': '@everyone', '<!here|here>': '@here',
+            '<!subteam^S0000TEAM01|@infra>': '@infra', '<!subteam^S0000TEAM02>': '@S0000TEAM02',
+            '<!date^1792500000^{date_short}|Oct 20, 2026>': 'Oct 20, 2026', '<!date^1792500000^{date_short}>': '1792500000',
+            '&amp; &lt; &gt;': '& < >',
+        }
+        for raw, plain in forms.items():
+            out = C.slack_plain(f'x {raw} y')
+            self.assertEqual(out, f'x {plain} y', raw)
+            if '&' not in raw:
+                self.assertNotRegex(out, '[<>]', raw)  # no markup form leaves a < or >
+
     def test_reads_are_rate_limited_and_a_429_pauses_them(self):
         clock = [self.now]
         reader = Reader(self.slack)
