@@ -610,6 +610,12 @@ class CliCore:
         # P38 (F49): one-off install check of every owner-facing destination (posts nothing; the assistant's conversations.info).
         cdc = sub.add_parser('card-destination-check', help=f'Install check: are the configured and every stored {self.name}-facing card channel private / an IM per Slack? Exit 1 if a configured one or one used in the last 30 days is not (older ones are listed as legacy)')
         cdc.add_argument('--refresh', action='store_true', help='Ignore cached verdicts and ask Slack again')
+        # ---- O1a: read-only installation checks ----
+        doc = sub.add_parser('doctor', help='Onboarding: read-only installation checks (tokens and identities, the private card '
+                                            'destination, state, services, agent CLIs, clock, secrets in the deployment); '
+                                            'posts nothing, changes nothing')
+        doc.add_argument('--offline', action='store_true', help='No Slack call (skips the two auth.test reads)')
+        doc.add_argument('--json', action='store_true', help='The report as JSON')
         # ---- P35 learn rules from the owner's card feedback ----
         idis = sub.add_parser('interaction-distill', help=f"Handling session: fill the one-line distillation of {self.name}'s intent for an interaction (raw text stays in the private store)")
         idis.add_argument('--event', required=True, help='The resolved card event (escalation event id)')
@@ -768,6 +774,27 @@ class CliCore:
                 print(f'{self.tail_command}: {exc}', file=sys.stderr)
                 code = 2
             sys.exit(code)
+        if args.command == 'doctor':
+            # O1a, read-only like cache-report: never creates or migrates a database; two auth.test reads at most.
+            from kage.onboard import doctor
+            db = None
+            if db_path.is_file():
+                db = sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=10)
+                db.row_factory = sqlite3.Row
+            try:
+                try:
+                    health = self.rt.health_report(db) if db is not None else None
+                except Exception:  # noqa: BLE001 - the runtime checks are then reported as skipped
+                    health = None
+                tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
+                report = doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
+                                    db_path=db_path, db=db, health=health,
+                                    deployment_dir=os.environ.get('KAGE_DEPLOYMENT_DIR'), offline=args.offline)
+            finally:
+                if db is not None:
+                    db.close()
+            print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else doctor.text(report))
+            sys.exit(0 if report['ok'] else 1)
         db = self.rt.connect(db_path)
         if args.command.startswith('control-'):
             result = self.control_command(args, db, db_path)
