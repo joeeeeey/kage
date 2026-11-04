@@ -173,8 +173,10 @@ def runtime_checks(db: sqlite3.Connection | None, health: dict[str, Any] | None,
         out.append(check('runtime.providers', False, not degraded, f'{len(providers) - len(degraded)} / {len(providers)} '
                          'providers healthy' + (f'; degraded: {", ".join(degraded)}' if degraded else ''), 'see `health`'))
         counts = (health.get('stranded') or {}).get('counts') or {}
-        open_stranded = sum(v for k, v in counts.items() if k != 'handled')
-        out.append(check('runtime.stranded', False, not open_stranded, f'{open_stranded} stranded deliveries not handled',
+        open_stranded = sum(v for k, v in counts.items() if k not in ('handled', 'held'))
+        held = counts.get('held', 0)
+        out.append(check('runtime.stranded', False, not open_stranded, f'{open_stranded} stranded deliveries open' +
+                         (f', {held} held (their task is paused)' if held else ''),
                          'see `health` (the supervisor re-delivers them)'))
         blocked = len((health.get('stuck_claims') or {}).get('blocked') or [])
         out.append(check('runtime.stuck_claims', False, not blocked, f'{blocked} stuck claims blocking delivery',
@@ -190,14 +192,27 @@ def runtime_checks(db: sqlite3.Connection | None, health: dict[str, Any] | None,
     return out
 
 
-def service_checks(deployment_dir: str | None, probe: Probe) -> list[dict[str, Any]]:
-    if not deployment_dir:
-        return [check('services.running', True, None, 'no deployment directory in this environment')]
-    path = Path(deployment_dir).expanduser().parent / 'services.json'
+def deployment_root(profile_dir: Path | None, owner_key: str, environ) -> Path | None:
+    """The deployment repository (the directory holding services.json): the services' KAGE_DEPLOYMENT_DIR, else the
+    profile directory's parent, else the conventional checkout `<KAGE_HOME>/deploy-<owner key>`; None when none has it."""
+    candidates = []
+    if environ.get('KAGE_DEPLOYMENT_DIR'):
+        candidates.append(Path(environ['KAGE_DEPLOYMENT_DIR']).expanduser().parent)
+    if profile_dir is not None:
+        candidates.append(Path(profile_dir).expanduser().parent)
+    home = Path(environ.get('KAGE_HOME') or Path(environ.get('HOME') or Path.home()) / '.local/share/kage')
+    candidates.append(home.expanduser() / f'deploy-{owner_key}')
+    return next((c for c in candidates if (c / 'services.json').is_file()), None)
+
+
+def service_checks(root: Path | None, probe: Probe) -> list[dict[str, Any]]:
+    if root is None:
+        return [check('services.running', True, None, 'no deployment repository found (services.json)')]
+    path = root / 'services.json'
     try:
         services = json.loads(path.read_text(encoding='utf-8')).get('services') or {}
     except (OSError, ValueError):
-        return [check('services.running', True, None, f'no readable services.json next to {deployment_dir}')]
+        return [check('services.running', True, None, f'services.json unreadable in {root}')]
     states = {name: probe.launchd_state(spec.get('label', '')) for name, spec in services.items()}
     down = [name for name, state in states.items() if state != 'running']
     return [check('services.running', True, not down, f'{len(states) - len(down)} / {len(states)} running' +
@@ -220,13 +235,17 @@ def clock_checks(owner, probe: Probe) -> list[dict[str, Any]]:
                   'set the owner timezone in owner.json (or the system one)')]
 
 
-def secret_checks(deployment_dir: str | None) -> list[dict[str, Any]]:
-    if not deployment_dir:
-        return [check('secrets.not_in_deployment', True, None, 'no deployment directory in this environment')]
-    root = Path(deployment_dir).expanduser().parent
+def secret_checks(roots: list[Path]) -> list[dict[str, Any]]:
+    if not roots:
+        return [check('secrets.not_in_deployment', True, None, 'no deployment directory found')]
     hits = 0
     files = 0
-    for path in sorted(root.rglob('*')):
+    seen = set()
+    paths = [p for root in roots for p in sorted(Path(root).rglob('*'))]
+    for path in paths:
+        if path.resolve() in seen:
+            continue
+        seen.add(path.resolve())
         if '.git' in path.parts or not path.is_file() or path.stat().st_size > 2_000_000:
             continue
         files += 1
@@ -239,10 +258,12 @@ def secret_checks(deployment_dir: str | None) -> list[dict[str, Any]]:
 
 
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
-        deployment_dir: str | None, providers=('claude', 'codex'), offline=False) -> dict[str, Any]:
+        profile_dir: Path | None, providers=('claude', 'codex'), offline=False) -> dict[str, Any]:
+    root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
+    scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
     checks = (slack_checks(owner, probe, tokens, offline) + state_checks(db_path, db) + runtime_checks(db, health, probe)
-              + service_checks(deployment_dir, probe) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
-              + secret_checks(deployment_dir))
+              + service_checks(root, probe) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
+              + secret_checks(scan))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
     warnings = [c['id'] for c in checks if not c['required'] and c['ok'] is False]
     return {'ok': not failed, 'failed': failed, 'warnings': warnings, 'checks': checks}

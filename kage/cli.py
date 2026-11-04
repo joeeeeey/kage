@@ -616,6 +616,11 @@ class CliCore:
                                             'posts nothing, changes nothing')
         doc.add_argument('--offline', action='store_true', help='No Slack call (skips the two auth.test reads)')
         doc.add_argument('--json', action='store_true', help='The report as JSON')
+        man = sub.add_parser('manifest', help='Onboarding: print the Slack app manifest for this deployment (paste it at '
+                                              'api.slack.com/apps) and the steps after it; reads nothing, posts nothing')
+        man.add_argument('--as-owner', action='store_true', help='Add the user-token scopes (speak as the owner, read the '
+                                                                  "owner's DMs, search)")
+        man.add_argument('--name', help="The app's name (default: the assistant's display name)")
         # ---- P35 learn rules from the owner's card feedback ----
         idis = sub.add_parser('interaction-distill', help=f"Handling session: fill the one-line distillation of {self.name}'s intent for an interaction (raw text stays in the private store)")
         idis.add_argument('--event', required=True, help='The resolved card event (escalation event id)')
@@ -774,6 +779,10 @@ class CliCore:
                 print(f'{self.tail_command}: {exc}', file=sys.stderr)
                 code = 2
             sys.exit(code)
+        if args.command == 'manifest':
+            from kage.onboard import manifest
+            print(manifest.render(args.name or self.assistant, as_owner=args.as_owner))
+            return
         if args.command == 'doctor':
             # O1a, read-only like cache-report: never creates or migrates a database; two auth.test reads at most.
             from kage.onboard import doctor
@@ -788,8 +797,8 @@ class CliCore:
                     health = None
                 tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
                 report = doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
-                                    db_path=db_path, db=db, health=health,
-                                    deployment_dir=os.environ.get('KAGE_DEPLOYMENT_DIR'), offline=args.offline)
+                                    db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
+                                    offline=args.offline)
             finally:
                 if db is not None:
                     db.close()

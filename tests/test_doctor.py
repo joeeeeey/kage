@@ -57,12 +57,12 @@ class DoctorTest(unittest.TestCase):
         (root / 'deploy' / 'owner.json').write_text('{"schema": "kage.owner/v1"}')
         (root / 'services.json').write_text(json.dumps({'services': {'followup': {'label': 'test.followup'},
                                                                      'receiver': {'label': 'test.receiver'}}}))
-        self.deployment = str(root / 'deploy')
+        self.deployment = root / 'deploy'
         self.tokens = {'bot': lambda: 'bot-token', 'user': lambda: 'user-token'}
 
     def run_doctor(self, probe, **kw):
         args = dict(probe=probe, tokens=self.tokens, db_path=self.db_path, db=self.db, health=HEALTH,
-                    deployment_dir=self.deployment, providers=('claude', 'codex'))
+                    profile_dir=self.deployment, providers=('claude', 'codex'))
         args.update(kw)
         return D.run(OWNER, **args)
 
@@ -135,7 +135,7 @@ class DoctorTest(unittest.TestCase):
 
     def test_a_token_in_the_deployment_fails_without_printing_it(self):
         secret = 'xoxb-' + '1234567890-abcdefghij'
-        (Path(self.deployment) / 'instance.json').write_text(json.dumps({'oops': secret}))
+        (self.deployment / 'instance.json').write_text(json.dumps({'oops': secret}))
         report = self.run_doctor(self.healthy_probe())
         self.assertEqual(report['failed'], ['secrets.not_in_deployment'])
         self.assertNotIn(secret, json.dumps(report) + D.text(report))
@@ -146,11 +146,34 @@ class DoctorTest(unittest.TestCase):
         self.assertIn('clock.timezone', report['warnings'])
 
     def test_without_a_deployment_directory_the_file_checks_are_skipped(self):
-        report = self.run_doctor(self.healthy_probe(), deployment_dir=None, db=None, health=None)
+        report = self.run_doctor(self.healthy_probe(), profile_dir=None, db=None, health=None)
         checks = self.by_id(report)
         self.assertIsNone(checks['services.running']['ok'])
         self.assertIsNone(checks['secrets.not_in_deployment']['ok'])
         self.assertTrue(report['ok'])
+
+    def test_the_deployment_is_found_without_the_services_environment(self):
+        root = Path(self.tmp.name)
+        self.assertEqual(D.deployment_root(self.deployment, 'mira', {'HOME': '/nonexistent'}), root)
+        # a profile elsewhere (e.g. inside a skill): the conventional checkout <KAGE_HOME>/deploy-<key>
+        elsewhere = root / 'skill' / 'deploy'
+        elsewhere.mkdir(parents=True)
+        home = root / 'kagehome'
+        (home / 'deploy-mira').mkdir(parents=True)
+        (home / 'deploy-mira' / 'services.json').write_text('{"services": {}}')
+        self.assertEqual(D.deployment_root(elsewhere, 'mira', {'KAGE_HOME': str(home)}), home / 'deploy-mira')
+        # the services' own variable wins
+        self.assertEqual(D.deployment_root(elsewhere, 'mira', {'KAGE_DEPLOYMENT_DIR': str(self.deployment),
+                                                               'KAGE_HOME': str(home)}), root)
+        self.assertIsNone(D.deployment_root(elsewhere, 'nobody', {'KAGE_HOME': str(home)}))
+
+    def test_held_stranded_rows_are_not_a_warning(self):
+        health = {**HEALTH, 'stranded': {'counts': {'handled': 7, 'held': 1}}}
+        check = self.by_id(self.run_doctor(self.healthy_probe(), health=health))['runtime.stranded']
+        self.assertIs(check['ok'], True)
+        self.assertEqual(check['detail'], '0 stranded deliveries open, 1 held (their task is paused)')
+        health = {**HEALTH, 'stranded': {'counts': {'pending': 2}}}
+        self.assertIs(self.by_id(self.run_doctor(self.healthy_probe(), health=health))['runtime.stranded']['ok'], False)
 
     def test_an_unreadable_store_is_a_finding_not_a_crash(self):
         class Broken:
