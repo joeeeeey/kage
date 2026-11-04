@@ -2,7 +2,8 @@
 
 Each check returns `{id, required, ok, detail, fix}`; `ok` is True, False or None (skipped: not configured here, or
 `--offline`). The installation is healthy when no required check is False. The only network calls are two
-`auth.test` reads (the bot and the user token), and only without `--offline`.
+`auth.test` reads (the bot and the user token), and only without `--offline`. The secrets store (O1c3) is read
+locally, for presence only; no value is printed.
 
 The checks read through a `Probe` (Slack identity, files, the clock, processes), so the same code runs on a live
 install and in tests with fakes.
@@ -20,6 +21,10 @@ import subprocess
 import time
 from typing import Any, Callable
 import urllib.request
+
+from kage.onboard import identity
+from kage.onboard.tokens import TokenRefused
+from kage.ports.secrets import SLACK_APP, SLACK_BOT, SLACK_USER, SecretError
 
 # Bot-token scopes for what the runtime calls today (chat.postMessage / chat.update, conversations.history / replies /
 # info in private channels and IMs, reactions, users.info / lookupByEmail). Reported, never required: an older app can
@@ -257,13 +262,38 @@ def secret_checks(roots: list[Path]) -> list[dict[str, Any]]:
                   'move the token into the secrets store and rotate it')]
 
 
+def identity_checks(owner, state_dir: Path) -> list[dict[str, Any]]:
+    """The profile's Slack identity against the verified record (O1c3); an adopted profile is skipped."""
+    fix = 'verify the owner: the user token, or the one-time code sent to the bot as a direct message'
+    try:
+        ok, detail = identity.status(owner, state_dir)
+    except (TokenRefused, OSError, ValueError) as exc:
+        return [check('owner.identity', True, False,
+                      f"identity record unreadable ({getattr(exc, 'code', type(exc).__name__)})", fix)]
+    return [check('owner.identity', True, ok, detail, fix)]
+
+
+def port_checks(store) -> list[dict[str, Any]]:
+    """Kage's own transport reads its tokens from the secrets store: bot and app-level token present (user optional).
+    A deployment whose own transport reads its tokens is skipped."""
+    if store is None:
+        return [check('secrets.port', False, None, "the deployment's own transport reads its tokens")]
+    try:
+        present = {name: store.has(name) for name in (SLACK_BOT, SLACK_APP, SLACK_USER)}
+    except SecretError as exc:
+        return [check('secrets.port', True, False, f'{store.kind} store: {exc}', 'check the secrets store')]
+    detail = f'{store.kind} store: ' + ', '.join(f"{n} {'present' if p else 'absent'}" for n, p in present.items())
+    return [check('secrets.port', True, present[SLACK_BOT] and present[SLACK_APP], detail,
+                  'store the bot and app-level tokens through onboarding')]
+
+
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
-        profile_dir: Path | None, providers=('claude', 'codex'), offline=False) -> dict[str, Any]:
+        profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
     scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
     checks = (slack_checks(owner, probe, tokens, offline) + state_checks(db_path, db) + runtime_checks(db, health, probe)
               + service_checks(root, probe) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
-              + secret_checks(scan))
+              + secret_checks(scan) + port_checks(secret_store) + identity_checks(owner, Path(db_path).parent))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
     warnings = [c['id'] for c in checks if not c['required'] and c['ok'] is False]
     return {'ok': not failed, 'failed': failed, 'warnings': warnings, 'checks': checks}

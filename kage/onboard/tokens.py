@@ -17,8 +17,9 @@ import urllib.parse
 import urllib.request
 
 from kage.onboard import manifest
+from kage.ports.secrets import SLACK_APP, SLACK_BOT, SLACK_USER
 
-BOT, APP, USER = 'slack-bot-token', 'slack-app-token', 'slack-user-token'  # names in the secrets store
+BOT, APP, USER = SLACK_BOT, SLACK_APP, SLACK_USER  # names in the secrets store
 PREFIX = {BOT: 'xoxb-', APP: 'xapp-', USER: 'xoxp-'}
 GUARD_ENV = 'KAGE_NO_REAL_SLACK'
 

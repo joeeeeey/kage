@@ -3,8 +3,9 @@
 The guard: when the environment variable named `guard_env` is "1", no token is loaded and every HTTP call (Web API,
 form call, file upload) raises before a request is built. Test harnesses and sandboxes set it.
 
-Tokens come from an environment variable, else a file (both configurable). Identity checks make sure a bot token is the
-expected bot and a user token is a person, not the bot.
+Tokens come from an environment variable, else a file (both configurable), or only from the owner's secrets store when
+one is given (O1c3, kage.ports.secrets). Identity checks make sure a bot token is the expected bot and a user token is a
+person, not the bot.
 
 Callers and their tests replace module-level functions of the adapter that wraps this transport (api_call,
 add_reactions). So that a replaced `api_call` is the one every other operation uses, the transport calls through
@@ -21,6 +22,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from kage.ports.secrets import SLACK_BOT, SLACK_USER
+
 API_BASE = 'https://slack.com/api'
 BOT_TOKEN_PREFIX = 'xoxb-'
 
@@ -29,7 +32,8 @@ class Transport:
     def __init__(self, *, guard_env, owner_name, expected_bot_user, user_token_env='SLACK_USER_TOKEN',
                  user_token_file_env='SLACK_USER_TOKEN_FILE', user_token_file='~/.config/slack/token',
                  bot_token_env='SLACK_BOT_TOKEN', bot_token_file_env='SLACK_BOT_TOKEN_FILE',
-                 bot_token_file='~/.config/slack/bot-token', post_send=None, call=None, emoji_example='eyes'):
+                 bot_token_file='~/.config/slack/bot-token', post_send=None, call=None, emoji_example='eyes',
+                 secret_store=None):
         self.guard_env, self.owner_name, self.expected_bot_user = guard_env, owner_name, expected_bot_user
         self.user_token_env, self.user_token_file_env, self.user_token_file = (user_token_env, user_token_file_env,
                                                                                user_token_file)
@@ -37,6 +41,7 @@ class Transport:
         self.post_send = post_send or (lambda response, payload: None)
         self.call = call or self.api_call
         self.emoji_example = emoji_example  # the second name in the add_reactions usage error (a deployment's own)
+        self.secret_store = secret_store  # O1c3: tokens from the owner's secrets port instead of env / files
 
     def offline(self):
         return os.environ.get(self.guard_env) == '1'
@@ -119,12 +124,16 @@ class Transport:
     def default_user_token(self):
         if self.offline():
             return ''
+        if self.secret_store is not None:
+            return self.secret_store.get(SLACK_USER) or ''
         return (os.environ.get(self.user_token_env, '').strip()
                 or self.read_token_file(os.environ.get(self.user_token_file_env, self.user_token_file)))
 
     def default_bot_token(self):
         if self.offline():
             return ''
+        if self.secret_store is not None:
+            return self.secret_store.get(SLACK_BOT) or ''
         return (os.environ.get(self.bot_token_env, '').strip()
                 or self.read_token_file(os.environ.get(self.bot_token_file_env, self.bot_token_file)))
 

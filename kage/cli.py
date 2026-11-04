@@ -796,9 +796,10 @@ class CliCore:
                 except Exception:  # noqa: BLE001 - the runtime checks are then reported as skipped
                     health = None
                 tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
+                store = getattr(getattr(self.rt.slack, 'TRANSPORT', None), 'secret_store', None)
                 report = doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
                                     db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
-                                    offline=args.offline)
+                                    offline=args.offline, secret_store=store)
             finally:
                 if db is not None:
                     db.close()

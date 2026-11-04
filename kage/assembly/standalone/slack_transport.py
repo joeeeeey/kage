@@ -2,8 +2,11 @@
 kage.adapters.slack.client under the names the runtime calls (`api_call`, `default_bot_token`, `add_reactions`, …).
 `api_call` and `notify_followup_activity` are looked up at call time, so a patched `api_call` reaches every
 operation. After a successful send the hook records the activity through Kage's own poll-schedule unit, never
-through another skill's file. Run by kage.app with `_app` in its namespace."""
+through another skill's file. The tokens come only from the owner's secrets store (O1c3, kage.ports.secrets: the
+Keychain on macOS); the token variable and file values are kept for the client's signature and not read. Run by
+kage.app with `_app` in its namespace."""
 from __future__ import annotations
+from kage.ports import secrets as _secrets
 kage_bridge = _app.bridge
 _k = kage_bridge.module('slack_client', 'kage.adapters.slack.client')
 _owner = kage_bridge.deployment().owner
@@ -18,7 +21,7 @@ CLIENT = _k.Client(
     bot_token_file_env=_app.value('slack_transport.bot_token_file_env'),
     call=lambda *args, **kwargs: api_call(*args, **kwargs),
     post_send=lambda response, payload: notify_followup_activity(response, payload),
-    followup_helper=lambda: _app.leaf('poll_schedule'))
+    followup_helper=lambda: _app.leaf('poll_schedule'), secret_store=_secrets.for_owner(_owner.key))
 (TRANSPORT, require_real_slack, api_call) = (CLIENT.transport, CLIENT.require_real_slack, CLIENT.api_call)
 (api_call_form, validate_bot_identity) = (CLIENT.api_call_form, CLIENT.validate_bot_identity)
 (validate_user_identity, validate_any_identity) = (CLIENT.validate_user_identity, CLIENT.validate_any_identity)

@@ -6,6 +6,7 @@ from unittest import mock
 
 from kage import app
 from kage.adapters.slack import client as slack_client
+from kage.ports import secrets
 from tests.test_app import Deployment
 
 LOCK = {'modules': {'registry': 'kage', 'liveness': 'kage', 'assembly': 'kage', 'slack_client': 'kage'}}
@@ -32,6 +33,23 @@ class StandaloneTransportTest(unittest.TestCase):
                              ('~/.config/kage/mira/slack-user-token', '~/.config/kage/mira/slack-bot-token'))
             for name in ('api_call', 'default_user_token', 'default_bot_token', 'add_reactions', 'paginated_list'):
                 self.assertTrue(callable(getattr(leaf, name)), name)
+
+    def test_the_tokens_come_only_from_the_owners_store(self):
+        store = secrets.MemoryStore('mira')
+        env = {'KAGE_NO_REAL_SLACK': '', 'KAGE_MIRA_SLACK_BOT_TOKEN': 'xoxb-' + 'from-env',
+               'KAGE_MIRA_SLACK_USER_TOKEN': 'xoxp-' + 'from-env'}
+        with deployment() as d, mock.patch.object(secrets, 'for_owner', return_value=store) as for_owner, \
+                mock.patch.dict(os.environ, env):
+            a = app.App(d.root / 'deploy')
+            a.verify()
+            leaf = a.leaf('slack_transport')
+            for_owner.assert_called_once_with('mira')
+            self.assertIs(leaf.TRANSPORT.secret_store, store)
+            self.assertEqual((leaf.default_bot_token(), leaf.default_user_token()), ('', ''))  # env is not read
+            store.put(secrets.SLACK_BOT, 'xoxb-' + 'from-store')
+            self.assertEqual(leaf.default_bot_token(), 'xoxb-' + 'from-store')
+            with mock.patch.dict(os.environ, {'KAGE_NO_REAL_SLACK': '1'}):
+                self.assertEqual(leaf.default_bot_token(), '')  # the guard still comes first
 
     def test_a_declared_module_still_wins(self):
         body = b'ANSWER = "the deployment\'s own"\n'

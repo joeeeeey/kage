@@ -5,7 +5,8 @@ files, git, argv, logs and reports only ever hold a reference (`kage-secret://<k
   `has(name)`.
 - Adapters: `KeychainStore` (macOS, through /usr/bin/security: the value goes only on stdin, `security -i`, and comes
   back on stdout); `FileStore` (one 0600 file per name in a 0700 directory, for a machine without a Keychain);
-  `MemoryStore` (tests). `for_owner(key)` picks the Keychain on macOS, else the file store.
+  `MemoryStore` (tests). `for_owner(key)` picks the Keychain on macOS, else the file store; KAGE_SECRETS_BACKEND
+  (`file` / `memory`) overrides that, so test harnesses on a scratch HOME never reach the user's Keychain.
 - Names are checked. A value is token characters only (letters, digits and `._~+/=:@%-`, starting with a letter or a
   digit), so the stdin line needs no quoting and no value reads as an option. No value appears in a repr, an error or
   a log line.
@@ -24,7 +25,9 @@ KEY_RE = re.compile(r'[a-z][a-z0-9_]{0,31}')  # the owner key of kage.profile
 NAME_RE = re.compile(r'[a-z0-9][a-z0-9_.-]{0,63}')
 VALUE_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._~+/=:@%-]{0,2047}')
 NAME_PATH_RE = re.compile(r'[A-Za-z0-9_./-]+')  # a keychain path written into the stdin line without quoting
+SLACK_BOT, SLACK_APP, SLACK_USER = 'slack-bot-token', 'slack-app-token', 'slack-user-token'  # the store's names
 SECURITY = '/usr/bin/security'
+BACKEND_ENV = 'KAGE_SECRETS_BACKEND'
 MAX_LINE = 4000  # security -i reads about 4 KB per line and runs the rest as another command (checked on macOS)
 NOT_FOUND = 44  # security(1): the item could not be found
 
@@ -225,7 +228,8 @@ class KeychainStore(Store):
 def for_owner(key, *, backend=None, home=None):
     """The owner's store: `keychain` on macOS (the default), else `file` under ~/.config/kage/<key>/secrets."""
     check_key(key)
-    backend = backend or ('keychain' if sys.platform == 'darwin' and os.path.exists(SECURITY) else 'file')
+    backend = (backend or os.environ.get(BACKEND_ENV)
+               or ('keychain' if sys.platform == 'darwin' and os.path.exists(SECURITY) else 'file'))
     if backend == 'keychain':
         return KeychainStore(key)
     if backend == 'file':

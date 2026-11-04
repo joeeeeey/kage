@@ -14,6 +14,7 @@ import unittest
 
 import kage
 from kage import packs
+from kage.ports import secrets
 
 KAGE_ROOT = Path(kage.__file__).resolve().parents[1]
 EXAMPLE = KAGE_ROOT / 'examples/northwind-mira/deploy'
@@ -64,7 +65,8 @@ class MinimalDeploymentTest(unittest.TestCase):
         bin_dir.mkdir()
         (bin_dir / 'claude').write_text('#!/bin/sh\necho "0.0.0 (test agent)"\n')
         os.chmod(bin_dir / 'claude', 0o755)
-        self.env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'PYTHONPATH': str(KAGE_ROOT),
+        self.env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+                         'PYTHONPATH': str(KAGE_ROOT),
                          'PYTHONDONTWRITEBYTECODE': '1', 'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}'})
 
     def kage(self, *args, session=None):
@@ -88,7 +90,13 @@ class MinimalDeploymentTest(unittest.TestCase):
         state.mkdir(parents=True, mode=0o700)
         os.chmod(state.parent, 0o700)
         doctor = self.kage('doctor', '--offline')
+        self.assertIn('FAIL  secrets.port: file store: slack-bot-token absent', doctor.stdout)  # no token stored yet
+        store = secrets.FileStore('mira', self.home / '.config/kage/mira/secrets')
+        store.put(secrets.SLACK_BOT, 'xoxb-' + 'acceptance')
+        store.put(secrets.SLACK_APP, 'xapp-' + 'acceptance')
+        doctor = self.kage('doctor', '--offline')
         self.assertIn('doctor: all required checks pass', doctor.stdout + doctor.stderr, doctor.stdout[-3000:])
+        self.assertNotIn('acceptance', doctor.stdout + doctor.stderr)  # presence only, never a value
         task = self.home / 'kage/tasks/t1'
         task.mkdir(parents=True)
         (task / 'goal.md').write_text('# Goal\n\nAcceptance task.\n')

@@ -33,8 +33,9 @@ class Client:
     def __init__(self, *, guard_env, owner_name, expected_bot_user, user_token_env, user_token_file, bot_token_env,
                  call, post_send, followup_helper, emoji_example='eyes', **token_files):
         """`token_files`: the transport's bot_token_file, user_token_file_env and bot_token_file_env, when a deployment
-        names its own (O1c2: Kage's own leaf scopes them to the owner); otherwise the transport's defaults."""
-        unknown = set(token_files) - {'bot_token_file', 'user_token_file_env', 'bot_token_file_env'}
+        names its own (O1c2: Kage's own leaf scopes them to the owner); otherwise the transport's defaults. Or
+        `secret_store` (O1c3: Kage's own leaf), and the tokens come only from that store."""
+        unknown = set(token_files) - {'bot_token_file', 'user_token_file_env', 'bot_token_file_env', 'secret_store'}
         if unknown:
             raise TypeError('unknown token file options: ' + ', '.join(sorted(unknown)))
         self.followup_helper = followup_helper
