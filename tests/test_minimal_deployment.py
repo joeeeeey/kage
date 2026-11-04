@@ -60,8 +60,12 @@ class MinimalDeploymentTest(unittest.TestCase):
         self.env = {k: v for k, v in os.environ.items()  # no token, no other deployment, no dispatched run identity
                     if not k.startswith(('SLACK_', 'KAGE_')) and '_DISPATCH_' not in k and 'RUN_CONTEXT' not in k
                     and k not in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')}
+        bin_dir = self.tmp / 'bin'  # an agent CLI the doctor can find on any machine (CI has none)
+        bin_dir.mkdir()
+        (bin_dir / 'claude').write_text('#!/bin/sh\necho "0.0.0 (test agent)"\n')
+        os.chmod(bin_dir / 'claude', 0o755)
         self.env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'PYTHONPATH': str(KAGE_ROOT),
-                         'PYTHONDONTWRITEBYTECODE': '1'})
+                         'PYTHONDONTWRITEBYTECODE': '1', 'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}'})
 
     def kage(self, *args, session=None):
         env = dict(self.env, **({'CLAUDE_CODE_SESSION_ID': session} if session else {}))
