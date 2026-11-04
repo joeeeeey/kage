@@ -9,7 +9,8 @@
   runtime_version   the runtime's VERSION when the program does not pass its own
   values            {"<unit>.<hint>": text} — the deployment's own words and names (env names, paths, help texts, its
                     receipt reactions) the generated units read with `_app.value`; one a unit reads and the deployment
-                    does not declare refuses (`value_missing`)
+                    does not declare takes its neutral, owner-scoped Kage default; an unknown key refuses
+                    (`value_missing`). Each explicit value replaces the default as a whole (including objects).
   messages          {"<catalog key>": template} — the deployment's own wording of some messages of the owner's
                     catalog (an example that names one of its projects, say), with the catalog's placeholders; set by
                     `assemble` (kage.locale.override), so the catalog itself stays free of deployment words
@@ -37,6 +38,7 @@ import types
 import kage
 from kage import locale
 from kage import profile
+from kage import defaults
 
 SHA256_RE = re.compile(r'[0-9a-f]{64}')
 UNIT_DIR = Path(__file__).with_name('assembly')
@@ -107,7 +109,7 @@ class App:
         if pinned != kage.__version__:
             raise AssemblyError(f'release_mismatch: the lock pins {pinned}, this is Kage {kage.__version__}')
         self.version = version or spec.get('runtime_version')
-        self.values = dict(spec.get('values') or {})
+        self.values = {**defaults.assembly_values(self.deployment), **dict(spec.get('values') or {})}
         self.messages = spec.get('messages') or {}  # K15d: the deployment's wording of some catalog messages
         if not isinstance(self.messages, dict):
             raise AssemblyError('assembly_messages_not_an_object')
