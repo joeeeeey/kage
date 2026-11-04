@@ -10,10 +10,13 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 import kage
-from kage import packs
+from kage import app, packs
+from kage.onboard import identity, manifest, tokens
 from kage.ports import secrets
 
 KAGE_ROOT = Path(kage.__file__).resolve().parents[1]
@@ -78,6 +81,54 @@ class MinimalDeploymentTest(unittest.TestCase):
         instance = json.loads((self.root / 'deploy/instance.json').read_text())
         self.assertNotIn('modules', instance['assembly'])
         self.assertEqual(sorted(p.name for p in self.root.iterdir()), ['deploy', 'kage.lock', 'scripts'])
+
+    def test_tokens_stored_and_the_owner_verified(self):
+        """O1c3: tokens checked, then stored in the owner's store; the owner proven by the one-time code sent to the
+        bot; Kage's transport reads the token from the store; doctor verifies both; no token outside the store."""
+        state = self.home / '.local/share/kage/state-mira'
+        state.mkdir(parents=True, mode=0o700)
+        os.chmod(state.parent, 0o700)
+        store = secrets.FileStore('mira', self.home / '.config/kage/mira/secrets')
+        bot_token, app_token = 'xoxb-' + '0000-ACCEPT', 'xapp-' + '1-A0000ACCEPT-0000-abc'
+        team, owner_id, dms = 'T0000TEST01', 'U0000TEST01', []
+
+        def slack(method, token, params=None):
+            if method == 'auth.test' and token == bot_token:
+                return ({'ok': True, 'team_id': team, 'user_id': 'U0000BOT01', 'bot_id': 'B0000TEST01'},
+                        {'x-oauth-scopes': ','.join(manifest.BOT_SCOPES)})
+            if method == 'apps.connections.open' and token == app_token:
+                return {'ok': True, 'url': 'wss://example.invalid/socket'}, {}
+            if method == 'conversations.list' and token == bot_token:
+                return {'ok': True, 'channels': [{'id': 'D0000TEST01'}]}, {}
+            if method == 'conversations.history' and token == bot_token:
+                return {'ok': True, 'messages': [m for m in dms if float(m['ts']) > float(params['oldest'])]}, {}
+            raise AssertionError(method)
+
+        with self.assertRaises(tokens.TokenRefused):
+            tokens.admit(store, tokens.BOT, bot_token, call=slack, team_id='T0000OTHER')
+        self.assertFalse(store.has(tokens.BOT))  # refused before storage
+        bot = tokens.admit(store, tokens.BOT, bot_token, call=slack)
+        tokens.admit(store, tokens.APP, app_token, call=slack)
+        code = identity.new_challenge(state)
+        dms.append({'type': 'message', 'user': owner_id, 'team': team, 'text': code, 'ts': f'{time.time() + 1:.6f}'})
+        record = identity.prove_by_dm(state, bot_token, bot, call=slack)
+        self.assertEqual((record['method'], record['team_id'], record['user_id']), ('dm_code', team, owner_id))
+        env = {'HOME': str(self.home), 'KAGE_SECRETS_BACKEND': 'file', 'KAGE_NO_REAL_SLACK': ''}
+        with mock.patch.dict(os.environ, env):
+            a = app.App(self.root / 'deploy')
+            a.verify()
+            self.assertEqual(a.leaf('slack_transport').default_bot_token(), bot_token)
+        doctor = self.kage('doctor', '--offline')
+        out = doctor.stdout + doctor.stderr
+        self.assertIn('ok    owner.identity: verified (dm_code)', out)
+        self.assertIn('ok    secrets.port: file store: slack-bot-token present, slack-app-token present', out)
+        self.assertIn('doctor: all required checks pass', out, out[-3000:])
+        for base in (self.root, self.home):
+            for f in base.rglob('*'):
+                if f.is_file() and store.root not in f.parents:
+                    data = f.read_bytes()
+                    for secret in (bot_token, app_token, code):
+                        self.assertNotIn(secret.encode(), data, f)
 
     def test_help_doctor_and_one_local_event_cycle(self):
         out = self.kage('--help')
