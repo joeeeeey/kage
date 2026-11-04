@@ -842,8 +842,9 @@ class CliCore:
                               scope=args.scope, context_all=args.context_all)
             if args.start:
                 result['started_pid'] = self.rt.start(db_path)
-        elif args.command == 'context':
-            result = self.rt.event_context(db, args.event, self.rt.api_identity())
+        elif args.command == 'context':  # O1c2: a local event (a note, an agent message) needs no Slack identity
+            local = self.rt.local_message(db, args.event) is not None
+            result = self.rt.event_context(db, args.event, None if local else self.rt.api_identity())
         elif args.command == 'continue-until-stop':
             result = self.rt.continue_until_stop(db, args.watch, args.expected_session, args.context_all)
         elif args.command == 'run':

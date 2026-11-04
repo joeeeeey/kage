@@ -18,15 +18,8 @@ SCHEMA_VERSION = 1
 CONFIG_ENV = _app.value('worker_config.CONFIG_ENV')
 DEFAULT_PATH = Path.home() / _app.value('worker_config.DEFAULT_PATH')
 DEFAULTS = _app.value('worker_config.DEFAULTS')
-
-def _load_kage_bridge():
-    path = Path(__file__).with_name('kage_bridge.py')
-    if not path.is_file():
-        return None
-    module = _app.bridge
-    return module
-kage_bridge = _load_kage_bridge()
-_k = kage_bridge.module('worker_config', 'kage.core.worker_config') if kage_bridge is not None else None
+kage_bridge = _app.bridge
+_k = kage_bridge.module('worker_config', 'kage.core.worker_config')
 _owner = kage_bridge.deployment().owner
 WORKER_CONFIG = _k.WorkerConfig(_owner.language, defaults=DEFAULTS, config_env=CONFIG_ENV, default_path=DEFAULT_PATH, owner_key=_owner.key, owner_name=_owner.short_name)
 (SCHEMA_VERSION, PROVIDERS, EFFORTS, MODEL_RE) = (_k.SCHEMA_VERSION, _k.PROVIDERS, _k.EFFORTS, _k.MODEL_RE)

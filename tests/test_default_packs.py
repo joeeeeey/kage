@@ -96,6 +96,23 @@ class NeutralPlaybookTest(unittest.TestCase):
                                                  default_inbox=None))
 
 
+class UnavailablePlaybookTest(unittest.TestCase):
+    def test_markers_are_neutral_and_every_function_refuses(self):
+        playbook = intake.unavailable_playbook()
+        self.assertEqual(sorted(vars(playbook)), sorted(intake.PLAYBOOK_NAMES))
+        self.assertEqual(playbook.POLICY_BEGIN, '<!-- kage-policy-begin -->')
+        self.assertEqual(playbook.ROLE_TITLE, {})
+        with self.assertRaisesRegex(ValueError, 'intake_playbook_unavailable: no_intake_playbook'):
+            playbook.inbox_goal()
+        with self.assertRaisesRegex(ValueError, 'intake_playbook_unavailable'):
+            playbook.intake_bootstrap(object(), key='x')
+
+    def test_a_missing_bootstrap_script_is_refused_before_anything_runs(self):
+        with self.assertRaisesRegex(ValueError, 'workspace_bootstrap_unavailable'):
+            intake.run_workspace_bootstrap('/nonexistent/bootstrap.py', 't', 'b', 'c', linear=False, agent='codex',
+                                           root='/r')
+
+
 class RuleEngineUnitTest(unittest.TestCase):
     """The generated rule_engine unit on a deployment whose only access pack is the neutral template, pinned."""
 

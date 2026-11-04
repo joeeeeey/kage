@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -3196,11 +3197,33 @@ def intake_playbook(pack, **context):
     return playbook
 
 
+def unavailable_playbook(reason='no_intake_playbook'):
+    """O1c2: what a deployment without an intake playbook binds in its place. The goal-file markers are neutral strings
+    (an owner's own goal.md never holds them), ROLE_TITLE is empty, and every playbook function refuses with
+    `intake_playbook_unavailable` (the reason), so intake cannot run on a deployment whose owner pack has none."""
+    def refuse(*_args, **_kwargs):
+        raise ValueError(f'intake_playbook_unavailable: {reason}')
+    names = {}
+    for name in PLAYBOOK_NAMES:
+        if name.endswith(('_BEGIN', '_END')):
+            names[name] = f'<!-- kage-{name.lower().replace("_", "-")} -->'
+        elif name == 'ADDENDA_HEADING':
+            names[name] = '## Addenda'
+        elif name == 'ROLE_TITLE':
+            names[name] = {}
+        else:
+            names[name] = refuse
+    return types.SimpleNamespace(**names)
+
+
 def run_workspace_bootstrap(bootstrap, title, brief, context, *, linear, agent, root, slug=None, date=None, folder_name=None,
                             runner=None):
     """The deployment's workspace bootstrap script (`bootstrap`, its path) with --no-launch (never a terminal tab); returns
     its JSON report. A new ticket starts Todo (In Progress only while a session runs). `folder_name`: a local-only
-    workspace with exactly this name (the plain-named long-lived tasks)."""
+    workspace with exactly this name (the plain-named long-lived tasks). O1c2: a deployment without a bootstrap script
+    is refused before anything runs (`workspace_bootstrap_unavailable`)."""
+    if runner is None and not Path(bootstrap).is_file():
+        raise ValueError('workspace_bootstrap_unavailable: this deployment has no workspace bootstrap script')
     runner = runner or subprocess.run
     with tempfile.TemporaryDirectory(prefix='intake-bootstrap-') as tmp:
         brief_file, context_file = Path(tmp) / 'brief.md', Path(tmp) / 'context.md'

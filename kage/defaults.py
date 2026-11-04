@@ -89,7 +89,7 @@ def assembly_values(deployment):
         'slack_transport.bot_token_env': f'KAGE_{key.upper()}_SLACK_BOT_TOKEN',
         'slack_transport.bot_token_file_env': f'KAGE_{key.upper()}_SLACK_BOT_TOKEN_FILE',
         'slack_transport.bot_token_file': f'~/{config}/slack-bot-token',
-        'task_lifecycle.tracker_helper': 'kage-tracker/scripts/tracker.py',
+        'task_lifecycle.tracker_helper': '',  # O1c2: no tracker helper (ticket states unknown, never a subprocess)
         'task_registry.DEFAULT_SMOKE_ROOT': f'/tmp/kage-{key}-dispatch-smoke',
         'task_registry.ROOT_ENV': 'KAGE_TASKS_ROOT',
         'task_registry.SMOKE_ROOT_ENV': 'KAGE_DISPATCH_SMOKE_ROOT',

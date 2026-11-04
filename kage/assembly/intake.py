@@ -118,6 +118,9 @@ try:
     PLAYBOOK = _k.intake_playbook(kage_bridge.pack(_app.key_name('owner.playbook')), references=REFERENCES, rules_path=RULES_PATH, bootstrap_key=BOOTSTRAP_KEY, read_config=lambda rt: _cfg(rt), run_bootstrap=lambda *a, **kw: run_bootstrap(*a, **kw), default_inbox=lambda : _default_inbox())
 except (TypeError, ValueError) as exc:
     (PLAYBOOK, PLAYBOOK_ERROR) = (None, f'{type(exc).__name__}: {exc}')
+else:
+    if PLAYBOOK is None:
+        PLAYBOOK = _k.unavailable_playbook()
 (POLICY_BEGIN, POLICY_END, ADDENDA_HEADING) = (PLAYBOOK.POLICY_BEGIN, PLAYBOOK.POLICY_END, PLAYBOOK.ADDENDA_HEADING)
 (ADDENDA_BEGIN, ADDENDA_END) = (PLAYBOOK.ADDENDA_BEGIN, PLAYBOOK.ADDENDA_END)
 (BLOCKERS_BEGIN, BLOCKERS_END, CARDS_BEGIN) = (PLAYBOOK.BLOCKERS_BEGIN, PLAYBOOK.BLOCKERS_END, PLAYBOOK.CARDS_BEGIN)

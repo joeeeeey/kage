@@ -27,5 +27,19 @@ The `rule_engine` unit binds an organization pack's own checks and vocabularies 
 `_bundle_items`) under their names only when the pack defines them; a deployment with its own pack keeps every
 name it had.
 
+## A deployment without modules of its own
+
+A deployment that declares no `slack_transport` module gets Kage's own leaf (`kage/assembly/standalone/`): the
+Slack client over the transport, token variables and files scoped to the owner (`KAGE_<KEY>_SLACK_*`,
+`~/.config/kage/<key>/slack-*-token`), and no trusted bot until onboarding records the verified one. A declared
+module always wins. An owner pack without an intake playbook binds `kage.core.intake.unavailable_playbook()`: intake
+refuses with `intake_playbook_unavailable`, everything else assembles. A missing workspace bootstrap script is
+refused before anything runs, and the default tracker helper is none. `context` on a local event (a note, an agent
+message) needs no Slack identity. The instance profile still needs `paths.inbox_rules`.
+
+`tests/test_minimal_deployment.py` is the acceptance proof: a deployment made only of the templates assembles,
+answers `--help`, passes `doctor --offline` once its state directory exists, and completes note → context →
+resolve with a scratch HOME, no token and no network.
+
 Kage still does not provide `init`, secret storage or a workspace bootstrap. Each is a separate onboarding step.
 None of this alters existing profiles, stores, configuration files or services.
