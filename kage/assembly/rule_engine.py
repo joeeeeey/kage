@@ -27,7 +27,7 @@ ACCESS_POLICY = _k.AccessPolicy(_owner.language, tz=SHANGHAI, example_spec=EXAMP
 (OUTCOMES, RANK, TIER) = (ACCESS_POLICY.outcomes, ACCESS_POLICY.rank, ACCESS_POLICY.tier)
 (FALLBACKS, KINDS, ACTIONS, SYSTEMS) = (ACCESS_POLICY.fallbacks, _k.KINDS, _k.ACTIONS, _p.SYSTEMS)
 (ROLE_CLASSES, CLASS_RANK, ENVIRONMENTS) = (_k.ROLE_CLASSES, _k.CLASS_RANK, _k.ENVIRONMENTS)
-(RESOURCE_LEVELS, PRODUCTS, CREDENTIAL_TYPES) = (_k.RESOURCE_LEVELS, _p.PRODUCTS, _p.CREDENTIAL_TYPES)
+(RESOURCE_LEVELS, CREDENTIAL_TYPES) = (_k.RESOURCE_LEVELS, _p.CREDENTIAL_TYPES)
 (DELIVERIES, OFFBOARD_OPS, MESSAGES, BUNDLES) = (_p.DELIVERIES, _k.OFFBOARD_OPS, _k.MESSAGES, _p.BUNDLES)
 (AGENT_OPS, TASK_TYPES, RELATIONS, SHAPES) = (_k.AGENT_OPS, _k.TASK_TYPES, ACCESS_POLICY.relation_values, _k.SHAPES)
 (TYPED_APPROVAL_SHAPES, RESULTS, PROPOSAL_KINDS) = (_k.TYPED_APPROVAL_SHAPES, _k.RESULTS, _k.PROPOSAL_KINDS)
@@ -37,7 +37,7 @@ ACCESS_POLICY = _k.AccessPolicy(_owner.language, tz=SHANGHAI, example_spec=EXAMP
 (_BOOL, PLAN_SCHEMA, _LEVEL) = (_k._BOOL, ACCESS_POLICY.plan_schema, ACCESS_POLICY._level)
 (_TRIGGER_FIELDS, SPEC_SCHEMA) = (ACCESS_POLICY._trigger_fields, ACCESS_POLICY.spec_schema)
 (ACTIVE_SCHEMA, PROPOSALS_SCHEMA) = (ACCESS_POLICY.active_schema, ACCESS_POLICY.proposals_schema)
-(EMPLOYMENT, FUNCTIONS, _LIMITS, CHECK_PARAMS) = (_k.EMPLOYMENT, _p.FUNCTIONS, _p._LIMITS, ACCESS_POLICY.check_params)
+(EMPLOYMENT, FUNCTIONS, CHECK_PARAMS) = (_k.EMPLOYMENT, _p.FUNCTIONS, ACCESS_POLICY.check_params)
 (check_param_schema, spec_problems) = (ACCESS_POLICY.check_param_schema, ACCESS_POLICY.spec_problems)
 (validate_spec, canonical, digest) = (ACCESS_POLICY.validate_spec, _k.canonical, _k.digest)
 (rules_dir, _check_private, _read_private_json) = (ACCESS_POLICY.rules_dir, _k._check_private, _k._read_private_json)
@@ -56,16 +56,14 @@ ACCESS_POLICY = _k.AccessPolicy(_owner.language, tz=SHANGHAI, example_spec=EXAMP
 check_registry_status = ACCESS_POLICY.check_registry_status
 check_request_origin = ACCESS_POLICY.check_request_origin
 check_delivery_matrix = ACCESS_POLICY.check_delivery_matrix
-(check_temporary_expiry, check_infra_only_route) = (ACCESS_POLICY.check_temporary_expiry, _p.check_infra_only_route)
-(check_platform_side_route, check_agent_ops_carve_out) = (_p.check_platform_side_route, _p.check_agent_ops_carve_out)
-(check_message_audience, check_relay_tier) = (ACCESS_POLICY.check_message_audience, _p.check_relay_tier)
-(check_relay_maintenance, check_relay_tier_step) = (_p.check_relay_maintenance, _p.check_relay_tier_step)
-(check_approver_command, check_bigquery_scope) = (_p.check_approver_command, _p.check_bigquery_scope)
-(check_gcp_readonly_roles, check_resource_ids) = (_p.check_gcp_readonly_roles, ACCESS_POLICY.check_resource_ids)
+(check_temporary_expiry, check_message_audience) = (ACCESS_POLICY.check_temporary_expiry, ACCESS_POLICY.check_message_audience)
+check_resource_ids = ACCESS_POLICY.check_resource_ids
 check_justification_required = ACCESS_POLICY.check_justification_required
-(check_requester_function, _bundle_items) = (ACCESS_POLICY.check_requester_function, _p._bundle_items)
-(check_trial_bundle, check_fulltime_bundle) = (_p.check_trial_bundle, _p.check_fulltime_bundle)
-(check_github_team, check_gws_account) = (_p.check_github_team, _p.check_gws_account)
+check_requester_function = ACCESS_POLICY.check_requester_function
+for _name in ('PRODUCTS', '_LIMITS', '_bundle_items', *('check_' + _check for _check in _p.CHECKS)):
+    if hasattr(_p, _name):
+        globals()[_name] = getattr(_p, _name)
+del _name
 check_offboarding_signal = ACCESS_POLICY.check_offboarding_signal
 check_reversible_revocation = ACCESS_POLICY.check_reversible_revocation
 (check_daily_rate, CHECKS, strictest) = (ACCESS_POLICY.check_daily_rate, ACCESS_POLICY.checks, ACCESS_POLICY.strictest)

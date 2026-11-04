@@ -14,5 +14,18 @@ hashes: `default.access` is the reserved neutral policy-pack name, and `<owner k
 pack name. Missing packs refuse assembly; they never become empty policies. The workspace bootstrap and tracker
 helper paths name optional deployment integrations, which onboarding must provide or keep disabled.
 
-This release does not provide `init`, secret storage, a workspace bootstrap, or neutral pack contents. Each is a
-separate onboarding step. It does not alter existing profiles, stores, configuration files, or services.
+## Neutral packs
+
+`kage.packs` ships two templates: `default.access` (an organization pack with generic vocabularies and no
+organization checks) and `default.playbook` (the dispatch rules every run needs: memory, event resolution, asking
+the owner, other tasks, status.md, authority and secrets; no intake playbook). A template is never loaded from Kage.
+Onboarding copies it into the deployment, for example `deploy/packs/default/access.py`, and pins its sha256 in
+`kage.lock` `packs` like any other pack, so a missing or altered copy still refuses. With the neutral access pack
+no rule can widen anything: a plan no owner rule covers goes to the owner. An organization's own pack replaces it.
+
+The `rule_engine` unit binds an organization pack's own checks and vocabularies (its `CHECKS`, `PRODUCTS`, `_LIMITS`,
+`_bundle_items`) under their names only when the pack defines them; a deployment with its own pack keeps every
+name it had.
+
+Kage still does not provide `init`, secret storage or a workspace bootstrap. Each is a separate onboarding step.
+None of this alters existing profiles, stores, configuration files or services.
