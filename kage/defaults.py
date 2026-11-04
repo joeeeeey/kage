@@ -79,6 +79,16 @@ def assembly_values(deployment):
         'rule_registry.0': f'{key}_facing_\\w+_breaks_the_card_copy_standard',
         'rule_registry.root': 'KAGE_RULES_DIR',
         'rule_registry.root_2': f'{config}/rules',
+        # O1c2: Kage's own Slack transport (a deployment without its own module); tokens under owner-scoped names, and
+        # no bot is trusted until onboarding records the verified bot user
+        'slack_transport.guard_env': 'KAGE_NO_REAL_SLACK',
+        'slack_transport.expected_bot_user': '',
+        'slack_transport.user_token_env': f'KAGE_{key.upper()}_SLACK_USER_TOKEN',
+        'slack_transport.user_token_file_env': f'KAGE_{key.upper()}_SLACK_USER_TOKEN_FILE',
+        'slack_transport.user_token_file': f'~/{config}/slack-user-token',
+        'slack_transport.bot_token_env': f'KAGE_{key.upper()}_SLACK_BOT_TOKEN',
+        'slack_transport.bot_token_file_env': f'KAGE_{key.upper()}_SLACK_BOT_TOKEN_FILE',
+        'slack_transport.bot_token_file': f'~/{config}/slack-bot-token',
         'task_lifecycle.tracker_helper': 'kage-tracker/scripts/tracker.py',
         'task_registry.DEFAULT_SMOKE_ROOT': f'/tmp/kage-{key}-dispatch-smoke',
         'task_registry.ROOT_ENV': 'KAGE_TASKS_ROOT',

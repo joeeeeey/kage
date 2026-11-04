@@ -17,6 +17,7 @@
   modules          {"<name>": {"path", "sha256", "note"}} — the deployment's modules Kage does not serve yet
                     (transitional): every one is verified before anything loads; a missing file or another sha256
                     refuses the whole assembly (AssemblyError), before any database, file or process is touched
+                    (O1c2: an undeclared one is Kage's own leaf, kage/assembly/standalone/<name>.py, when it has one)
 
 `assemble(into=None)` runs the generated hub (kage/assembly/hub.py) in `into` (a module's globals; a fresh namespace
 when None) with `_app` in scope: the leaves it loads are the generated units (kage/assembly/<unit>.py, one per adapter
@@ -42,6 +43,7 @@ from kage import defaults
 
 SHA256_RE = re.compile(r'[0-9a-f]{64}')
 UNIT_DIR = Path(__file__).with_name('assembly')
+STANDALONE_DIR = UNIT_DIR / 'standalone'  # O1c2: Kage's own leaves for undeclared transitional modules
 
 
 class AssemblyError(Exception):
@@ -136,6 +138,8 @@ class App:
                 self._leaves[name] = self._unit(name)
             elif name in self.modules:
                 self._leaves[name] = self._load(f'kage_deployment_{name}', self.root / self.modules[name]['path'])
+            elif (STANDALONE_DIR / f'{name}.py').is_file() and name != '__init__':
+                self._leaves[name] = self._unit(name, STANDALONE_DIR)
             else:
                 raise AssemblyError(f'unknown_module: {name}')
         return self._leaves[name]
@@ -168,15 +172,15 @@ class App:
         self._run('hub', namespace)
         return namespace
 
-    def _unit(self, name):
+    def _unit(self, name, directory=UNIT_DIR):
         module = types.ModuleType(f'kage_assembled_{name}')
         module.__file__ = str(self.root / 'scripts' / f'{name}.py')
         module.__dict__['_app'] = self
-        self._run(name, module.__dict__)
+        self._run(name, module.__dict__, directory)
         return module
 
-    def _run(self, name, namespace):
-        path = UNIT_DIR / f'{name}.py'
+    def _run(self, name, namespace, directory=UNIT_DIR):
+        path = directory / f'{name}.py'
         exec(compile(path.read_text(encoding='utf-8'), str(path), 'exec'), namespace)
         for generic in namespace.get('_OWNER_KEYED', ()):
             if generic in namespace:  # module-level only (a renamed local is not exported)

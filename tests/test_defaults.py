@@ -11,7 +11,7 @@ from tests.test_app import Deployment
 class DefaultsTest(unittest.TestCase):
     def test_every_generated_value_has_a_default_and_unknown_keys_still_refuse(self):
         requested = set()
-        for path in app.UNIT_DIR.glob('*.py'):
+        for path in [*app.UNIT_DIR.glob('*.py'), *app.STANDALONE_DIR.glob('*.py')]:
             for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
                 if isinstance(node, ast.Call) and ast.unparse(node.func) == '_app.value':
                     requested.add(node.args[0].value)

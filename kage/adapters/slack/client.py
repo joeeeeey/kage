@@ -4,7 +4,8 @@
 The deployment builds one `Client` with its guard variable, the owner's name, its bot's user name, the token variables
 and file, and two hooks that are its own names, looked up at call time: `call` (its `api_call`, which tests replace, so
 every operation reaches the replaced one) and `post_send` (its `notify_followup_activity`). `followup_helper` is the
-path of the follow-up runtime's poll-schedule module (absent: the hook does nothing).
+path of the follow-up runtime's poll-schedule module (absent: the hook does nothing), or a callable that returns that
+module (O1c2: Kage's own leaf, for a deployment without a Slack module of its own).
 """
 from __future__ import annotations
 import importlib.util
@@ -30,12 +31,17 @@ class Client:
     """The transport's operations under the deployment's names, and the post-send hook."""
 
     def __init__(self, *, guard_env, owner_name, expected_bot_user, user_token_env, user_token_file, bot_token_env,
-                 call, post_send, followup_helper, emoji_example='eyes'):
+                 call, post_send, followup_helper, emoji_example='eyes', **token_files):
+        """`token_files`: the transport's bot_token_file, user_token_file_env and bot_token_file_env, when a deployment
+        names its own (O1c2: Kage's own leaf scopes them to the owner); otherwise the transport's defaults."""
+        unknown = set(token_files) - {'bot_token_file', 'user_token_file_env', 'bot_token_file_env'}
+        if unknown:
+            raise TypeError('unknown token file options: ' + ', '.join(sorted(unknown)))
         self.followup_helper = followup_helper
         self.transport = _transport.Transport(
             guard_env=guard_env, owner_name=owner_name, expected_bot_user=expected_bot_user,
             user_token_env=user_token_env, user_token_file=user_token_file, bot_token_env=bot_token_env,
-            post_send=post_send, call=call, emoji_example=emoji_example)
+            post_send=post_send, call=call, emoji_example=emoji_example, **token_files)
 
     def require_real_slack(self, what):
         self.transport.require_live(what)
@@ -77,12 +83,15 @@ class Client:
     def notify_followup_activity(self, response, payload):
         """Successful sends reset existing local watches; never retry a Slack send on hook failure."""
         helper = self.followup_helper
-        if not helper.is_file():
+        if not callable(helper) and not helper.is_file():
             return
         try:
-            spec = importlib.util.spec_from_file_location('slack_send_poll_schedule', helper)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
+            if callable(helper):
+                module = helper()
+            else:
+                spec = importlib.util.spec_from_file_location('slack_send_poll_schedule', helper)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
             message = response.get('message') or {}
             args = (response.get('channel') or payload.get('channel'), response.get('ts'),
                     message.get('thread_ts') or payload.get('thread_ts') or response.get('ts'), message.get('user'))
