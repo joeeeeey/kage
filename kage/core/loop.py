@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import time
@@ -431,6 +432,9 @@ class LoopCore:
                                 {'channel': e['channel'], **({'ts': root} if root else {}),
                                  'oldest': e['ts'], 'latest': e['ts'], 'inclusive': True, 'limit': 1})
         source = next((m for m in source_result.get('messages', []) if m.get('ts') == e['ts']), None)
+        fallback = None
+        if source is None and root:
+            source, fallback = self._source_under_card_root(db, e, root, token)
         if source is None:
             raise ValueError('exact_context_source_not_found')
         root = source.get('thread_ts') or source['ts']
@@ -509,10 +513,44 @@ class LoopCore:
                 # P39: a card-thread reply card_threads delivered to this task's inbox: what it is and how to answer it.
                 **({'instruction': self.rt.card_threads.ROUTED_INSTRUCTION} if routed and w.get('kind') == self.rt.INBOX_KIND else {}),
                 **({'secret_thread': True} if secret_thread else {}),
-                'limits': {'before': before, 'after': after, 'api_calls_max': 6 if routed else 5,
+                **({'source_fallback': fallback} if fallback else {}),
+                'limits': {'before': before, 'after': after,
+                           'api_calls_max': (6 if routed else 5) + (fallback['api_calls'] if fallback else 0),
                            'messages_max': 72 + (ROUTED_CONTEXT_LIMIT if routed else 0)},
                 'truncated': bool(following.get('has_more') or replies.get('has_more') or (routed and earlier.get('has_more'))),
                 'messages': sorted(unique.values(), key=lambda m: float(m['ts']))[:72 + (ROUTED_CONTEXT_LIMIT if routed else 0)]}
+
+    def _source_under_card_root(self, db, e, stored_root, token):
+        """B3: an event stored under a threaded card's own ts (a receipt or confirmation recorded before B3), while Slack
+        threads every reply to that card under the card's thread root. Look once under the card's recorded thread root,
+        else under the thread Slack reports for the stored root message. Returns (source, fallback) or (None, None); the
+        stored row is not rewritten (a read path)."""
+        calls, tried = 0, {stored_root}
+        def look(alt):
+            nonlocal calls
+            calls += 1
+            found = self.rt.read_api('conversations.replies', token, {
+                'channel': e['channel'], 'ts': alt, 'oldest': e['ts'], 'latest': e['ts'], 'inclusive': True, 'limit': 1})
+            return next((m for m in found.get('messages', []) if m.get('ts') == e['ts']), None)
+        try:
+            card = db.execute('SELECT c.thread_root FROM escalation_cards c JOIN escalations x ON x.event_id=c.event_id '
+                              'WHERE x.thread_ts=? AND c.channel=? AND c.thread_root IS NOT NULL', (stored_root, e['channel'])).fetchone()
+        except sqlite3.OperationalError:  # a store without the card tables
+            card = None
+        if card and card[0] not in tried:
+            tried.add(card[0])
+            source = look(card[0])
+            if source is not None:
+                return source, {'stored_root': stored_root, 'root': card[0], 'via': 'card_thread_root', 'api_calls': calls}
+        calls += 1
+        head = self.rt.read_api('conversations.replies', token, {'channel': e['channel'], 'ts': stored_root, 'limit': 1})
+        message = next((m for m in head.get('messages', []) if m.get('ts') == stored_root), None)
+        alt = message and message.get('thread_ts')
+        if alt and alt not in tried:
+            source = look(alt)
+            if source is not None:
+                return source, {'stored_root': stored_root, 'root': alt, 'via': 'slack_thread', 'api_calls': calls}
+        return None, None
 
     def migrate_idle(self, db, now=None):
         """One explicit local policy migration, not an implicit schema upgrade."""

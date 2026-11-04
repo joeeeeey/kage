@@ -412,7 +412,9 @@ class EscalationCore:
         # A post addressed to the owner's user id (the unconfigured DM fallback) resolves to his bot↔the owner D-channel; use that
         # resolved conversation id for the read-back, ledger and stored card channel. A normal channel resolves to itself.
         channel = sent.get('channel') or channel
-        thread_root = root['root_ts'] if threaded else ts
+        # B3: Slack's own answer for the thread the card landed in (it threads a reply to a reply under the root), else
+        # the root it was posted under; a top-level card is its own root.
+        thread_root = (sent.get('message') or {}).get('thread_ts') or (root['root_ts'] if threaded else ts)
         # Persist before verification so an API/read failure cannot duplicate posts.
         with self.rt.transaction(db):
             db.execute('UPDATE escalations SET stage=?,thread_ts=? WHERE event_id=?', ('sent', ts, eid))
@@ -518,10 +520,17 @@ class EscalationCore:
                 # the owner-facing text is Chinese by default; flagged (not refused) on this existing path.
                 'warnings': [] if CJK_RE.search(question) else [f'{self.key}_facing_question_not_chinese']}
 
-    def _find_receipt(self, user_token, channel, card_ts, eid):
+    def _card_thread(self, db, eid, card_ts):
+        """B3: the thread a reply to card `eid` lands in. Slack threads a reply to a threaded card (a continuation, an
+        --about card) under the card's thread root, so its receipt and confirmations are read there, not under the
+        card's own ts. A top-level card is its own root."""
+        row = db.execute('SELECT thread_root FROM escalation_cards WHERE event_id=?', (eid,)).fetchone()
+        return (row and row[0]) or card_ts
+
+    def _find_receipt(self, user_token, channel, card_ts, eid, root=None):
         """Resolve an ambiguous earlier receipt post from bot-authored message metadata."""
         result = self.rt.slack.api_call('conversations.replies', user_token, params={
-            'channel': channel, 'ts': card_ts, 'oldest': card_ts, 'include_all_metadata': 'true', 'limit': 200})
+            'channel': channel, 'ts': root or card_ts, 'oldest': card_ts, 'include_all_metadata': 'true', 'limit': 200})
         for m in result.get('messages', []):
             meta = m.get('metadata') or {}
             payload = meta.get('event_payload') or {}
@@ -559,7 +568,8 @@ class EscalationCore:
                            'WHERE event_id=?', (receipt_ts, self.rt.SUPERVISOR_STAGE, eid))
                 return []
             w = self.rt.load(db, watch_id)
-            event = self._queue_owner_event(db, w, d['card_channel'], receipt_ts, d['card_ts'], d['actor'], {
+            event = self._queue_owner_event(db, w, d['card_channel'], receipt_ts, self._card_thread(db, eid, d['card_ts']),
+                                            d['actor'], {
                 'sf_decision': eid, 'choice': d['choice'], 'actor': d['actor'], 'receipt_ts': receipt_ts,
                 'note': d['note'], 'provenance': d['provenance']}, now,
                 self.rt.interaction_envelope(w, 'decision_answer', d['actor'], d['card_ts'], now,
@@ -614,7 +624,8 @@ class EscalationCore:
         d = db.execute('SELECT * FROM decisions WHERE event_id=?', (eid,)).fetchone()
         closed = []
         if not d['delivered_event']:
-            receipt_ts = self._find_receipt(user_token, d['card_channel'], d['card_ts'], eid) if duplicate else None
+            receipt_ts = self._find_receipt(user_token, d['card_channel'], d['card_ts'], eid,
+                                            self._card_thread(db, eid, d['card_ts'])) if duplicate else None
             if receipt_ts is None:
                 option = self.rt.buttons.resolve_choice(d['choice'], model)
                 owner = self.rt._escalation_watch(db, eid)
@@ -929,7 +940,8 @@ class EscalationCore:
                     return self.rt._fail('proposal_superseded')
                 w = self.rt.load(db, esc['watch_id'])
                 # The owner gets an event so it can ask again; the confirmation message is its source.
-                event = self._queue_owner_event(db, w, card_channel, message_ts, esc['thread_ts'], actor,
+                event = self._queue_owner_event(db, w, card_channel, message_ts,
+                                                self._card_thread(db, p['event_id'], esc['thread_ts']), actor,
                                            {'sf_proposal_rejected': pid, 'actor': actor}, now,
                                            self.rt.interaction_envelope(w, 'decision_answer', actor, esc['thread_ts'], now,
                                                                 role=role))

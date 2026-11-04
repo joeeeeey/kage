@@ -203,6 +203,9 @@ FAILURE_PATTERNS = (
     ('session_live', r'already has an active writer|session is already (?:running|in use)|is already running'),
     ('session_missing', r'no conversation found|no rollout found|thread[^\n]{0,40}not found|session[^\n]{0,20}not '
                         r'found|no saved session|unknown (?:thread|session)'),
+    # B3: a Codex thread made under another model provider (the CLI's provider switched since) can never resume under
+    # this one; like a missing session, the dispatch moves to its next step at once instead of retrying the same command.
+    ('session_missing', r'but your current provider is|modelprovidermismatch'),
     ('model_unsupported', r'not supported by any configured account'),  # the relay's exact 404 wording
     ('model_unsupported', r'model[^\n]{0,80}(?:does not exist|not found|is not supported|not available)|'
                           r'issue with the selected model|\b404\b[^\n]{0,60}model'),
