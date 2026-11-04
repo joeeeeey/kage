@@ -7,12 +7,13 @@ written. Errors are codes; no token appears in a result, an error or a log line.
   Slack does not name the workspace of an app-level token, so it is tied to the bot only by the owner's install.
 - user (`xoxp-`): `auth.test` names a person, not the bot, in the bot's team.
 
-`call(method, token)` returns (payload, lower-cased headers); `slack_call` is the live one, refused while the guard
-variable is "1". Tests pass their own.
+`call(method, token[, params])` returns (payload, lower-cased headers); `slack_call` is the live one, refused while the
+guard variable is "1". Tests pass their own.
 """
 from __future__ import annotations
 import json
 import os
+import urllib.parse
 import urllib.request
 
 from kage.onboard import manifest
@@ -30,12 +31,14 @@ class TokenRefused(ValueError):
         self.code = code
 
 
-def slack_call(method, token, *, guard_env=GUARD_ENV, timeout=20):
-    """A live Web API call (POST, no body): (payload, lower-cased headers)."""
+def slack_call(method, token, params=None, *, guard_env=GUARD_ENV, timeout=20):
+    """A live Web API call (POST, form fields `params`): (payload, lower-cased headers)."""
     if os.environ.get(guard_env) == '1':
         raise TokenRefused('slack_offline_guard_set')
-    req = urllib.request.Request(f'https://slack.com/api/{method}', data=b'', method='POST',
-                                 headers={'Authorization': f'Bearer {token}'})
+    req = urllib.request.Request(f'https://slack.com/api/{method}', method='POST',
+                                 data=urllib.parse.urlencode(params or {}).encode('ascii'),
+                                 headers={'Authorization': f'Bearer {token}',
+                                          'Content-Type': 'application/x-www-form-urlencoded'})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode('utf-8')), {k.lower(): v for k, v in resp.headers.items()}
