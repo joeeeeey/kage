@@ -27,7 +27,11 @@ def manifest(name: str, *, as_owner: bool = False, description: str | None = Non
         scopes['user'] = list(USER_SCOPES)
     return {
         'display_information': {'name': name, 'description': (description or f"{name}: a personal agent runtime (Kage)")[:140]},
-        'features': {'bot_user': {'display_name': name, 'always_online': True}},
+        # the Messages tab with sending allowed: colleagues and the owner reach the kage by direct message, and the
+        # owner's one-time identity code arrives that way (O1c3)
+        'features': {'bot_user': {'display_name': name, 'always_online': True},
+                     'app_home': {'home_tab_enabled': False, 'messages_tab_enabled': True,
+                                  'messages_tab_read_only_enabled': False}},
         'oauth_config': {'scopes': scopes},
         'settings': {'event_subscriptions': {'bot_events': list(BOT_EVENTS)}, 'interactivity': {'is_enabled': True},
                      'org_deploy_enabled': False, 'socket_mode_enabled': True, 'token_rotation_enabled': False},

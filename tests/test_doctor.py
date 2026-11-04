@@ -10,7 +10,8 @@ import time
 import types
 import unittest
 
-from kage.onboard import doctor as D
+from kage.onboard import doctor as D, identity
+from kage.ports import secrets
 
 OWNER = types.SimpleNamespace(slack_workspace='T0000TEST01', slack_user='U0000TEST01',
                               assistant_slack_bot_user='U0000TEST02', timezone='Europe/Lisbon')
@@ -203,6 +204,38 @@ class DoctorTest(unittest.TestCase):
         checks = self.by_id(report)
         self.assertEqual(checks['slack.bot_identity']['detail'], 'auth.test failed (slack:invalid_auth)')
         self.assertIsNone(checks['slack.user_scopes']['ok'])
+
+
+class SecretsAndIdentityChecksTest(unittest.TestCase):
+    def test_secrets_port(self):
+        self.assertEqual(D.port_checks(None)[0]['ok'], None)  # the deployment's own transport
+        store = secrets.MemoryStore('mira')
+        store.put(secrets.SLACK_BOT, 'xoxb-' + 'doctor')
+        c = D.port_checks(store)[0]
+        self.assertEqual((c['required'], c['ok']), (True, False))
+        self.assertIn('slack-app-token absent', c['detail'])
+        store.put(secrets.SLACK_APP, 'xapp-' + 'doctor')
+        c = D.port_checks(store)[0]
+        self.assertTrue(c['ok'])
+        self.assertNotIn('doctor', c['detail'])
+
+        class Broken(secrets.MemoryStore):
+            def get(self, name):
+                raise secrets.SecretError('keychain_read_failed_rc_51')
+        c = D.port_checks(Broken('mira'))[0]
+        self.assertEqual((c['ok'], c['detail']), (False, 'memory store: keychain_read_failed_rc_51'))
+
+    def test_owner_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            os.chmod(state, 0o700)
+            owner = types.SimpleNamespace(slack_workspace='T0000TEST', slack_user='U0000OWNER')
+            self.assertEqual(D.identity_checks(owner, state)[0]['ok'], None)  # adopted
+            identity.prove_by_user_token(state, {'team_id': 'T0000TEST', 'user_id': 'U0000OWNER'})
+            self.assertTrue(D.identity_checks(owner, state)[0]['ok'])
+            (state / identity.RECORD).write_text('{"schema": "other"}')
+            c = D.identity_checks(owner, state)[0]
+            self.assertEqual((c['ok'], c['detail']), (False, 'identity record unreadable (identity_record_malformed)'))
 
 
 if __name__ == '__main__':
