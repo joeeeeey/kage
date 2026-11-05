@@ -179,7 +179,7 @@ class GenerateTest(Base):
             if '.git' in f.relative_to(t).parts:
                 continue
             mode = stat.S_IMODE(f.stat().st_mode)
-            self.assertEqual(mode, 0o700 if f.is_dir() or f.name == 'kage.py' else 0o600, f)
+            self.assertEqual(mode, 0o700 if f.is_dir() or f.name in ('kage.py', 'dispatch_runner.py') else 0o600, f)
         d = profile.load(t / 'deploy')
         self.assertEqual((d.owner.key, d.owner.slack_workspace, d.owner.slack_user), ('mira', TEAM, OWNER))
         self.assertEqual((d.owner.assistant_slack_bot_user, d.owner.assistant_slack_app), (BOT_USER, APP_ID))

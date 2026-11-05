@@ -11,6 +11,7 @@ pushes:
   deploy/packs/default/access.py, deploy/packs/<key>/playbook.py   the neutral templates (kage.packs), pinned
   kage.lock              the running release (BUNDLE.json, verified), every switch on Kage, the two pack pins
   scripts/kage.py        the deployment's program: runs the pinned release on deploy/ (`scripts/kage.py --help`)
+  SKILL.md, references/, scripts/dispatch_runner.py   what its dispatched runs read (kage.onboard.dispatch_files, O1c5b)
   .gitignore, README.md
 
 Nothing is written in place. The new tree is built in a staging directory next to the target (0700 directories, 0600
@@ -43,6 +44,7 @@ import time
 import kage
 from kage import packs, profile
 from kage.onboard import answers as _answers
+from kage.onboard import dispatch_files
 from kage.onboard import identity
 
 SWITCHES = ('access', 'asks', 'assembly', 'authority', 'avatars', 'blockers', 'buttons', 'cards', 'claims', 'cli',
@@ -54,6 +56,7 @@ SWITCHES = ('access', 'asks', 'assembly', 'authority', 'avatars', 'blockers', 'b
             'trace_rest', 'transport', 'worker_config')
 LOCK_SCHEMA = 'kage.lock/v1'
 PROGRAM = 'scripts/kage.py'
+EXECUTABLES = (PROGRAM, dispatch_files.RUNNER)  # 0700; every other file 0600
 ACCESS_PACK = ('default.access', 'deploy/packs/default/access.py')
 PACK_FILES = ('deploy/packs/default/access.py',)  # + deploy/packs/<key>/playbook.py
 OLD_SUFFIX = '.kage-old-'
@@ -208,7 +211,9 @@ def files(answers, owner_record, bot_record, pin):
     return {'deploy/owner.json': _json(owner), 'deploy/org.json': _json(org), 'deploy/instance.json': _json(instance),
             ACCESS_PACK[1]: access, playbook_rel: playbook, 'kage.lock': _json(lock),
             PROGRAM: PROGRAM_TEXT.encode('utf-8'), '.gitignore': GITIGNORE.encode('utf-8'),
-            'README.md': readme.encode('utf-8')}
+            'README.md': readme.encode('utf-8'),
+            **dispatch_files.files(key=key, name=who['short_name'], owner_user=owner_record['user_id'],
+                                   version=pin['version'], program=PROGRAM)}
 
 
 def _is_pack(rel):
@@ -329,7 +334,7 @@ def _write_tree(root, tree):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, 'wb') as f:
             f.write(data)
-        os.chmod(path, 0o700 if rel == PROGRAM else 0o600)
+        os.chmod(path, 0o700 if rel in EXECUTABLES else 0o600)
 
 
 def _check_staged(root, key):
