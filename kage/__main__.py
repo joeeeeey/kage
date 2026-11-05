@@ -5,7 +5,8 @@ the program name in its usage is the deployment's. An assembly that cannot be ma
 altered) is refused before anything runs: exit 3, one JSON line on stderr. A failing command ends like the program's
 own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors withheld).
 
-`python3 -m kage init …` (O1c4) creates or adopts a deployment and runs before any assembly (kage.onboard.init_cli)."""
+`python3 -m kage init …` (O1c4) creates or adopts a deployment and runs before any assembly (kage.onboard.init_cli).
+`python3 -m kage --deployment DIR serve dashboard|receiver …` (O1c5) runs Kage's own service entries (kage.serve)."""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -28,6 +29,9 @@ def main(argv=None):
     except app.AssemblyError as exc:
         print(app.refusal(exc), file=sys.stderr)
         return 3
+    if argv[2:3] == ['serve']:  # O1c5: Kage's own dashboard / receiver services of this deployment
+        from kage import serve
+        return serve.main(assembly, runtime, argv[3:])
     sys.argv = [Path(assembly.program).name, *app.owner_alias(argv[2:], assembly.deployment.owner.key)]
     try:
         runtime['main']()
