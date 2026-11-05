@@ -222,6 +222,51 @@ class OnboardingTest(unittest.TestCase):
             self.assertEqual(dump(), before)
             self.assertEqual(self.post(path, '/api/watches/w1/stop', {'id': triage})[0], 400)  # other routes unchanged
 
+    def test_the_owner_decides_candidates_from_the_page(self):
+        """O3b: the read model carries the latest extraction and its candidates; POST /api/onboarding/decide under the
+        page's guards records the decision on the item; a store without an extraction answers 404 and is not written."""
+        from kage.onboard import extract as X
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.sqlite'
+            with contextlib.closing(sqlite3.connect(str(path))) as db:
+                db.execute('CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                db.commit()
+            stamp = path.read_bytes()
+            self.assertEqual(core().onboarding(path)['intro'], {'run': None, 'items': []})
+            status, payload = self.post(path, '/api/onboarding/decide', {'id': 'c-0000000000', 'decision': 'accept'})
+            self.assertEqual((status, payload), (404, {'error': 'candidate_not_found'}))
+            self.assertEqual(path.read_bytes(), stamp)
+            with contextlib.closing(sqlite3.connect(str(path))) as db:
+                db.executescript(X.TABLES)
+                db.execute("INSERT INTO onboarding_runs (id, at, intro_sha256, provider, model, estimate_usd, cap_usd, "
+                           "cost_usd, items, dropped, status) VALUES ('r-1', 1.0, 'abc', 'claude', 'm', 0.2, 1.0, 0.1, 1, "
+                           "'{}', 'done')")
+                db.execute("INSERT INTO onboarding_items (id, run_id, target, value, quote, start, \"end\", confidence, "
+                           "support, status) VALUES ('c-00000000aa', 'r-1', 'people', ?, 'Jonas Berg runs QA', 0, 18, 0.9, "
+                           "'direct', 'candidate')", (json.dumps({'name': 'Jonas Berg', 'role': 'QA'}),))
+                db.commit()
+            view = core().onboarding(path)['intro']
+            self.assertEqual((view['run']['status'], [i['id'] for i in view['items']]), ('done', ['c-00000000aa']))
+            url = '/api/onboarding/decide'
+            for headers, body, expected in (
+                    ({'X-CSRF-Token': 'stale'}, {'id': 'c-00000000aa', 'decision': 'accept'}, (403, 'invalid_csrf_token')),
+                    ({'Origin': 'http://evil.example'}, {'id': 'c-00000000aa', 'decision': 'accept'},
+                     (403, 'same_origin_required')),
+                    ({}, {'id': 'c-00000000aa'}, (400, 'invalid_request_body')),
+                    ({}, {'id': 'c-00000000aa', 'decision': 'accept', 'value': 'x'}, (400, 'invalid_request_body')),
+                    ({}, json.dumps({'id': 'c-00000000aa', 'decision': 'edit', 'value': {'name': 'x' * 9000}}).encode(),
+                     (400, 'invalid_request_body')),
+                    ({}, {'id': 'c-00000000aa', 'decision': 'edit', 'value': {'role': 'QA'}},
+                     (400, 'value_is_not_a_valid_people'))):
+                with self.subTest(expected=expected):
+                    status, payload = self.post(path, url, body, **headers)
+                    self.assertEqual((status, payload.get('error')), expected)
+            status, payload = self.post(path, url, {'id': 'c-00000000aa', 'decision': 'edit',
+                                                    'value': {'name': 'Jonas Berg', 'role': 'QA lead'}})
+            self.assertEqual((status, payload['status']), (200, 'edited'))
+            item = core().onboarding(path)['intro']['items'][0]
+            self.assertEqual((item['status'], item['decision']['value']['role']), ('edited', 'QA lead'))
+
     def test_an_adopted_store_has_nothing_to_correct_and_is_not_written(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'state.sqlite'
@@ -245,10 +290,15 @@ class OnboardingTest(unittest.TestCase):
             self.assertIn("api('/api/onboarding')", js, lang)
             maps = {name: re.search(r'const %s = (\{.*?)\};' % name, js, re.S).group(1)
                     for name in ('MODE_LABEL', 'SHADOW_KIND', 'ROUTE_LABEL', 'MODE_ACTOR', 'HELD_WHY', 'CARD_STATE',
-                                 'CORRECT_ROUTE', 'CORRECT_ERROR')}
+                                 'CORRECT_ROUTE', 'CORRECT_ERROR', 'INTRO_TARGET', 'INTRO_FIELD', 'INTRO_STATE',
+                                 'INTRO_RUN', 'RULE_KIND', 'INTRO_EDIT', 'INTRO_ERROR')}
             keys[lang] = {name: re.findall(r'(?:^|[,{]\s*)(\w+): ', body) for name, body in maps.items()}
         self.assertEqual(keys['en'], keys['zh-CN'])
         self.assertEqual(keys['en']['CORRECT_ROUTE'], ['task', 'reply', 'log', 'ignore'])  # kage.core.observe.ROUTES
+        from kage.onboard import extract as X
+        self.assertEqual(keys['en']['INTRO_TARGET'], list(X.TARGETS))  # every target has a group on the page
+        self.assertEqual(keys['en']['RULE_KIND'], list(X.RULE_KINDS))
+        self.assertTrue(set(sum(X.FIELDS.values(), ())) <= set(keys['en']['INTRO_FIELD']))
 
 
 class StylesTest(unittest.TestCase):

@@ -462,6 +462,25 @@
     active: '干活中：会替你回复和派活。只观察期间记下的事仍列在下面。',
     paused: '已暂停：恢复前不会开始新的运行（在终端里运行 `mode resume`）。',
   };
+  // O3b：Kage 从本人的自我介绍里读懂的东西（kage.onboard.extract），逐条确认
+  const INTRO_TARGET = { owner: '关于你', org: '你的组织', people: '常合作的人', rule: '规则',
+    playbook: '你处理事情的习惯', glossary: '术语和名字' };
+  const INTRO_FIELD = { name: '名字', short_name: '简称', role: '角色', company: '公司', timezone: '时区',
+    language: '语言', voice: '说话身份', tracker: '工单系统', channels: '频道', systems: '系统', team: '团队',
+    relationship: '关系', communication: '怎么跟他说话', hint: '该怎么做', applies_to: '适用于',
+    term: '术语', meaning: '意思', asr: '常被听成', kind: '类型', title: '标题', statement: '内容' };
+  const INTRO_STATE = { candidate: ['待确认', 'warn'], accepted: ['已接受', 'good'], rejected: ['不要', null],
+    edited: ['已改', 'good'], applied: ['已生效', 'good'] };
+  const INTRO_RUN = { done: ['已读完', 'good'], over_cap: ['超出上限', 'warn'], failed: ['失败', 'bad'] };
+  const RULE_KIND = { fact: '事实', limit: '限制', preference: '偏好', principle: '原则', gotcha: '易错点' };
+  const INTRO_EDIT = { owner: ['name', 'short_name', 'role', 'company', 'timezone', 'language', 'voice'],
+    org: ['company', 'tracker', 'channels', 'systems', 'team'], people: ['name', 'role', 'relationship', 'communication'],
+    rule: ['title', 'statement', 'hint'], playbook: ['hint', 'applies_to'], glossary: ['term', 'meaning', 'asr'] };
+  const INTRO_LISTS = ['channels', 'systems', 'asr'];
+  const INTRO_ERROR = { candidate_not_found: '这一条已经不在了，请刷新页面。',
+    only_the_owner_decides_candidates: '确认只能由你本人来做，不能来自 agent 会话。',
+    text_looks_like_it_contains_a_credential_use_a_one_time_share_link: '这里像是有凭据，请删掉。',
+    invalid_csrf_token: '页面已过期，请刷新后再试。', local_state_unavailable: '本地数据库正忙，请稍后再试。' };
   function Onboarding() {
     const head = pageHead('上手', 'ONBOARDING · 观察与纠正', null);
     const body = h('section', { class: 'ops-card', id: 'onboarding' });
@@ -526,6 +545,112 @@
           h('button', { type: 'button', class: 'btn sm ghost', 'aria-label': '修改这条纠正', onclick: () => correctTriage(r) }, '修改')),
         c.note ? h('div', { class: 'sub' }, c.note) : null);
     }
+    function flatValue(target, value) {
+      const v = value || {};
+      if (target === 'rule') return [['kind', RULE_KIND[v.kind] || v.kind], ['title', v.title], ['statement', v.statement],
+        ['hint', (v.enforcement || {}).hint]].filter(([, x]) => x);
+      return Object.entries(v).map(([k, x]) => [k, Array.isArray(x) ? x.join(', ') : String(x)]);
+    }
+    async function decideItem(i, decision, value) {
+      try {
+        await api('/api/onboarding/decide', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify(value ? { id: i.id, decision, value } : { id: i.id, decision }) });
+      } catch (e) {
+        const code = e.body && e.body.error;
+        toast(INTRO_ERROR[code] || `没保存 (${code || e.message})`, 'bad');
+        return false;
+      }
+      toast('已保存', 'good');
+      load();
+      return true;
+    }
+    function editItem(i) {
+      const v = (i.decision && i.decision.value) || i.value || {};
+      const inputs = {};
+      const fields = INTRO_EDIT[i.target] || [];
+      const kind = i.target === 'rule' ? h('select', { id: 'ob-kind' }, Object.entries(RULE_KIND).map(([k, label]) =>
+        h('option', { value: k, selected: v.kind === k }, label))) : null;
+      const rows = fields.map((f) => {
+        const raw = f === 'hint' && i.target === 'rule' ? (v.enforcement || {}).hint : v[f];
+        const long = ['statement', 'hint', 'communication', 'meaning'].includes(f);
+        const el = h(long ? 'textarea' : 'input', long ? { rows: 2, maxlength: 600 } : { type: 'text', maxlength: 600 });
+        el.value = Array.isArray(raw) ? raw.join(', ') : (raw || '');
+        inputs[f] = el;
+        return h('label', { class: 'ob-field' }, h('span', {}, INTRO_FIELD[f] || f,
+          INTRO_LISTS.includes(f) ? h('span', { class: 'sub' }, ' (用逗号分隔)') : null), el);
+      });
+      const err = h('p', { class: 'err-box', role: 'alert', hidden: true });
+      sheet.querySelector('.sh-title .eyebrow').textContent = 'EDIT · 改候选';
+      document.getElementById('ops-confirm-title').textContent = '改正我理解的';
+      clear(sheetBody).append(
+        h('div', { class: 'oc-was' }, h('span', { class: 'sub' }, '你的原话'), h('div', {}, h('mark', {}, i.quote))),
+        kind ? h('label', { class: 'ob-field' }, h('span', {}, '类型'), kind) : null,
+        h('div', { class: 'ob-fields' }, rows),
+        h('p', { class: 'note' }, '和这一条记在一起；生效之前不会被用上。'), err);
+      sheetOk.textContent = '保存修改';
+      sheetOk.disabled = false;
+      sheetOk.onclick = async () => {
+        const value = {};
+        for (const [f, el] of Object.entries(inputs)) {
+          const text = el.value.trim();
+          if (!text) continue;
+          value[f] = INTRO_LISTS.includes(f) ? text.split(',').map((x) => x.trim()).filter(Boolean) : text;
+        }
+        if (kind) value.kind = kind.value;
+        err.hidden = true;
+        sheetOk.disabled = true;
+        try {
+          await api('/api/onboarding/decide', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ id: i.id, decision: 'edit', value }) });
+        } catch (e) {
+          const code = e.body && e.body.error;
+          err.textContent = INTRO_ERROR[code] || `没保存 (${code || e.message})`;
+          err.hidden = false;
+          sheetOk.disabled = false;
+          return;
+        }
+        sheet.close();
+        toast('已保存', 'good');
+        load();
+      };
+      sheet.showModal();
+      (kind || Object.values(inputs)[0]).focus();
+    }
+    function itemCard(i) {
+      const [label, tone] = INTRO_STATE[i.status] || [i.status, null];
+      return h('article', { class: 'ob-item', 'data-state': i.status },
+        h('div', { class: 'ob-item-head' }, pill(label, tone), i.support === 'inferred' ? pill('推断', 'warn') : null,
+          h('span', { class: 'sub' }, `置信度 ${Math.round((i.confidence || 0) * 100)}%`)),
+        h('dl', { class: 'ob-value' }, flatValue(i.target, (i.decision && i.decision.value) || i.value).map(([k, x]) =>
+          [h('dt', {}, INTRO_FIELD[k] || k), h('dd', {}, x)])),
+        h('blockquote', { class: 'ob-quote' }, h('mark', {}, i.quote)),
+        h('div', { class: 'ob-actions' },
+          h('button', { type: 'button', class: 'btn sm primary', disabled: i.status === 'accepted', onclick: () => decideItem(i, 'accept') }, '接受'),
+          h('button', { type: 'button', class: 'btn sm', onclick: () => editItem(i) }, '改…'),
+          h('button', { type: 'button', class: 'btn sm ghost', disabled: i.status === 'rejected', onclick: () => decideItem(i, 'reject') }, '不要')));
+    }
+    function introSection(intro) {
+      const sec = h('div', { class: 'ob-intro', id: 'intro' }, h('h3', {}, '我理解的你'));
+      const run = intro.run;
+      if (!run) {
+        sec.append(h('div', { class: 'empty' }, h('b', {}, '还没有自我介绍'), '在终端里运行 onboard intro add FILE，再运行 onboard extract（会先给费用估算）。这里的内容在你接受之前都不生效。'));
+        return sec;
+      }
+      const [label, tone] = INTRO_RUN[run.status] || [run.status, null];
+      const dropped = Object.values(run.dropped || {}).reduce((a, b) => a + b, 0);
+      sec.append(h('p', { class: 'ops-note ob-run' }, pill(label, tone), ` ${when(run.at)} · ${run.items} 条候选 · `,
+        run.cost_usd != null ? `$${run.cost_usd.toFixed(2)} / $${(run.cap_usd || 0).toFixed(2)}` : '没有报告费用',
+        dropped ? ` · ${dropped} 条被校验丢弃` : null, run.error ? ` · ${run.error}` : null));
+      const open = intro.items.filter((i) => i.status === 'candidate').length;
+      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} 条待确认。接受只记下你的选择；要到“生效”那一步（之后的版本）才会用上。`));
+      for (const [target, name] of Object.entries(INTRO_TARGET)) {
+        const items = intro.items.filter((i) => i.target === target);
+        if (!items.length) continue;
+        sec.append(h('h4', { class: 'ob-group' }, name, ' ', h('span', { class: 'count' }, items.length)),
+          h('div', { class: 'ob-items' }, items.map(itemCard)));
+      }
+      return sec;
+    }
     async function load() {
       let data;
       try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
@@ -544,6 +669,7 @@
         h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, '压下的派活')),
         h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, '压下的 Slack 发送'))));
       if (!data.row) body.append(h('p', { class: 'ops-note' }, '这个实例早于上手流程：它一直是干活状态。'));
+      body.append(introSection(data.intro || { run: null, items: [] }));
       body.append(h('h3', {}, '本来会做的事'));
       if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, '还没有记录'), '只观察模式还没有压下任何事。'));
       else {

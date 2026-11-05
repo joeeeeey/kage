@@ -462,6 +462,25 @@
     active: 'Active: it replies and runs tasks for you. Anything recorded while it was observing stays listed below.',
     paused: 'Paused: no new run starts until you resume it (`mode resume` in your terminal).',
   };
+  // O3b: what Kage understood from the owner's self-introduction (kage.onboard.extract), confirmed item by item
+  const INTRO_TARGET = { owner: 'About you', org: 'Your organisation', people: 'People you work with', rule: 'Rules',
+    playbook: 'How you handle things', glossary: 'Words and names' };
+  const INTRO_FIELD = { name: 'Name', short_name: 'Short name', role: 'Role', company: 'Company', timezone: 'Time zone',
+    language: 'Language', voice: 'Voice', tracker: 'Tracker', channels: 'Channels', systems: 'Systems', team: 'Team',
+    relationship: 'Relationship', communication: 'How to talk to them', hint: 'How to act', applies_to: 'Applies to',
+    term: 'Term', meaning: 'Meaning', asr: 'Often heard as', kind: 'Kind', title: 'Title', statement: 'Statement' };
+  const INTRO_STATE = { candidate: ['To confirm', 'warn'], accepted: ['Accepted', 'good'], rejected: ['Not this', null],
+    edited: ['Edited', 'good'], applied: ['Applied', 'good'] };
+  const INTRO_RUN = { done: ['Read', 'good'], over_cap: ['Over the cap', 'warn'], failed: ['Failed', 'bad'] };
+  const RULE_KIND = { fact: 'Fact', limit: 'Limit', preference: 'Preference', principle: 'Principle', gotcha: 'Gotcha' };
+  const INTRO_EDIT = { owner: ['name', 'short_name', 'role', 'company', 'timezone', 'language', 'voice'],
+    org: ['company', 'tracker', 'channels', 'systems', 'team'], people: ['name', 'role', 'relationship', 'communication'],
+    rule: ['title', 'statement', 'hint'], playbook: ['hint', 'applies_to'], glossary: ['term', 'meaning', 'asr'] };
+  const INTRO_LISTS = ['channels', 'systems', 'asr'];
+  const INTRO_ERROR = { candidate_not_found: 'This item is no longer there; reload the page.',
+    only_the_owner_decides_candidates: 'Decisions come from you, not from an agent session.',
+    text_looks_like_it_contains_a_credential_use_a_one_time_share_link: 'That looks like a credential; leave it out.',
+    invalid_csrf_token: 'The page is out of date; reload it and try again.', local_state_unavailable: 'The local store is busy; try again in a moment.' };
   function Onboarding() {
     const head = pageHead('Onboarding', 'ONBOARDING · observe and correct', null);
     const body = h('section', { class: 'ops-card', id: 'onboarding' });
@@ -526,6 +545,112 @@
           h('button', { type: 'button', class: 'btn sm ghost', 'aria-label': 'Change the correction', onclick: () => correctTriage(r) }, 'Change')),
         c.note ? h('div', { class: 'sub' }, c.note) : null);
     }
+    function flatValue(target, value) {
+      const v = value || {};
+      if (target === 'rule') return [['kind', RULE_KIND[v.kind] || v.kind], ['title', v.title], ['statement', v.statement],
+        ['hint', (v.enforcement || {}).hint]].filter(([, x]) => x);
+      return Object.entries(v).map(([k, x]) => [k, Array.isArray(x) ? x.join(', ') : String(x)]);
+    }
+    async function decideItem(i, decision, value) {
+      try {
+        await api('/api/onboarding/decide', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: JSON.stringify(value ? { id: i.id, decision, value } : { id: i.id, decision }) });
+      } catch (e) {
+        const code = e.body && e.body.error;
+        toast(INTRO_ERROR[code] || `Not saved (${code || e.message})`, 'bad');
+        return false;
+      }
+      toast('Saved', 'good');
+      load();
+      return true;
+    }
+    function editItem(i) {
+      const v = (i.decision && i.decision.value) || i.value || {};
+      const inputs = {};
+      const fields = INTRO_EDIT[i.target] || [];
+      const kind = i.target === 'rule' ? h('select', { id: 'ob-kind' }, Object.entries(RULE_KIND).map(([k, label]) =>
+        h('option', { value: k, selected: v.kind === k }, label))) : null;
+      const rows = fields.map((f) => {
+        const raw = f === 'hint' && i.target === 'rule' ? (v.enforcement || {}).hint : v[f];
+        const long = ['statement', 'hint', 'communication', 'meaning'].includes(f);
+        const el = h(long ? 'textarea' : 'input', long ? { rows: 2, maxlength: 600 } : { type: 'text', maxlength: 600 });
+        el.value = Array.isArray(raw) ? raw.join(', ') : (raw || '');
+        inputs[f] = el;
+        return h('label', { class: 'ob-field' }, h('span', {}, INTRO_FIELD[f] || f,
+          INTRO_LISTS.includes(f) ? h('span', { class: 'sub' }, ' (comma separated)') : null), el);
+      });
+      const err = h('p', { class: 'err-box', role: 'alert', hidden: true });
+      sheet.querySelector('.sh-title .eyebrow').textContent = 'EDIT · Candidate';
+      document.getElementById('ops-confirm-title').textContent = 'Correct what I understood';
+      clear(sheetBody).append(
+        h('div', { class: 'oc-was' }, h('span', { class: 'sub' }, 'You said'), h('div', {}, h('mark', {}, i.quote))),
+        kind ? h('label', { class: 'ob-field' }, h('span', {}, 'Kind'), kind) : null,
+        h('div', { class: 'ob-fields' }, rows),
+        h('p', { class: 'note' }, 'Kept with the item; nothing is used until it is applied.'), err);
+      sheetOk.textContent = 'Save the edit';
+      sheetOk.disabled = false;
+      sheetOk.onclick = async () => {
+        const value = {};
+        for (const [f, el] of Object.entries(inputs)) {
+          const text = el.value.trim();
+          if (!text) continue;
+          value[f] = INTRO_LISTS.includes(f) ? text.split(',').map((x) => x.trim()).filter(Boolean) : text;
+        }
+        if (kind) value.kind = kind.value;
+        err.hidden = true;
+        sheetOk.disabled = true;
+        try {
+          await api('/api/onboarding/decide', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ id: i.id, decision: 'edit', value }) });
+        } catch (e) {
+          const code = e.body && e.body.error;
+          err.textContent = INTRO_ERROR[code] || `Not saved (${code || e.message})`;
+          err.hidden = false;
+          sheetOk.disabled = false;
+          return;
+        }
+        sheet.close();
+        toast('Saved', 'good');
+        load();
+      };
+      sheet.showModal();
+      (kind || Object.values(inputs)[0]).focus();
+    }
+    function itemCard(i) {
+      const [label, tone] = INTRO_STATE[i.status] || [i.status, null];
+      return h('article', { class: 'ob-item', 'data-state': i.status },
+        h('div', { class: 'ob-item-head' }, pill(label, tone), i.support === 'inferred' ? pill('Inferred', 'warn') : null,
+          h('span', { class: 'sub' }, `confidence ${Math.round((i.confidence || 0) * 100)}%`)),
+        h('dl', { class: 'ob-value' }, flatValue(i.target, (i.decision && i.decision.value) || i.value).map(([k, x]) =>
+          [h('dt', {}, INTRO_FIELD[k] || k), h('dd', {}, x)])),
+        h('blockquote', { class: 'ob-quote' }, h('mark', {}, i.quote)),
+        h('div', { class: 'ob-actions' },
+          h('button', { type: 'button', class: 'btn sm primary', disabled: i.status === 'accepted', onclick: () => decideItem(i, 'accept') }, 'Accept'),
+          h('button', { type: 'button', class: 'btn sm', onclick: () => editItem(i) }, 'Edit…'),
+          h('button', { type: 'button', class: 'btn sm ghost', disabled: i.status === 'rejected', onclick: () => decideItem(i, 'reject') }, 'Not this')));
+    }
+    function introSection(intro) {
+      const sec = h('div', { class: 'ob-intro', id: 'intro' }, h('h3', {}, 'What I understood about you'));
+      const run = intro.run;
+      if (!run) {
+        sec.append(h('div', { class: 'empty' }, h('b', {}, 'No self-introduction yet'), 'In your terminal run onboard intro add FILE, then onboard extract (it shows the cost first). Nothing here is used until you accept it.'));
+        return sec;
+      }
+      const [label, tone] = INTRO_RUN[run.status] || [run.status, null];
+      const dropped = Object.values(run.dropped || {}).reduce((a, b) => a + b, 0);
+      sec.append(h('p', { class: 'ops-note ob-run' }, pill(label, tone), ` ${when(run.at)} · ${run.items} candidate(s) · `,
+        run.cost_usd != null ? `$${run.cost_usd.toFixed(2)} of $${(run.cap_usd || 0).toFixed(2)}` : 'cost not reported',
+        dropped ? ` · ${dropped} dropped by the checks` : null, run.error ? ` · ${run.error}` : null));
+      const open = intro.items.filter((i) => i.status === 'candidate').length;
+      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} to confirm. Accepting records your choice; nothing is used until it is applied (a later step).`));
+      for (const [target, name] of Object.entries(INTRO_TARGET)) {
+        const items = intro.items.filter((i) => i.target === target);
+        if (!items.length) continue;
+        sec.append(h('h4', { class: 'ob-group' }, name, ' ', h('span', { class: 'count' }, items.length)),
+          h('div', { class: 'ob-items' }, items.map(itemCard)));
+      }
+      return sec;
+    }
     async function load() {
       let data;
       try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
@@ -544,6 +669,7 @@
         h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, 'Agent runs held')),
         h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, 'Slack posts held'))));
       if (!data.row) body.append(h('p', { class: 'ops-note' }, 'This instance predates onboarding: it has always been active.'));
+      body.append(introSection(data.intro || { run: null, items: [] }));
       body.append(h('h3', {}, 'What it would have done'));
       if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, 'Nothing recorded'), 'Observe-only mode has not held anything back yet.'));
       else {

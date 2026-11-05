@@ -302,15 +302,77 @@ def run(db, key, intro_entry, intro, *, provider='claude', model=MODEL, cap=EXTR
 
 
 def candidates(db, run_id=None):
-    """The recorded candidates (latest run unless one is named); empty when nothing was ever extracted."""
+    """The recorded candidates (latest run unless one is named) with the owner's decision; empty when nothing was ever
+    extracted."""
     try:
         if run_id is None:
             row = db.execute("SELECT id FROM onboarding_runs WHERE status IN ('done', 'over_cap') ORDER BY at DESC "
                              'LIMIT 1').fetchone()
             run_id = row[0] if row else None
-        rows = db.execute('SELECT id, target, value, quote, confidence, support, status FROM onboarding_items '
-                          'WHERE run_id=? ORDER BY rowid', (run_id,)).fetchall() if run_id else []
+        rows = db.execute('SELECT id, target, value, quote, confidence, support, status, decided_at, decision '
+                          'FROM onboarding_items WHERE run_id=? ORDER BY rowid', (run_id,)).fetchall() if run_id else []
     except sqlite3.OperationalError:
         return []
     return [{'id': r[0], 'target': r[1], 'value': json.loads(r[2]), 'quote': r[3], 'confidence': r[4],
-             'support': r[5], 'status': r[6]} for r in rows]
+             'support': r[5], 'status': r[6], 'decided_at': r[7], 'decision': json.loads(r[8]) if r[8] else None}
+            for r in rows]
+
+
+def latest_run(db):
+    """The latest extraction run's summary (any status), or None; never the introduction."""
+    try:
+        row = db.execute('SELECT id, at, provider, model, estimate_usd, cap_usd, cost_usd, items, dropped, status, error '
+                         'FROM onboarding_runs ORDER BY at DESC, rowid DESC LIMIT 1').fetchone()
+    except sqlite3.OperationalError:
+        return None
+    if row is None:
+        return None
+    keys = ('id', 'at', 'provider', 'model', 'estimate_usd', 'cap_usd', 'cost_usd', 'items', 'dropped', 'status', 'error')
+    out = dict(zip(keys, row))
+    out['dropped'] = json.loads(out['dropped'] or '{}')
+    return out
+
+
+DECISIONS = ('accept', 'reject', 'edit')
+DECIDED = {'accept': 'accepted', 'reject': 'rejected', 'edit': 'edited'}
+OPEN_STATES = ('candidate', 'accepted', 'rejected', 'edited')  # O3c adds `applied`, which is final
+
+
+def decide(db, item_id, decision, value=None, *, guards=(), env=None, now=None):
+    """O3b: the owner's decision on one candidate: accept it, reject it, or edit its value (checked by the same rules
+    as the model's answer, never a credential). Kept on the item (`status`, `decided_at`, `decision`); nothing is
+    applied here (O3c). Never from an agent session. KeyError for an unknown item; ValueError otherwise."""
+    from kage.core import mode as _mode
+    from kage.core.secrets import check_secret_free
+    env = os.environ if env is None else env
+    if any(env.get(k) for k in _mode.AGENT_ENV):
+        raise ValueError('only_the_owner_decides_candidates')
+    if not isinstance(item_id, str) or not re.fullmatch(r'c-[0-9a-f]{10}', item_id):
+        raise ValueError('invalid_item_id')
+    if decision not in DECISIONS:
+        raise ValueError('decision_must_be_one_of_' + '_'.join(DECISIONS))
+    if (decision == 'edit') != (value is not None):
+        raise ValueError('a_value_comes_with_edit_only')
+    try:
+        row = db.execute('SELECT target, value, status FROM onboarding_items WHERE id=?', (item_id,)).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row is None:
+        raise KeyError('unknown_candidate')
+    target, old, status = row
+    if status not in OPEN_STATES:
+        raise ValueError(f'candidate_is_{status}')
+    record = {'decision': decision}
+    if decision == 'edit':
+        if not isinstance(value, dict):
+            raise ValueError('value_must_be_an_object')
+        clean = _rule(value, guards) if target == 'rule' else _clean(value, FIELDS[target])
+        if clean is None or (target == 'people' and not clean.get('name')) or (target == 'glossary' and not clean.get('term')):
+            raise ValueError(f'value_is_not_a_valid_{target}')
+        check_secret_free(json.dumps(clean, ensure_ascii=False))
+        record.update(value=clean, was=json.loads(old))
+    now = time.time() if now is None else now
+    with db:
+        db.execute('UPDATE onboarding_items SET status=?, decided_at=?, decision=? WHERE id=?',
+                   (DECIDED[decision], now, json.dumps(record, ensure_ascii=False, sort_keys=True), item_id))
+    return {'ok': True, 'id': item_id, 'status': DECIDED[decision], 'decision': record}

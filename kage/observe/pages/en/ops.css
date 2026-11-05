@@ -218,6 +218,34 @@ pre.json { margin-top: var(--sp-2); }
 .oc-note textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 .oc-count { justify-self: end; font: 500 var(--fs-2xs) var(--mono); color: var(--ink-4); }
 .sheet-body > .oc-note + .note { margin: 0; }
+/* O3b Onboarding: what Kage understood from the self-introduction, one card per candidate */
+.ob-intro { margin: var(--sp-5) 0 var(--sp-2); }
+.ob-run .pill { margin-right: 4px; }
+.ob-group { margin: var(--sp-4) 0 var(--sp-2); font: 650 var(--fs-md) var(--sans); color: var(--ink); display: flex; align-items: baseline; gap: 6px; }
+.ob-items { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.ob-item {
+  display: grid; gap: 8px; align-content: start; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--line-2);
+  background: #fff; box-shadow: var(--sh-sm); transition: border-color .15s, opacity .15s;
+}
+.ob-item[data-state="accepted"], .ob-item[data-state="edited"] { border-color: rgba(34, 160, 107, .45); }
+.ob-item[data-state="rejected"] { opacity: .62; }
+.ob-item-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ob-item-head .sub { margin: 0 0 0 auto; }
+.ob-value { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 10px; margin: 0; font-size: var(--fs-sm); line-height: var(--lh); }
+.ob-value dt { color: var(--ink-3); }
+.ob-value dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; }
+.ob-quote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--accent-soft); background: var(--surface-2); border-radius: 0 var(--r-xs) var(--r-xs) 0; font-size: var(--fs-sm); line-height: var(--lh); color: var(--ink-2); }
+.ob-quote mark, .oc-was mark { background: rgba(255, 196, 61, .32); color: inherit; padding: 0 2px; border-radius: 3px; }
+.ob-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ob-fields { display: grid; gap: 10px; }
+.ob-field { display: grid; gap: 5px; font: 600 var(--fs-sm) var(--sans); color: var(--ink-2); }
+.ob-field .sub { display: inline; font-weight: 400; }
+.ob-field input, .ob-field textarea, .ob-field select {
+  font: var(--fs-base)/1.5 var(--sans); color: var(--ink); background: #fff; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  box-shadow: var(--sh-sm); padding: 7px 11px; width: 100%; max-width: none;
+}
+.ob-field textarea { resize: vertical; min-height: 56px; }
+.ob-field input:focus-visible, .ob-field textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 @media (max-width: 980px) {
   .detail-grid { grid-template-columns: minmax(0, 1fr); }
   .ops-table.runs td.summary { display: none; }

@@ -67,6 +67,7 @@ from urllib.parse import parse_qs, urlsplit
 from kage import locale
 from kage.core import control as _control
 from kage.core import mode as _mode
+from kage.onboard import extract as _extract
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -166,6 +167,7 @@ PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 
 CONTROL_BODY_LIMIT = 8192  # Phase 2 C1: one control POST (a message of at most kage.core.control.MAX_TEXT characters)
 CORRECT_BODY_LIMIT = 2048  # O2f: one correction (a note of at most 300 characters)
+DECIDE_BODY_LIMIT = 8192   # O3b: one decision on a candidate (an edited value of a few short fields)
 CONTROL_EDITABLE = ('enabled', 'provider', 'model', 'effort')  # what the /control page may set (control.<key>)
 
 
@@ -606,7 +608,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urlsplit(self.path).path
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 <= size <= (CORRECT_BODY_LIMIT if path == '/api/onboarding/correct' else 1024):
+            limit = {'/api/onboarding/correct': CORRECT_BODY_LIMIT, '/api/onboarding/decide': DECIDE_BODY_LIMIT}
+            if not 0 <= size <= limit.get(path, 1024):
                 raise ValueError()
             payload = json.loads(self.rfile.read(size) or b'{}')
             if path == '/api/sessions/stop':
@@ -619,15 +622,23 @@ class Handler(BaseHTTPRequestHandler):
                         or not isinstance(payload['id'], str) or not isinstance(payload['route'], str)
                         or not isinstance(payload.get('note'), (str, type(None)))):
                     raise ValueError()
+            elif path == '/api/onboarding/decide':
+                if (not isinstance(payload, dict) or not {'id', 'decision'} <= set(payload) <= {'id', 'decision', 'value'}
+                        or not isinstance(payload['id'], str) or not isinstance(payload['decision'], str)
+                        or not isinstance(payload.get('value'), (dict, type(None)))):
+                    raise ValueError()
             elif payload != {}:
                 raise ValueError()
         except (ValueError, UnicodeError):
             return self.respond(400, {'error': 'invalid_request_body'})
-        if path == '/api/onboarding/correct':  # O2f
+        if path in ('/api/onboarding/correct', '/api/onboarding/decide'):  # O2f, O3b
             try:
+                if path == '/api/onboarding/decide':
+                    return self.respond(200, self.server.core.onboarding_decide(self.server.db_path, payload))
                 return self.respond(200, self.server.core.onboarding_correct(self.server.db_path, payload))
             except KeyError:
-                return self.respond(404, {'error': 'shadow_record_not_found'})
+                return self.respond(404, {'error': 'candidate_not_found' if path.endswith('decide') else
+                                          'shadow_record_not_found'})
             except ValueError as exc:
                 code = str(exc) if re.fullmatch(r'[a-z0-9_]{1,120}', str(exc)) else 'invalid_request'
                 return self.respond(400, {'error': code})
@@ -1110,7 +1121,7 @@ class DashboardCore:
         correction (O2f). Read-only."""
         now = time.time() if now is None else now
         result = {'generated_at': now, 'mode': _mode.ABSENT, 'row': False, 'log': [], 'counts': {}, 'recent': [],
-                  'cards': []}
+                  'cards': [], 'intro': {'run': None, 'items': []}}
         if not Path(path).is_file():
             result['notice'] = 'state_database_missing'
             return result
@@ -1124,6 +1135,7 @@ class DashboardCore:
             except sqlite3.OperationalError:
                 pass
             fixed = _mode.corrections(db)
+            result['intro'] = {'run': _extract.latest_run(db), 'items': _extract.candidates(db)}  # O3b
         result.update(mode=view['mode'], log=view['log'], counts=view['shadow']['counts'])
         for r in view['shadow']['recent']:
             item = {'id': r['id'], 'at': r['at'], 'kind': r['kind'], 'target': r['target'], 'why': r['why'],
@@ -1770,6 +1782,14 @@ class DashboardCore:
                                              now=now, expect_digest=digest)
         config, _ = self._control_config()
         return {**result, 'digest': self.worker_config.digest(config) if config else None}
+
+    def onboarding_decide(self, path, payload, now=None):
+        """POST /api/onboarding/decide {id, decision, value?} (O3b): the owner's decision on one candidate
+        (kage.onboard.extract.decide). Never creates a store; nothing is applied."""
+        registry = getattr(self.decision_buttons, 'rule_registry', None)
+        guards = tuple(getattr(registry, 'guards', ()))
+        with contextlib.closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True, timeout=3)) as db:
+            return _extract.decide(db, payload['id'], payload['decision'], payload.get('value'), guards=guards, now=now)
 
     def onboarding_correct(self, path, payload, now=None):
         """POST /api/onboarding/correct {id, route, note?} (O2f): the owner's correction of a shadow triage row

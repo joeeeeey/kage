@@ -95,7 +95,9 @@ class IntroStoreTest(unittest.TestCase):
             I.versions('mira', self.home)
 
 
-class ExtractTest(unittest.TestCase):
+class Fixture(unittest.TestCase):
+    """A scratch home with the stored introduction, a fake provider CLI on PATH and an empty store."""
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -114,6 +116,9 @@ class ExtractTest(unittest.TestCase):
     def run_extract(self, **kw):
         return X.run(self.db, 'mira', self.entry, INTRO, home=self.home, env=self.env, guards=('owner.card_first',),
                      now=1_800_000_000, **kw)
+
+
+class ExtractTest(Fixture):
 
     def test_locate_normalises_whitespace_and_records_the_original_span(self):
         start, end = X.locate('review deploy requests from the release team', INTRO)
@@ -195,6 +200,63 @@ class ExtractTest(unittest.TestCase):
 
     def test_nothing_extracted_reads_as_no_candidates(self):
         self.assertEqual(X.candidates(self.db), [])  # no table at all: a store that never ran an extraction
+
+
+
+class DecideTest(Fixture):
+    """O3b: the owner's decision on a candidate, kept on the item; nothing applied."""
+    OWNER = {}
+
+    def setUp(self):
+        super().setUp()
+        self.run_extract()
+        self.items = {i['target']: i for i in reversed(X.candidates(self.db))}
+
+    def test_accept_reject_edit_and_change_of_mind(self):
+        owner, rule = self.items['owner'], self.items['rule']
+        self.assertEqual(X.decide(self.db, owner['id'], 'accept', env=self.OWNER, now=5.0)['status'], 'accepted')
+        X.decide(self.db, owner['id'], 'reject', env=self.OWNER, now=6.0)  # a change of mind until it is applied
+        edited = X.decide(self.db, rule['id'], 'edit', {'kind': 'limit', 'title': 'Ask first', 'statement': 'Ask first.',
+                                                        'hint': 'Card me.', 'guard': 'owner.card_first'},
+                          guards=('owner.card_first',), env=self.OWNER, now=7.0)
+        self.assertEqual(edited['decision']['value']['enforcement'],
+                         {'level': 'L2', 'guard': 'owner.card_first', 'hint': 'Card me.'})
+        self.assertEqual(edited['decision']['was'], rule['value'])
+        by_id = {i['id']: i for i in X.candidates(self.db)}
+        self.assertEqual((by_id[owner['id']]['status'], by_id[owner['id']]['decided_at']), ('rejected', 6.0))
+        self.assertEqual(by_id[rule['id']]['status'], 'edited')
+        self.assertEqual(by_id[rule['id']]['value'], rule['value'])  # the model's value stays; the edit is beside it
+        self.assertEqual(X.latest_run(self.db)['items'], 6)
+
+    def test_refusals(self):
+        people = self.items['people']
+        for args, kw, error in (
+                ((people['id'], 'accept'), {'env': {'CODEX_THREAD_ID': 't'}}, 'only_the_owner'),
+                (('c-nothex!!!!', 'accept'), {}, 'invalid_item_id'),
+                ((people['id'], 'apply'), {}, 'decision_must_be_one_of'),
+                ((people['id'], 'accept', {'name': 'x'}), {}, 'a_value_comes_with_edit_only'),
+                ((people['id'], 'edit'), {}, 'a_value_comes_with_edit_only'),
+                ((people['id'], 'edit', ['x']), {}, 'value_must_be_an_object'),
+                ((people['id'], 'edit', {'role': 'QA'}), {}, 'value_is_not_a_valid_people'),
+                ((people['id'], 'edit', {'name': 'Jonas', 'role': 'key ' + 'xox' + 'b-' + '1234567890-abcdef'}), {},
+                 'credential')):
+            kw = {'env': self.OWNER, **kw}
+            with self.subTest(error=error), self.assertRaisesRegex(ValueError, error):
+                X.decide(self.db, *args, **kw)
+        with self.assertRaises(KeyError):
+            X.decide(self.db, 'c-0000000000', 'accept', env=self.OWNER)
+        self.db.execute("UPDATE onboarding_items SET status='applied' WHERE id=?", (people['id'],))
+        self.db.commit()
+        with self.assertRaisesRegex(ValueError, 'candidate_is_applied'):
+            X.decide(self.db, people['id'], 'reject', env=self.OWNER)
+
+    def test_a_store_that_never_extracted(self):
+        empty = sqlite3.connect(str(self.tmp / 'empty.sqlite'))
+        self.addCleanup(empty.close)
+        with self.assertRaises(KeyError):
+            X.decide(empty, 'c-0000000000', 'accept', env=self.OWNER)
+        self.assertEqual((X.latest_run(empty), X.candidates(empty)), (None, []))
+        self.assertEqual(list(empty.iterdump()), ['BEGIN TRANSACTION;', 'COMMIT;'])  # nothing created
 
 
 if __name__ == '__main__':

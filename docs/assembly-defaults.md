@@ -152,3 +152,9 @@ None of this alters existing profiles, stores, configuration files or services.
 - Runs and candidates go to `onboarding_runs` / `onboarding_items` (created with the first run; status `candidate`);
   `onboard items` lists them. Nothing reads them yet: the confirmation page and applying accepted items come in later
   releases. All `onboard` commands run from the owner's own terminal only.
+- The console's `/onboarding` page (O3, release b) shows the latest extraction (status, cost against the cap, how many
+  items the checks dropped) and its candidates grouped by target, each with its value, the owner's own words, the
+  confidence and `inferred` when it is one. The owner accepts, edits (the same checks as the model's answer; never a
+  credential) or rejects each one through `POST /api/onboarding/decide` under the console's write guards (host, same
+  origin, the page's CSRF token, JSON, at most 8192 bytes); a decision is kept on the item and can change until it is
+  applied. Nothing is applied yet (a later release); never from an agent session.
