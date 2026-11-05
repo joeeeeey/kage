@@ -117,9 +117,13 @@ def example_spec(key, owner_user):
     }
 
 
-def files(*, key, name, owner_user, version, program):
+LANGUAGE_NAMES = {'en': 'English', 'zh-CN': 'Chinese (zh-CN)'}
+
+
+def files(*, key, name, owner_user, version, program, language='en'):
     """{relative path: bytes} of the dispatch files for this owner."""
-    values = {'key': key, 'name': name, 'version': version, 'program': program}
+    values = {'key': key, 'name': name, 'version': version, 'program': program,
+              'language': LANGUAGE_NAMES.get(language, language)}
     spec = json.dumps(example_spec(key, owner_user), indent=2, ensure_ascii=False) + '\n'
     return {SKILL: _render('SKILL.md', values), RULES: _render('rules.md', values),
             EXAMPLE_SPEC: spec.encode('utf-8'), SEED_README: SEED_TEXT.encode('utf-8'),

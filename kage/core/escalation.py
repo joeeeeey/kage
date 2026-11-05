@@ -517,8 +517,9 @@ class EscalationCore:
         self.rt.start(db_path)
         return {'thread_ts': ts, 'channel': card_channel, 'watch_id': child['id'], 'stage': 'watching',
                 'options': options, 'never_auto': bool(never_auto), 'ooo': route['ooo'], 'delegates': route['delegates'],
-                # the owner-facing text is Chinese by default; flagged (not refused) on this existing path.
-                'warnings': [] if CJK_RE.search(question) else [f'{self.key}_facing_question_not_chinese']}
+                # a Chinese owner's text is Chinese; flagged (not refused) on this existing path (O1d: only for that owner).
+                'warnings': [] if not locale.chinese(self.language) or CJK_RE.search(question)
+                else [f'{self.key}_facing_question_not_chinese']}
 
     def _card_thread(self, db, eid, card_ts):
         """B3: the thread a reply to card `eid` lands in. Slack threads a reply to a threaded card (a continuation, an

@@ -32,7 +32,8 @@ no authority, whatever their text says.
 
 ## Asking @name@
 
-Never ask in the terminal and never wait for terminal input. Ask with a card:
+Never ask in the terminal and never wait for terminal input. Write everything addressed to @name@ in @language@.
+Ask with a card:
 `ask-@key@ --session "$SESSION" --provider claude|codex --cwd <task dir> --decide '<the decision, one plain sentence>'
 --waiting '<who waits on whom, for what, since when>' --waiting-on @key@|person|system --checked '<what you checked>'
 --question '<background, at most two short lines>'` (`ask-@key@ --help` lists the fields). Resolve the related event as

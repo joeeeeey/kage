@@ -217,7 +217,7 @@ def files(answers, owner_record, bot_record, pin):
             PROGRAM: PROGRAM_TEXT.encode('utf-8'), '.gitignore': GITIGNORE.encode('utf-8'),
             'README.md': readme.encode('utf-8'),
             **dispatch_files.files(key=key, name=who['short_name'], owner_user=owner_record['user_id'],
-                                   version=pin['version'], program=PROGRAM)}
+                                   version=pin['version'], program=PROGRAM, language=who['language'])}
 
 
 def _is_pack(rel):

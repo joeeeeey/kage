@@ -48,6 +48,10 @@ class DispatchFilesTest(Base):
         self.assertIn('ask-mira', skill)
         self.assertIn('trust=mira', skill)
         self.assertIn('python3 scripts/kage.py <command>', skill)
+        self.assertIn('Write everything addressed to Mira in English.', skill)  # O1d: the owner's language
+        zh = dispatch_files.files(key='mira', name='Mira', owner_user=OWNER, version='x', program='scripts/kage.py',
+                                  language='zh-CN')[dispatch_files.SKILL].decode()
+        self.assertIn('Write everything addressed to Mira in Chinese (zh-CN).', zh)
         rules = (self.target / dispatch_files.RULES).read_text()
         self.assertIn('kage/mira.rules-plan/v1', rules)
         for text in (skill, rules):
