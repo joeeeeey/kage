@@ -1,4 +1,5 @@
 """The dashboard (kage.observe.dashboard) and its pages (kage.observe.web), bound to a synthetic owner."""
+import contextlib
 import json
 from pathlib import Path
 import re
@@ -120,7 +121,8 @@ class PagesTest(unittest.TestCase):
 
 
 class OnboardingTest(unittest.TestCase):
-    """O2e: the /onboarding read model (mode, log, start cards, what observe-only mode recorded), read-only."""
+    """O2e: the /onboarding read model (mode, log, start cards, what observe-only mode recorded); O2f: the owner's
+    corrections of triage rows."""
 
     def test_the_read_model_of_an_observing_and_of_an_adopted_store(self):
         from kage.core import mode as M
@@ -149,7 +151,90 @@ class OnboardingTest(unittest.TestCase):
         self.assertEqual((by_kind['triage']['route'], by_kind['triage']['text']), ('task', 'Needs work.'))
         self.assertEqual((by_kind['slack_write']['endpoint'], by_kind['slack_write']['text']), ('chat.postMessage', 'On it'))
         self.assertEqual(by_kind['dispatch']['text'], 'start a run (event: events)')
+        self.assertTrue(all(re.fullmatch(r'[0-9a-f]{16}', r['id']) and r['correction'] is None for r in view['recent']))
         self.assertIn('/onboarding', D.OPS_PAGES)
+
+    def observing_store(self, tmp):
+        from kage.core import mode as M
+        path = Path(tmp) / 'state.sqlite'
+        db = sqlite3.connect(str(path))
+        M.write(db, 'installed', 'init', now=1.0)
+        M.write(db, 'observe', 'services', now=2.0)
+        triage = M.shadow(db, 'triage', 'mira-inbox', json.dumps({'burst': 'b1', 'route': 'task', 'why': 'Needs work.'}),
+                          'mode_observe', now=3.0)
+        held = M.shadow(db, 'dispatch', 'release-task', 'start a run (event: events)', 'mode_observe', now=4.0)
+        db.close()
+        return path, triage, held
+
+    def post(self, path, target, body, **headers):
+        """POST through the handler without a socket: (status, payload)."""
+        import io
+        import threading
+        from unittest import mock
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        handler = D.Handler.__new__(D.Handler)
+        handler.server = types.SimpleNamespace(server_port=8776, csrf='page-csrf', db_path=path, core=core(),
+                                               cache_lock=threading.Lock(), cached=None)
+        handler.headers = {'Host': '127.0.0.1:8776', 'Origin': 'http://127.0.0.1:8776', 'X-CSRF-Token': 'page-csrf',
+                           'Content-Type': 'application/json', 'Content-Length': str(len(data)), **headers}
+        handler.path, handler.rfile, sent = target, io.BytesIO(data), []
+        handler.respond = lambda status, payload, content_type=None, csp=None: sent.append((status, payload))
+        with mock.patch.dict('os.environ', {}, clear=False) as env:
+            for key in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
+                env.pop(key, None)
+            handler.do_POST()
+        return sent[0]
+
+    def test_the_owner_corrects_a_triage_from_the_page(self):
+        """O2f: POST /api/onboarding/correct under the page's guards (host, origin, CSRF token, JSON, size); only a
+        triage row; the read model shows the correction; nothing but the correction is written."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path, triage, held = self.observing_store(tmp)
+            def dump():
+                with contextlib.closing(sqlite3.connect(str(path))) as db:
+                    return [line for line in db.iterdump() if 'shadow_corrections' not in line]
+            before = dump()
+            url = '/api/onboarding/correct'
+            ok = {'id': triage, 'route': 'ignore', 'note': 'A newsletter.'}
+            for headers, body, expected in (
+                    ({'Host': 'evil.example:8776'}, ok, (403, 'invalid_host')),
+                    ({'Origin': 'http://evil.example'}, ok, (403, 'same_origin_required')),
+                    ({'X-CSRF-Token': 'stale'}, ok, (403, 'invalid_csrf_token')),
+                    ({'Content-Type': 'text/plain'}, ok, (415, 'json_required')),
+                    ({}, json.dumps({**ok, 'note': 'x' * 2100}).encode(), (400, 'invalid_request_body')),
+                    ({}, {'id': triage}, (400, 'invalid_request_body')),
+                    ({}, {**ok, 'extra': 1}, (400, 'invalid_request_body')),
+                    ({}, {**ok, 'route': ['ignore']}, (400, 'invalid_request_body')),
+                    ({}, {**ok, 'route': 'unclear'}, (400, 'route_must_be_one_of_task_reply_log_ignore')),
+                    ({}, {**ok, 'note': 'x' * 301}, (400, 'note_must_be_at_most_300_characters')),
+                    ({}, {**ok, 'id': held}, (400, 'only_triage_records_are_corrected')),
+                    ({}, {**ok, 'id': '0123456789abcdef'}, (404, 'shadow_record_not_found'))):
+                with self.subTest(expected=expected):
+                    status, payload = self.post(path, url, body, **headers)
+                    self.assertEqual((status, payload.get('error')), expected)
+            self.assertEqual(core().onboarding(path)['recent'][0]['correction'], None)
+            status, payload = self.post(path, url, {**ok, 'note': '长' * 300})  # 300 characters fit the body limit
+            self.assertEqual((status, payload['correction']['route']), (200, 'ignore'))
+            status, payload = self.post(path, url, {'id': triage, 'route': 'log'})  # a new one replaces it
+            self.assertEqual((status, payload['correction']), (200, {'route': 'log', 'note': None, 'at': payload['correction']['at']}))
+            rows = {r['kind']: r for r in core().onboarding(path)['recent']}
+            self.assertEqual((rows['triage']['correction']['route'], rows['dispatch']['correction']), ('log', None))
+            self.assertEqual(dump(), before)
+            self.assertEqual(self.post(path, '/api/watches/w1/stop', {'id': triage})[0], 400)  # other routes unchanged
+
+    def test_an_adopted_store_has_nothing_to_correct_and_is_not_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.sqlite'
+            with contextlib.closing(sqlite3.connect(str(path))) as db:
+                db.execute('CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+                db.commit()
+            stamp = path.read_bytes()
+            status, payload = self.post(path, '/api/onboarding/correct', {'id': '0123456789abcdef', 'route': 'ignore'})
+            self.assertEqual((status, payload), (404, {'error': 'shadow_record_not_found'}))
+            self.assertEqual(path.read_bytes(), stamp)
+            missing = Path(tmp) / 'missing.sqlite'
+            self.assertEqual(self.post(missing, '/api/onboarding/correct', {'id': '0123456789abcdef', 'route': 'ignore'})[0], 503)
+            self.assertFalse(missing.exists())  # a store is never created
 
     def test_both_languages_carry_the_page_with_the_same_label_keys(self):
         import re
@@ -159,9 +244,11 @@ class OnboardingTest(unittest.TestCase):
             self.assertIn("path === '/onboarding'", js, lang)
             self.assertIn("api('/api/onboarding')", js, lang)
             maps = {name: re.search(r'const %s = (\{.*?)\};' % name, js, re.S).group(1)
-                    for name in ('MODE_LABEL', 'SHADOW_KIND', 'ROUTE_LABEL', 'MODE_ACTOR', 'HELD_WHY', 'CARD_STATE')}
+                    for name in ('MODE_LABEL', 'SHADOW_KIND', 'ROUTE_LABEL', 'MODE_ACTOR', 'HELD_WHY', 'CARD_STATE',
+                                 'CORRECT_ROUTE', 'CORRECT_ERROR')}
             keys[lang] = {name: re.findall(r'(?:^|[,{]\s*)(\w+): ', body) for name, body in maps.items()}
         self.assertEqual(keys['en'], keys['zh-CN'])
+        self.assertEqual(keys['en']['CORRECT_ROUTE'], ['task', 'reply', 'log', 'ignore'])  # kage.core.observe.ROUTES
 
 
 class StylesTest(unittest.TestCase):

@@ -195,5 +195,70 @@ class StartCardTest(unittest.TestCase):
         self.assertEqual(self.db.execute("SELECT state FROM mode_cards WHERE event_id='ev1'").fetchone()[0], 'expired')
 
 
+class CorrectionTest(unittest.TestCase):
+    """O2f: the owner's correction of a shadow triage row, kept next to it; nothing else is written."""
+    OWNER = {}  # the owner's terminal / the console's service: no agent session variable
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.db = sqlite3.connect(str(self.tmp / 'state.sqlite'))
+        self.addCleanup(self.db.close)
+
+    def observing(self):
+        M.write(self.db, 'installed', 'init', now=1.0)
+        M.write(self.db, 'observe', 'services', now=2.0)
+        triage = M.shadow(self.db, 'triage', 'mira-inbox', json.dumps({'burst': 'b1', 'route': 'task', 'why': 'Needs work.'}),
+                          'mode_observe', now=3.0)
+        held = M.shadow(self.db, 'dispatch', 'release-task', 'start a run (event: events)', 'mode_observe', now=4.0)
+        return triage, held
+
+    def dump(self):
+        return [line for line in self.db.iterdump() if 'shadow_corrections' not in line]
+
+    def test_a_triage_row_takes_one_correction_and_nothing_else_changes(self):
+        triage, _ = self.observing()
+        before = self.dump()
+        self.assertEqual(M.corrections(self.db), {})
+        out = M.correct(self.db, triage, 'ignore', '  a newsletter,\n not for me ', now=5.0, env=self.OWNER)
+        self.assertEqual(out, {'ok': True, 'id': triage, 'correction': {'route': 'ignore', 'note': 'a newsletter, not for me',
+                                                                        'at': 5.0}})
+        M.correct(self.db, triage, 'log', None, now=6.0, env=self.OWNER)  # a new one replaces it
+        self.assertEqual(M.corrections(self.db), {triage: {'route': 'log', 'note': None, 'at': 6.0}})
+        self.assertEqual(self.dump(), before)  # the mode, its log and the shadow rows are untouched
+        self.assertEqual(M.read(self.db), 'observe')
+
+    def test_refusals(self):
+        triage, held = self.observing()
+        for args, env, error in (
+                ((triage, 'ignore'), {'CLAUDE_CODE_SESSION_ID': 's1'}, 'only_the_owner_corrects_shadow_records'),
+                ((triage, 'ignore'), {'CODEX_THREAD_ID': 't1'}, 'only_the_owner_corrects_shadow_records'),
+                ((triage, 'ignore'), {'CLAUDECODE': '1'}, 'only_the_owner_corrects_shadow_records'),
+                (('../x', 'ignore'), self.OWNER, 'invalid_shadow_id'),
+                ((None, 'ignore'), self.OWNER, 'invalid_shadow_id'),
+                ((triage, 'unclear'), self.OWNER, 'route_must_be_one_of_task_reply_log_ignore'),
+                ((triage, 'ignore', 'x' * 301), self.OWNER, 'note_must_be_at_most_300_characters'),
+                ((triage, 'ignore', 7), self.OWNER, 'note_must_be_text'),
+                ((triage, 'ignore', 'token ' + 'xox' + 'b-' + '1234567890-abcdef'), self.OWNER, 'credential'),
+                ((held, 'ignore'), self.OWNER, 'only_triage_records_are_corrected')):
+            with self.subTest(error=error, env=env), self.assertRaisesRegex(ValueError, error):
+                M.correct(self.db, *args, env=env)
+        with self.assertRaises(KeyError):
+            M.correct(self.db, '0123456789abcdef', 'ignore', env=self.OWNER)
+        M.correct(self.db, triage, 'reply', 'x' * 300, env=self.OWNER)  # exactly 300 is fine
+        self.assertEqual(list(M.corrections(self.db)), [triage])
+
+    def test_a_store_that_never_observed_is_never_written(self):
+        """An adopted deployment: no shadow table, so nothing to correct, and no table is created."""
+        self.db.execute('CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        self.db.commit()
+        before = list(self.db.iterdump())
+        with self.assertRaises(KeyError):
+            M.correct(self.db, '0123456789abcdef', 'ignore', env=self.OWNER)
+        self.assertEqual(list(self.db.iterdump()), before)
+        self.assertEqual(M.corrections(self.db), {})
+        self.assertEqual(M.overview(self.db)['shadow']['recent'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

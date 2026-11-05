@@ -816,7 +816,7 @@ class CliCore:
             db = sqlite3.connect(str(db_path), timeout=10)
             try:
                 if args.change != 'show':
-                    if any(os.environ.get(k) for k in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')):
+                    if any(os.environ.get(k) for k in _mode.AGENT_ENV):
                         print(json.dumps({'error': 'ValueError', 'detail': 'mode_changes_only_from_the_owners_terminal'}),
                               file=sys.stderr)
                         sys.exit(1)

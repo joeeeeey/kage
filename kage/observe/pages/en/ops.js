@@ -440,7 +440,7 @@
   }
 
   // =====================================================================
-  // Onboarding (O2e) — the instance mode and what observe-only mode recorded, read-only
+  // Onboarding (O2e) — the instance mode and what observe-only mode recorded; the owner's triage corrections (O2f)
   // =====================================================================
   const MODE_LABEL = { installed: ['Installed', 'warn'], observe: ['Observing', 'warn'], active: ['Active', 'good'], paused: ['Paused', 'bad'] };
   const SHADOW_KIND = { triage: 'Triage', slack_write: 'Slack post', dispatch: 'Agent run' };
@@ -449,6 +449,13 @@
   const HELD_WHY = { mode_observe: 'Held: observing', mode_installed: 'Held: not started yet', mode_paused: 'Held: paused' };
   const CARD_STATE = { open: ['Waiting', 'warn'], deciding: ['Deciding', 'warn'], started: ['Started', 'good'], later: ['Another day', null],
     refused: ['Refused', 'bad'], expired: ['Expired', null], stale: ['Out of date', null] };
+  // O2f: what a triage should have been (kage.core.observe.ROUTES), as the owner picks it
+  const CORRECT_ROUTE = { task: ['Start a task', 'It needs work: a new task.'], reply: ['Reply', 'A short answer in the conversation is enough.'],
+    log: ['Only record', 'Worth keeping a note of; nothing to do.'], ignore: ['Ignore', 'Not for you.'] };
+  const CORRECT_ERROR = { shadow_record_not_found: 'This record is no longer there; reload the page.', only_triage_records_are_corrected: 'Only a triage can be corrected.',
+    only_the_owner_corrects_shadow_records: 'Corrections come from you, not from an agent session.', note_must_be_at_most_300_characters: 'The note is longer than 300 characters.',
+    text_looks_like_it_contains_a_credential_use_a_one_time_share_link: 'The note looks like it contains a credential; leave it out.',
+    invalid_csrf_token: 'The page is out of date; reload it and try again.', local_state_unavailable: 'The local store is busy; try again in a moment.' };
   const MODE_NOTE = {
     installed: 'Installed: start the services once the doctor passes; the instance then observes before it acts.',
     observe: 'Observing: nothing is sent or run on your behalf. Below is what it would have done. Start it with the button on the daily start card in your DMs.',
@@ -456,34 +463,101 @@
     paused: 'Paused: no new run starts until you resume it (`mode resume` in your terminal).',
   };
   function Onboarding() {
-    const head = pageHead('Onboarding', 'ONBOARDING · read-only', null);
+    const head = pageHead('Onboarding', 'ONBOARDING · observe and correct', null);
     const body = h('section', { class: 'ops-card', id: 'onboarding' });
     clear(main).append(head, body);
+    let csrf = '';
+    const sheet = document.getElementById('ops-confirm');
+    const sheetBody = document.getElementById('ops-confirm-body');
+    const sheetOk = document.getElementById('ops-confirm-ok');
+    document.getElementById('ops-confirm-cancel').onclick = () => sheet.close();
+    function correctTriage(r) {
+      const c = r.correction || {};
+      const choices = h('div', { class: 'oc-routes', role: 'radiogroup', 'aria-label': 'What it should have done' },
+        Object.entries(CORRECT_ROUTE).map(([route, [label, hint]]) => h('label', { class: 'oc-route' },
+          h('input', { type: 'radio', name: 'oc-route', value: route, checked: (c.route || '') === route }),
+          h('span', { class: 'oc-route-text' }, h('span', { class: 'oc-route-title' }, h('b', {}, label), route === r.route ? h('span', { class: 'oc-same' }, 'its call') : null),
+            h('span', { class: 'sub' }, hint)))));
+      const note = h('textarea', { id: 'oc-note', rows: 3, maxlength: 300, placeholder: 'Optional: why (who sent it, what you would have done)' });
+      note.value = c.note || '';
+      const count = h('span', { class: 'oc-count' }, `${note.value.length} / 300`);
+      note.addEventListener('input', () => { count.textContent = `${note.value.length} / 300`; });
+      const err = h('p', { class: 'err-box', role: 'alert', hidden: true });
+      const pick = () => { const el = choices.querySelector('input:checked'); return el ? el.value : ''; };
+      choices.addEventListener('change', () => { sheetOk.disabled = !pick(); });
+      sheet.querySelector('.sh-title .eyebrow').textContent = 'CORRECT · Triage';
+      document.getElementById('ops-confirm-title').textContent = 'What should it have done?';
+      clear(sheetBody).append(
+        h('div', { class: 'oc-was' }, h('span', { class: 'sub' }, `${when(r.at)} · ${r.target || '—'}`),
+          h('div', {}, 'It ', h('b', {}, ROUTE_LABEL[r.route] || r.route || '—'), r.text ? h('span', { class: 'sub' }, ' — ' + r.text) : null)),
+        choices,
+        h('div', { class: 'oc-note' }, h('label', { for: 'oc-note' }, 'Note ', h('span', { class: 'sub' }, '(optional)')), note, count),
+        h('p', { class: 'note' }, 'Kept next to the record as evidence for setting it up; it changes nothing while it observes.'),
+        err);
+      sheetOk.textContent = r.correction ? 'Save the new correction' : 'Save correction';
+      sheetOk.disabled = !pick();
+      sheetOk.onclick = async () => {
+        err.hidden = true;
+        sheetOk.disabled = true;
+        try {
+          await api('/api/onboarding/correct', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ id: r.id, route: pick(), note: note.value.trim() || null }) });
+        } catch (e) {
+          const code = e.body && e.body.error;
+          err.textContent = CORRECT_ERROR[code] || `Not saved (${code || e.message}).`;
+          err.hidden = false;
+          sheetOk.disabled = false;
+          return;
+        }
+        sheet.close();
+        toast('Correction saved', 'good');
+        load();
+      };
+      sheet.showModal();
+      (choices.querySelector('input:checked') || choices.querySelector('input')).focus();
+    }
+    function yourCall(r) {
+      if (r.kind !== 'triage' || !r.id) return h('span', { class: 'sub' }, '—');
+      const c = r.correction;
+      if (!c) return h('button', { type: 'button', class: 'btn sm', onclick: () => correctTriage(r) }, 'Correct…');
+      const agrees = c.route === r.route;
+      return h('div', { class: 'oc-call' },
+        h('div', {}, pill(agrees ? 'Agreed' : 'Should: ' + (CORRECT_ROUTE[c.route] || [c.route])[0].toLowerCase(), agrees ? 'good' : 'warn'),
+          h('button', { type: 'button', class: 'btn sm ghost', 'aria-label': 'Change the correction', onclick: () => correctTriage(r) }, 'Change')),
+        c.note ? h('div', { class: 'sub' }, c.note) : null);
+    }
     async function load() {
       let data;
       try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
+      csrf = data.csrf_token || '';
       const [label, tone] = MODE_LABEL[data.mode] || [data.mode, null];
-      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · read-only'), h('h2', {}, 'Onboarding'),
+      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · observe and correct'), h('h2', {}, 'Onboarding'),
         h('p', { class: 'ops-note' }, MODE_NOTE[data.mode] || ''));
       const counts = data.counts || {};
       const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const corrected = data.recent.filter((r) => r.correction).length;
       clear(body).append(h('div', { class: 'counters' },
         h('div', { class: 'counter' }, h('b', {}, pill(label, tone)), h('span', {}, 'Mode')),
         h('div', { class: 'counter' }, h('b', {}, total), h('span', {}, 'Recorded, not done')),
         h('div', { class: 'counter' }, h('b', {}, counts.triage || 0), h('span', {}, 'Messages triaged')),
+        h('div', { class: 'counter' }, h('b', {}, corrected), h('span', {}, 'Triages you corrected')),
         h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, 'Agent runs held')),
         h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, 'Slack posts held'))));
       if (!data.row) body.append(h('p', { class: 'ops-note' }, 'This instance predates onboarding: it has always been active.'));
       body.append(h('h3', {}, 'What it would have done'));
       if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, 'Nothing recorded'), 'Observe-only mode has not held anything back yet.'));
-      else body.append(h('table', { class: 'ops-table' },
-        h('thead', {}, h('tr', {}, ['Time', 'Kind', 'Where', 'Would have', 'Why'].map((x) => h('th', { scope: 'col' }, x)))),
-        h('tbody', {}, data.recent.map((r) => h('tr', {},
-          h('td', { class: 'num' }, when(r.at)),
-          h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
-          h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
-          h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + ': ' : '') + (r.text || '')),
-          h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)))))));
+      else {
+        if (counts.triage) body.append(h('p', { class: 'ops-note' }, 'A triage you disagree with: correct it. Corrections are kept as evidence and change nothing while it observes.'));
+        body.append(h('div', { class: 'oc-scroll' }, h('table', { class: 'ops-table' },
+          h('thead', {}, h('tr', {}, ['Time', 'Kind', 'Where', 'Would have', 'Why', 'Your call'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('tbody', {}, data.recent.map((r) => h('tr', {},
+            h('td', { class: 'num' }, when(r.at)),
+            h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
+            h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
+            h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + ': ' : '') + (r.text || '')),
+            h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)),
+            h('td', { class: 'oc-cell' }, yourCall(r))))))));
+      }
       body.append(h('h3', {}, 'Mode changes'));
       if (!data.log.length) body.append(h('p', { class: 'ops-note' }, 'No change recorded.'));
       else body.append(h('table', { class: 'ops-table' },

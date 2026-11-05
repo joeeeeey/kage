@@ -165,6 +165,7 @@ PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 
 
 CONTROL_BODY_LIMIT = 8192  # Phase 2 C1: one control POST (a message of at most kage.core.control.MAX_TEXT characters)
+CORRECT_BODY_LIMIT = 2048  # O2f: one correction (a note of at most 300 characters)
 CONTROL_EDITABLE = ('enabled', 'provider', 'model', 'effort')  # what the /control page may set (control.<key>)
 
 
@@ -489,8 +490,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(404, {'error': 'run_not_found'})
             if path == '/api/backlog':
                 return self.respond(200, self.server.core.stale_backlog(self.server.db_path))
-            if path == '/api/onboarding':  # O2e
-                return self.respond(200, self.server.core.onboarding(self.server.db_path))
+            if path == '/api/onboarding':  # O2e; the page's corrections (O2f) post with the token
+                return self.respond(200, {**self.server.core.onboarding(self.server.db_path), 'csrf_token': self.server.csrf})
             if path == '/api/intake':
                 return self.respond(200, self.server.core.intake_overview(self.server.db_path))
             if path == '/api/inbox':
@@ -603,20 +604,35 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
             return self.respond(415, {'error': 'json_required'})
         try:
+            path = urlsplit(self.path).path
             size = int(self.headers.get('Content-Length', '0'))
-            if not 0 <= size <= 1024:
+            if not 0 <= size <= (CORRECT_BODY_LIMIT if path == '/api/onboarding/correct' else 1024):
                 raise ValueError()
             payload = json.loads(self.rfile.read(size) or b'{}')
-            path = urlsplit(self.path).path
             if path == '/api/sessions/stop':
                 if (not isinstance(payload, dict) or set(payload) != {'provider', 'session_id'}
                         or any(not isinstance(payload[k], str) or not payload[k].strip()
                                or len(payload[k]) > 200 for k in ('provider', 'session_id'))):
                     raise ValueError()
+            elif path == '/api/onboarding/correct':
+                if (not isinstance(payload, dict) or not {'id', 'route'} <= set(payload) <= {'id', 'route', 'note'}
+                        or not isinstance(payload['id'], str) or not isinstance(payload['route'], str)
+                        or not isinstance(payload.get('note'), (str, type(None)))):
+                    raise ValueError()
             elif payload != {}:
                 raise ValueError()
         except (ValueError, UnicodeError):
             return self.respond(400, {'error': 'invalid_request_body'})
+        if path == '/api/onboarding/correct':  # O2f
+            try:
+                return self.respond(200, self.server.core.onboarding_correct(self.server.db_path, payload))
+            except KeyError:
+                return self.respond(404, {'error': 'shadow_record_not_found'})
+            except ValueError as exc:
+                code = str(exc) if re.fullmatch(r'[a-z0-9_]{1,120}', str(exc)) else 'invalid_request'
+                return self.respond(400, {'error': code})
+            except (sqlite3.Error, OSError):
+                return self.respond(503, {'error': 'local_state_unavailable'})
         if path == '/api/sessions/stop':
             try:
                 with self.server.cache_lock:
@@ -1090,7 +1106,8 @@ class DashboardCore:
     def onboarding(self, path, now=None, limit=200):
         """O2e: the instance mode (`active` when the store has no row: an adopted deployment), its changes, the start
         cards and what observe-only mode recorded instead of doing (route and why of a triage, the endpoint and the
-        would-be text of a Slack write, the would-be run of a dispatch). Read-only."""
+        would-be text of a Slack write, the would-be run of a dispatch), each row with its id and the owner's
+        correction (O2f). Read-only."""
         now = time.time() if now is None else now
         result = {'generated_at': now, 'mode': _mode.ABSENT, 'row': False, 'log': [], 'counts': {}, 'recent': [],
                   'cards': []}
@@ -1106,10 +1123,11 @@ class DashboardCore:
                     'SELECT event_id, posted_at, state, settled_at FROM mode_cards ORDER BY posted_at DESC LIMIT 20')]
             except sqlite3.OperationalError:
                 pass
+            fixed = _mode.corrections(db)
         result.update(mode=view['mode'], log=view['log'], counts=view['shadow']['counts'])
         for r in view['shadow']['recent']:
-            item = {'at': r['at'], 'kind': r['kind'], 'target': r['target'], 'why': r['why'], 'route': None,
-                    'text': r['what']}
+            item = {'id': r['id'], 'at': r['at'], 'kind': r['kind'], 'target': r['target'], 'why': r['why'],
+                    'route': None, 'text': r['what'], 'correction': fixed.get(r['id'])}
             if r['kind'] in ('triage', 'slack_write'):
                 try:
                     value = json.loads(r['what'])
@@ -1752,6 +1770,12 @@ class DashboardCore:
                                              now=now, expect_digest=digest)
         config, _ = self._control_config()
         return {**result, 'digest': self.worker_config.digest(config) if config else None}
+
+    def onboarding_correct(self, path, payload, now=None):
+        """POST /api/onboarding/correct {id, route, note?} (O2f): the owner's correction of a shadow triage row
+        (kage.core.mode.correct). Never creates a store."""
+        with contextlib.closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True, timeout=3)) as db:
+            return _mode.correct(db, payload['id'], payload['route'], payload.get('note'), now=now)
 
     def stop_watch(self, path, watch_id):
         # Existing-file mode prevents creating a new database on an incorrect path.

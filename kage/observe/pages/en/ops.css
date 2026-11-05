@@ -187,6 +187,37 @@ html:has(.settings.is-dirty) { scroll-padding-bottom: 96px; }
 pre.json.design-cmd { white-space: pre; overflow-x: auto; }
 pre.json { margin-top: var(--sp-2); }
 
+/* O2f Onboarding: the owner's correction of a triage (a cell per row; the sheet's route choices and note) */
+.oc-scroll { min-width: 0; overflow-x: auto; }
+.oc-cell { white-space: nowrap; }
+.oc-call { display: grid; gap: 3px; justify-items: start; white-space: normal; max-width: 260px; }
+.oc-call > div:first-child { display: inline-flex; align-items: center; gap: 8px; }
+.oc-was { display: grid; gap: 4px; padding: 10px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); line-height: var(--lh); }
+.oc-was .sub { margin-top: 0; }
+.oc-routes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.oc-route {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border-radius: var(--r-md); border: 1px solid var(--line-2);
+  background: #fff; cursor: pointer; box-shadow: var(--sh-sm); transition: border-color .15s, box-shadow .15s, background .15s;
+}
+.oc-route:hover { border-color: rgba(59, 91, 253, .4); }
+.oc-route:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-ring); }
+.oc-route input { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.oc-route input:focus-visible { outline: 3px solid var(--accent-ring); outline-offset: 2px; }
+.oc-route-text { display: grid; gap: 2px; min-width: 0; }
+.oc-route-title { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.oc-route-text b { font: 650 var(--fs-base)/1.4 var(--sans); color: var(--ink); }
+.oc-route-text .sub { margin-top: 0; }
+.oc-same { font: 600 var(--fs-2xs)/1.7 var(--sans); color: var(--ink-3); background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 0 7px; }
+.oc-note { display: grid; gap: 6px; }
+.oc-note label { font: 600 var(--fs-sm) var(--sans); color: var(--ink-2); }
+.oc-note label .sub { display: inline; font-weight: 400; }
+.oc-note textarea {
+  font: var(--fs-base)/1.5 var(--sans); color: var(--ink); background: #fff; border: 1px solid var(--line-2); border-radius: var(--r-sm);
+  box-shadow: var(--sh-sm); padding: 8px 11px; min-height: 76px; width: 100%; resize: vertical;
+}
+.oc-note textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+.oc-count { justify-self: end; font: 500 var(--fs-2xs) var(--mono); color: var(--ink-4); }
+.sheet-body > .oc-note + .note { margin: 0; }
 @media (max-width: 980px) {
   .detail-grid { grid-template-columns: minmax(0, 1fr); }
   .ops-table.runs td.summary { display: none; }
@@ -198,6 +229,7 @@ pre.json { margin-top: var(--sp-2); }
   .set-index a::before { display: none; }
 }
 @media (max-width: 760px) {
+  .oc-routes { grid-template-columns: minmax(0, 1fr); }
   .set-field { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 14px 0; }
   .set-readonly .kv { grid-template-columns: minmax(0, 1fr); }
   /* on a phone the save bar spans the column: the note above, the two buttons sharing a row */

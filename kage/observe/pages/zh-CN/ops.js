@@ -440,7 +440,7 @@
   }
 
   // =====================================================================
-  // Onboarding (O2e) — 实例模式，以及只观察模式记下而没去做的事，只读
+  // Onboarding (O2e) — 实例模式，以及只观察模式记下而没去做的事；本人对分拣的纠正（O2f）
   // =====================================================================
   const MODE_LABEL = { installed: ['已安装', 'warn'], observe: ['只观察', 'warn'], active: ['干活中', 'good'], paused: ['已暂停', 'bad'] };
   const SHADOW_KIND = { triage: '分拣', slack_write: 'Slack 发送', dispatch: '派活' };
@@ -449,6 +449,13 @@
   const HELD_WHY = { mode_observe: '只观察中，压下', mode_installed: '还没启动，压下', mode_paused: '已暂停，压下' };
   const CARD_STATE = { open: ['等你点', 'warn'], deciding: ['处理中', 'warn'], started: ['已开工', 'good'], later: ['再看一天', null],
     refused: ['不认这次点击', 'bad'], expired: ['已过期', null], stale: ['已过时', null] };
+  // O2f：分拣本该是什么（kage.core.observe.ROUTES），由本人选
+  const CORRECT_ROUTE = { task: ['建任务', '要动手干活：新开一个任务。'], reply: ['回复', '在对话里简短回一句就够。'],
+    log: ['只记录', '值得记一笔，不用做什么。'], ignore: ['不管', '跟你无关。'] };
+  const CORRECT_ERROR = { shadow_record_not_found: '这条记录已经不在了，请刷新页面。', only_triage_records_are_corrected: '只有分拣可以纠正。',
+    only_the_owner_corrects_shadow_records: '纠正只能由你本人来做，不能来自 agent 会话。', note_must_be_at_most_300_characters: '备注超过 300 字。',
+    text_looks_like_it_contains_a_credential_use_a_one_time_share_link: '备注里像是有凭据，请删掉。',
+    invalid_csrf_token: '页面已过期，请刷新后再试。', local_state_unavailable: '本地数据库正忙，请稍后再试。' };
   const MODE_NOTE = {
     installed: '已安装：体检通过后启动服务，实例会先只观察，再干活。',
     observe: '只观察：不会代你发任何消息、也不会派活。下面是它本来会做的事。用私信里每天那张卡片上的按钮让它开始干活。',
@@ -456,34 +463,101 @@
     paused: '已暂停：恢复前不会开始新的运行（在终端里运行 `mode resume`）。',
   };
   function Onboarding() {
-    const head = pageHead('上手', 'ONBOARDING · 只读', null);
+    const head = pageHead('上手', 'ONBOARDING · 观察与纠正', null);
     const body = h('section', { class: 'ops-card', id: 'onboarding' });
     clear(main).append(head, body);
+    let csrf = '';
+    const sheet = document.getElementById('ops-confirm');
+    const sheetBody = document.getElementById('ops-confirm-body');
+    const sheetOk = document.getElementById('ops-confirm-ok');
+    document.getElementById('ops-confirm-cancel').onclick = () => sheet.close();
+    function correctTriage(r) {
+      const c = r.correction || {};
+      const choices = h('div', { class: 'oc-routes', role: 'radiogroup', 'aria-label': '它本该怎么做' },
+        Object.entries(CORRECT_ROUTE).map(([route, [label, hint]]) => h('label', { class: 'oc-route' },
+          h('input', { type: 'radio', name: 'oc-route', value: route, checked: (c.route || '') === route }),
+          h('span', { class: 'oc-route-text' }, h('span', { class: 'oc-route-title' }, h('b', {}, label), route === r.route ? h('span', { class: 'oc-same' }, '它的判断') : null),
+            h('span', { class: 'sub' }, hint)))));
+      const note = h('textarea', { id: 'oc-note', rows: 3, maxlength: 300, placeholder: '选填：为什么（谁发的、你本来会怎么处理）' });
+      note.value = c.note || '';
+      const count = h('span', { class: 'oc-count' }, `${note.value.length} / 300`);
+      note.addEventListener('input', () => { count.textContent = `${note.value.length} / 300`; });
+      const err = h('p', { class: 'err-box', role: 'alert', hidden: true });
+      const pick = () => { const el = choices.querySelector('input:checked'); return el ? el.value : ''; };
+      choices.addEventListener('change', () => { sheetOk.disabled = !pick(); });
+      sheet.querySelector('.sh-title .eyebrow').textContent = 'CORRECT · 纠正分拣';
+      document.getElementById('ops-confirm-title').textContent = '它本该怎么做？';
+      clear(sheetBody).append(
+        h('div', { class: 'oc-was' }, h('span', { class: 'sub' }, `${when(r.at)} · ${r.target || '—'}`),
+          h('div', {}, '它', h('b', {}, ROUTE_LABEL[r.route] || r.route || '—'), r.text ? h('span', { class: 'sub' }, ' — ' + r.text) : null)),
+        choices,
+        h('div', { class: 'oc-note' }, h('label', { for: 'oc-note' }, '备注', h('span', { class: 'sub' }, '（选填）')), note, count),
+        h('p', { class: 'note' }, '记在这条记录旁边，作为上手的依据；只观察期间不会改变任何行为。'),
+        err);
+      sheetOk.textContent = r.correction ? '保存新的纠正' : '保存纠正';
+      sheetOk.disabled = !pick();
+      sheetOk.onclick = async () => {
+        err.hidden = true;
+        sheetOk.disabled = true;
+        try {
+          await api('/api/onboarding/correct', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+            body: JSON.stringify({ id: r.id, route: pick(), note: note.value.trim() || null }) });
+        } catch (e) {
+          const code = e.body && e.body.error;
+          err.textContent = CORRECT_ERROR[code] || `没保存（${code || e.message}）。`;
+          err.hidden = false;
+          sheetOk.disabled = false;
+          return;
+        }
+        sheet.close();
+        toast('纠正已保存', 'good');
+        load();
+      };
+      sheet.showModal();
+      (choices.querySelector('input:checked') || choices.querySelector('input')).focus();
+    }
+    function yourCall(r) {
+      if (r.kind !== 'triage' || !r.id) return h('span', { class: 'sub' }, '—');
+      const c = r.correction;
+      if (!c) return h('button', { type: 'button', class: 'btn sm', onclick: () => correctTriage(r) }, '纠正…');
+      const agrees = c.route === r.route;
+      return h('div', { class: 'oc-call' },
+        h('div', {}, pill(agrees ? '同意' : '应该：' + (CORRECT_ROUTE[c.route] || [c.route])[0], agrees ? 'good' : 'warn'),
+          h('button', { type: 'button', class: 'btn sm ghost', 'aria-label': '修改这条纠正', onclick: () => correctTriage(r) }, '修改')),
+        c.note ? h('div', { class: 'sub' }, c.note) : null);
+    }
     async function load() {
       let data;
       try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
+      csrf = data.csrf_token || '';
       const [label, tone] = MODE_LABEL[data.mode] || [data.mode, null];
-      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · 只读'), h('h2', {}, '上手'),
+      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · 观察与纠正'), h('h2', {}, '上手'),
         h('p', { class: 'ops-note' }, MODE_NOTE[data.mode] || ''));
       const counts = data.counts || {};
       const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      const corrected = data.recent.filter((r) => r.correction).length;
       clear(body).append(h('div', { class: 'counters' },
         h('div', { class: 'counter' }, h('b', {}, pill(label, tone)), h('span', {}, '模式')),
         h('div', { class: 'counter' }, h('b', {}, total), h('span', {}, '只记下、没去做')),
         h('div', { class: 'counter' }, h('b', {}, counts.triage || 0), h('span', {}, '分拣过的消息')),
+        h('div', { class: 'counter' }, h('b', {}, corrected), h('span', {}, '你纠正过的分拣')),
         h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, '压下的派活')),
         h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, '压下的 Slack 发送'))));
       if (!data.row) body.append(h('p', { class: 'ops-note' }, '这个实例早于上手流程：它一直是干活状态。'));
       body.append(h('h3', {}, '本来会做的事'));
       if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, '还没有记录'), '只观察模式还没有压下任何事。'));
-      else body.append(h('table', { class: 'ops-table' },
-        h('thead', {}, h('tr', {}, ['时间', '类型', '在哪', '本来会', '理由'].map((x) => h('th', { scope: 'col' }, x)))),
-        h('tbody', {}, data.recent.map((r) => h('tr', {},
-          h('td', { class: 'num' }, when(r.at)),
-          h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
-          h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
-          h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + '：' : '') + (r.text || '')),
-          h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)))))));
+      else {
+        if (counts.triage) body.append(h('p', { class: 'ops-note' }, '不认同哪条分拣，就纠正它。纠正会作为依据留下，只观察期间不改变任何行为。'));
+        body.append(h('div', { class: 'oc-scroll' }, h('table', { class: 'ops-table' },
+          h('thead', {}, h('tr', {}, ['时间', '类型', '在哪', '本来会', '理由', '你的判断'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('tbody', {}, data.recent.map((r) => h('tr', {},
+            h('td', { class: 'num' }, when(r.at)),
+            h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
+            h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
+            h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + '：' : '') + (r.text || '')),
+            h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)),
+            h('td', { class: 'oc-cell' }, yourCall(r))))))));
+      }
       body.append(h('h3', {}, '模式变化'));
       if (!data.log.length) body.append(h('p', { class: 'ops-note' }, '还没有变化。'));
       else body.append(h('table', { class: 'ops-table' },

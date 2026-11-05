@@ -15,15 +15,22 @@ the dispatcher, never in prompts.
 The start card (O2d): while the mode is `observe`, once a day a code-owned, button-only card to the owner's private
 destination says what observe-only mode recorded (counts per kind, the latest lines) with [开始干活] / [再看一天]; only
 the owner's own click on [开始干活] moves the mode to `active`.
+
+Owner corrections (O2f): on the console the owner may say what a shadow `triage` row should have been (a route and a
+note); the correction is kept next to the row (`shadow_corrections`) as evidence for the next onboarding step and
+changes nothing: no mode, dispatch or card reads it.
 """
 from __future__ import annotations
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 import sqlite3
 import time
 
 from kage import locale
+from kage.core.secrets import check_secret_free
 
 MODES = ('installed', 'observe', 'active', 'paused')
 KEY = 'instance.mode'
@@ -50,6 +57,12 @@ WRITE_ENDPOINTS = frozenset((
     'views.open', 'views.push', 'views.update', 'views.publish'))
 DESTINATION_META = 'card_destination:'  # kage.adapters.slack.destinations: a verified verdict per channel
 PRIVATE_VERDICTS = ('im', 'private')
+# O2f: created with the first correction only, so a store with nothing to correct is never written
+CORRECTION_SCHEMA = '''CREATE TABLE IF NOT EXISTS shadow_corrections (shadow_id TEXT PRIMARY KEY, route TEXT NOT NULL,
+                                                                  note TEXT, at REAL NOT NULL)'''
+CORRECTION_NOTE_MAX = 300
+SHADOW_ID_RE = re.compile(r'[0-9a-f]{16}')
+AGENT_ENV = ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')  # set in an agent session, never by the owner
 
 
 class ShadowedWrite(RuntimeError):
@@ -112,11 +125,54 @@ def overview(db, limit=20):
         out['log'] = [dict(zip(('at', 'old', 'new', 'actor', 'reason'), r)) for r in db.execute(
             'SELECT at, old, new, actor, reason FROM mode_log ORDER BY at DESC LIMIT ?', (limit,))]
         out['shadow']['counts'] = dict(db.execute('SELECT kind, count(*) FROM shadow_actions GROUP BY kind'))
-        out['shadow']['recent'] = [dict(zip(('at', 'kind', 'target', 'what', 'why'), r)) for r in db.execute(
-            'SELECT at, kind, target, what, why FROM shadow_actions ORDER BY at DESC LIMIT ?', (limit,))]
+        out['shadow']['recent'] = [dict(zip(('id', 'at', 'kind', 'target', 'what', 'why'), r)) for r in db.execute(
+            'SELECT id, at, kind, target, what, why FROM shadow_actions ORDER BY at DESC LIMIT ?', (limit,))]
     except sqlite3.OperationalError:
         pass
     return out
+
+
+def corrections(db):
+    """O2f: the owner's corrections by shadow id, {route, note, at}; empty when none was ever made. Read-only."""
+    try:
+        return {r[0]: {'route': r[1], 'note': r[2], 'at': r[3]} for r in db.execute(
+            'SELECT shadow_id, route, note, at FROM shadow_corrections')}
+    except sqlite3.OperationalError:
+        return {}
+
+
+def correct(db, shadow_id, route, note=None, now=None, env=None):
+    """O2f: the owner's correction of a shadow `triage` row: the route it should have had (kage.core.observe.ROUTES)
+    and an optional note (at most 300 characters, never a credential). One per row; a new one replaces it. Never from an
+    agent session (`env`: the process environment). KeyError for an id that is not a shadow row; ValueError otherwise."""
+    from kage.core.observe import ROUTES  # observe imports this module
+    env = os.environ if env is None else env
+    if any(env.get(k) for k in AGENT_ENV):
+        raise ValueError('only_the_owner_corrects_shadow_records')
+    if not isinstance(shadow_id, str) or not SHADOW_ID_RE.fullmatch(shadow_id):
+        raise ValueError('invalid_shadow_id')
+    if route not in ROUTES:
+        raise ValueError('route_must_be_one_of_' + '_'.join(ROUTES))
+    if note is not None and not isinstance(note, str):
+        raise ValueError('note_must_be_text')
+    note = ' '.join((note or '').split()) or None
+    if note is not None and len(note) > CORRECTION_NOTE_MAX:
+        raise ValueError(f'note_must_be_at_most_{CORRECTION_NOTE_MAX}_characters')
+    check_secret_free(note)
+    now = time.time() if now is None else now
+    try:
+        row = db.execute('SELECT kind FROM shadow_actions WHERE id=?', (shadow_id,)).fetchone()
+    except sqlite3.OperationalError:  # no shadow table: a store that never observed (an adopted deployment)
+        row = None
+    if row is None:
+        raise KeyError('unknown_shadow_record')
+    if row[0] != 'triage':
+        raise ValueError('only_triage_records_are_corrected')
+    with db:
+        db.execute(CORRECTION_SCHEMA)
+        db.execute('INSERT OR REPLACE INTO shadow_corrections (shadow_id, route, note, at) VALUES (?, ?, ?, ?)',
+                   (shadow_id, route, note, now))
+    return {'ok': True, 'id': shadow_id, 'correction': {'route': route, 'note': note, 'at': now}}
 
 
 def _channel(payload):

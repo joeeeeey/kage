@@ -131,4 +131,8 @@ None of this alters existing profiles, stores, configuration files or services.
 - The console's `/onboarding` page (O2e, release B2; read-only, `/api/onboarding`): the mode and its log, the start
   cards, and what observe-only mode held back (triage routes with their one-line why, held runs and Slack posts). The
   start card links it when the console has an address. A store without the mode row shows `active` and an empty list.
-- Not yet (release B3): owner corrections of shadow triage decisions on that page.
+- Owner corrections (O2f, release B3): on that page the owner may say what a shadow triage should have been (a
+  route and an optional note of at most 300 characters, never a credential), through `POST /api/onboarding/correct`
+  under the console's write guards (host, same origin, the page's CSRF token, JSON, at most 2048 bytes). The correction
+  is kept next to the row (`shadow_corrections`, created with the first one) as evidence and changes nothing: no mode,
+  dispatch or card reads it. Never from an agent session; a store that never observed has nothing to correct.
