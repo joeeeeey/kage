@@ -90,3 +90,14 @@ None of this alters existing profiles, stores, configuration files or services.
   services.json init did not write refuses: such a deployment keeps its own service tool.
 - Test harnesses set `KAGE_NO_AUTOSTART=1` when they run a deployment's program: CLI commands otherwise start a
   supervisor in the background.
+
+## The owner's language in Slack (O1d)
+
+- Card words follow the owner: every command's `--lang` and every core default resolve to
+  `kage.locale.card_lang(owner language)` (`zh` for a Chinese owner, `en` for anyone else); a caller may still name one.
+- The gates on the agent's owner-facing sentences (`rule-check --card --summary`, rule proposals, gap proposals) check
+  `kage.locale.written_for(owner language, text)`: Han for a Chinese owner (unchanged error codes), a letter for
+  anyone else (`…in_the_owner_language`). Proposal field names (`title_zh`, …) stay as the wire format.
+- `kage init`'s SKILL.md tells dispatched agents the owner's language. Not owner-language: the org tracker's English
+  rule, the requester-language checks of replies sent as the owner, the secret-masking patterns.
+- Not yet: the console pages exist in zh-CN only (O1e).
