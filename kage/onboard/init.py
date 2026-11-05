@@ -12,6 +12,8 @@ pushes:
   kage.lock              the running release (BUNDLE.json, verified), every switch on Kage, the two pack pins
   scripts/kage.py        the deployment's program: runs the pinned release on deploy/ (`scripts/kage.py --help`)
   SKILL.md, references/, scripts/dispatch_runner.py   what its dispatched runs read (kage.onboard.dispatch_files, O1c5b)
+  services.json          followup / dashboard / receiver for launchd (kage.onboard.services, O1c5e: absolute paths, this
+                         Python, the PATH init ran with for the agents' CLIs); loaded only by `services start`
   .gitignore, README.md
 
 Nothing is written in place. The new tree is built in a staging directory next to the target (0700 directories, 0600
@@ -38,6 +40,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -45,6 +48,7 @@ import kage
 from kage import packs, profile
 from kage.onboard import answers as _answers
 from kage.onboard import dispatch_files
+from kage.onboard import services as _services
 from kage.onboard import identity
 
 SWITCHES = ('access', 'asks', 'assembly', 'authority', 'avatars', 'blockers', 'buttons', 'cards', 'claims', 'cli',
@@ -435,6 +439,9 @@ def run(answers, *, target=None, apply=False, release=None, home=None):
     owner_record, bot_record = records(key, home)
     pin = release_pin(release)
     wanted = files(answers, owner_record, bot_record, pin)
+    wanted['services.json'] = _json(_services.spec(key=key, target=target, state=state_dir(key, home),
+                                                   python=sys.executable,
+                                                   path=_services.service_path(os.environ.get('PATH', ''))))
     steps = plan(target, wanted)
     tree = _effective(target, wanted, steps)
     steps = _actions(target, tree, steps)

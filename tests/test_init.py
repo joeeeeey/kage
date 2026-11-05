@@ -518,6 +518,10 @@ class AcceptanceTest(Base):
             bin_dir.mkdir()
             (bin_dir / 'claude').write_text('#!/bin/sh\necho "0.0.0 (test agent)"\n')
             os.chmod(bin_dir / 'claude', 0o755)
+            from tests.test_services import FAKE_LAUNCHCTL  # O1c5e: never the machine's launchd
+            (bin_dir / 'launchctl').write_text(FAKE_LAUNCHCTL)
+            os.chmod(bin_dir / 'launchctl', 0o755)
+        env.update({'FAKE_LAUNCHCTL_STATE': str(self.tmp / 'launchd.json'), 'FAKE_LAUNCHCTL_LOG': str(self.tmp / 'launchd.log')})
         env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'KAGE_VERSIONS_DIR': str(self.release.parent), 'PYTHONDONTWRITEBYTECODE': '1',
                     'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}',
@@ -545,6 +549,14 @@ class AcceptanceTest(Base):
         text = doctor.stdout + doctor.stderr
         self.assertIn('ok    owner.identity: verified (dm_code)', text)
         self.assertIn('ok    secrets.port: file store: slack-bot-token present, slack-app-token present', text)
+        self.assertIn('doctor: failed: services.running', text, text[-3000:])  # O1c5e: init loads no service
+        self.assertIn('`services start`', text)
+        started = self.program('services', 'start', '--offline')
+        self.assertEqual(started.returncode, 0, started.stderr[-2000:])
+        self.assertEqual(set(json.loads(started.stdout)['jobs'].values()), {'running'})
+        doctor = self.program('doctor', '--offline')
+        text = doctor.stdout + doctor.stderr
+        self.assertIn('ok    services.running: 3 / 3 running', text)
         self.assertIn('doctor: all required checks pass', text, text[-3000:])
         task = self.home / 'kage-tasks/t1'
         task.mkdir()

@@ -226,7 +226,8 @@ def service_checks(root: Path | None, probe: Probe) -> list[dict[str, Any]]:
     down = [name for name, state in states.items() if state != 'running']
     return [check('services.running', True, not down, f'{len(states) - len(down)} / {len(states)} running' +
                   (f'; not running: {", ".join(sorted(down))}' if down else ''),
-                  'load the launchd jobs (the deployment\'s services check / render)')]
+                  'load the launchd jobs (`services start` for a deployment `kage init` wrote; else the deployment\'s own '
+                  'service tool)')]
 
 
 def provider_checks(providers: list[str], probe: Probe) -> list[dict[str, Any]]:
