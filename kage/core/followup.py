@@ -664,20 +664,22 @@ class FollowupCore:
         except ValueError:
             return None
 
-    def ask_owner_text(self, provider, session, task_id, question, lang='zh', delegates=(), priority='normal'):
+    def ask_owner_text(self, provider, session, task_id, question, lang=None, delegates=(), priority='normal'):
         """the owner-facing card text (P3.1 copy standard): the mention and the question's first line (one plain sentence:
         what the agent wants to do, to whom, how far) lead; at most two short lines follow. Who asks (task, provider)
-        is in the footer (`ask_<owner key>_footer`). Chinese by default: everything addressed to the owner is zh unless asked."""
+        is in the footer (`ask_<owner key>_footer`). In the owner's language unless the caller names another."""
+        lang = lang or locale.card_lang(self.language)
         urgent = (self.msg('followup.ask_owner_text.1') if lang == 'zh' else '🚨 *HIGH PRIORITY* · ') if priority == 'high' else ''
         text = f'<@{self.owner_slack_user}> {urgent}{self.rt.buttons.escape(question)}'
         if delegates:
             text += self.msg('followup.ask_owner_text.2', owner=self.name) + ' '.join(f'<@{d}>' for d in delegates) + self.msg('followup.ask_owner_text.3')
         return text
 
-    def ask_owner_footer(self, provider, session, task_id, lang='zh', extra=None, tag=None):
+    def ask_owner_footer(self, provider, session, task_id, lang=None, extra=None, tag=None):
         """Context line under the buttons: task name (or session), provider, an optional detail (dashboard link) and, P43,
         the session tag of a background session (`session_footer`)."""
         name = 'Claude' if provider == 'claude' else 'Codex'
+        lang = lang or locale.card_lang(self.language)
         if task_id:
             who = f'{task_id} · {name}'
         else:

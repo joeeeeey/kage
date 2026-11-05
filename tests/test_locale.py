@@ -52,6 +52,18 @@ class CatalogTest(unittest.TestCase):
             with self.assertRaises(locale.LocaleError):
                 call()
 
+    def test_owner_language_helpers(self):
+        # O1d (G2): the card words' language and the gate on the agent's owner-facing sentences follow the owner
+        self.assertEqual([locale.chinese(x) for x in ('zh-CN', 'zh', 'ZH-Hant', 'en', 'fr', None)],
+                         [True, True, True, False, False, False])
+        self.assertEqual([locale.card_lang(x) for x in ('zh-CN', 'en', 'fr')], ['zh', 'en', 'en'])
+        self.assertTrue(locale.written_for('zh-CN', '要你决定：合并吗'))
+        self.assertFalse(locale.written_for('zh-CN', 'Merge it?'))           # as before O1d for a Chinese owner
+        self.assertTrue(locale.written_for('en', 'Merge it?'))
+        self.assertTrue(locale.written_for('en', '合并吗'))                    # letters in any script
+        self.assertFalse(locale.written_for('en', '42 / 7 ✅'))
+        self.assertEqual(locale.HAN_RE.pattern, '[\u3400-\u4dbf\u4e00-\u9fff]')
+
     def test_catalog_is_read_only(self):
         with self.assertRaises(TypeError):
             locale.catalog('en')['messages']['you'] = 'me'

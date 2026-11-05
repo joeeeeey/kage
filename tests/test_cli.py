@@ -44,6 +44,7 @@ class CliTest(unittest.TestCase):
         code, out = run(core(), ['ask-mira', '--help'])
         self.assertEqual(code, 0)
         self.assertIn('everything addressed to Mira', out)
+        self.assertIn('en (default) for everything', ' '.join(out.split()))   # O1d: the owner's language
         code, out = run(core(), ['task-rename', '--help'])
         self.assertEqual(code, 0)
         self.assertIn('or the desk root', ' '.join(out.split()))       # the deployment's workspace folder (K15d)

@@ -815,6 +815,7 @@ class AccessPolicy:
 
     def __init__(self, language, *, tz, example_spec, owner_key, owner_name, owner_user, ask_owner, worker_slug, rules_dir_env, smoke_dir_prefix, run_id_env, pack):
         self.language = language
+        self.script = 'chinese' if locale.chinese(language) else 'in_the_owner_language'  # O1d: the gates' error words
         self.tz = tz
         self.example_spec = example_spec
         self.owner_user = owner_user
@@ -1590,8 +1591,8 @@ class AccessPolicy:
         text = ' '.join(str(summary or '').split())
         if not text:
             raise ValueError(self.msg('access.validate_summary.1', owner=self.name))
-        if len(text) > SUMMARY_MAX or not _cjk(text):
-            raise ValueError(f'summary_must_be_one_chinese_sentence_of_at_most_{SUMMARY_MAX}_characters')
+        if len(text) > SUMMARY_MAX or not locale.written_for(self.language, text):
+            raise ValueError(f'summary_must_be_one_{self.script}_sentence_of_at_most_{SUMMARY_MAX}_characters')
         rt.buttons.check_copy(text, 'summary')
         rt.asks.check_secret_free(text)
         return text
@@ -2307,8 +2308,8 @@ class AccessPolicy:
         accepted, skipped = [], []
         for n, p in enumerate(doc['proposals']):
             rt.asks.check_secret_free(p['title_zh'], p['rationale_zh'], p.get('text_zh'))
-            if not _cjk(p['title_zh']) or not _cjk(p['rationale_zh']):
-                raise ValueError(f'proposal_{n}_title_and_rationale_must_be_chinese')
+            if not locale.written_for(self.language, p['title_zh']) or not locale.written_for(self.language, p['rationale_zh']):
+                raise ValueError(f'proposal_{n}_title_and_rationale_must_be_{self.script}')
             # P3.1 copy standard: the owner reads these on the card (describe rules in words: "BigQuery 只读规则", not ids).
             for field in ('title_zh', 'rationale_zh', 'text_zh'):
                 if p.get(field):
@@ -2339,8 +2340,9 @@ class AccessPolicy:
                                  'fingerprint': fp, 'target': info['dir'], 'lines': self.patch_lines(spec, p['patch']),
                                  'from_version': spec['version']})
             else:
-                if p.get('patch') or not p.get('text_zh') or not _cjk(p['text_zh']) or '\n' in p['text_zh'].strip():
-                    raise ValueError(f'proposal_{n}_inbox_addendum_needs_one_line_of_chinese_text_zh_and_no_patch')
+                if p.get('patch') or not p.get('text_zh') or not locale.written_for(self.language, p['text_zh']) \
+                        or '\n' in p['text_zh'].strip():
+                    raise ValueError(f'proposal_{n}_inbox_addendum_needs_one_line_of_{self.script}_text_zh_and_no_patch')
                 accepted.append({'index': n, 'proposal': p, 'fingerprint': fp,
                                  'target': str(goal_path or inbox_goal_path(rt)), 'lines': [p['text_zh']]})
         return accepted, skipped

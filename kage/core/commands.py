@@ -127,9 +127,10 @@ class CommandsCore:
         return card_id, sent['ts']
 
     def ask(self, db, *, responders, text, options, channel=None, thread=None, dm=None, confirm_mode='auto',
-            remind_after=_OWNER_DEFAULT, expire_after=_OWNER_DEFAULT, reminder_text=None, lang='zh',
+            remind_after=_OWNER_DEFAULT, expire_after=_OWNER_DEFAULT, reminder_text=None, lang=None,
             hint=True, now=None):
         """Owner session asks colleagues in an already-followed thread/DM; all guards precede writes."""
+        lang = lang or locale.card_lang(self.language)  # O1d: the fallback is the owner's language
         remind_after = self.rt.asks.DEFAULT_REMIND if remind_after is _OWNER_DEFAULT else remind_after
         expire_after = self.rt.asks.DEFAULT_EXPIRE if expire_after is _OWNER_DEFAULT else expire_after
         now = time.time() if now is None else now
@@ -473,9 +474,10 @@ class CommandsCore:
         return done
 
     def smoke_ask(self, db, db_path, session, provider, cwd, text, options=None, confirm_mode='auto',
-                  remind_after=_OWNER_DEFAULT, expire_after=_OWNER_DEFAULT, lang='zh', now=None, live_card=False):
+                  remind_after=_OWNER_DEFAULT, expire_after=_OWNER_DEFAULT, lang=None, now=None, live_card=False):
         """TEST ask card in the decision channel, the owner as responder, with its own watch. Dry by default (no real Slack
         card, no reminders / expiry, no cleanup); `live_card` posts a real TEST ask card for receiver E2E."""
+        lang = lang or locale.card_lang(self.language)
         remind_after = self.rt.asks.DEFAULT_REMIND if remind_after is _OWNER_DEFAULT else remind_after
         expire_after = self.rt.asks.DEFAULT_EXPIRE if expire_after is _OWNER_DEFAULT else expire_after
         now = time.time() if now is None else now

@@ -191,7 +191,7 @@ class CliCore:
         asker.add_argument('--remind-after', default=self.rt.asks.DEFAULT_REMIND)
         asker.add_argument('--expire-after', default=self.rt.asks.DEFAULT_EXPIRE)
         asker.add_argument('--reminder-text')
-        asker.add_argument('--lang', choices=self.rt.asks.LANGS, default='zh',
+        asker.add_argument('--lang', choices=self.rt.asks.LANGS, default=locale.card_lang(self.language),
                            help='Language of the card\'s own words (hint, reminder, result); the responders\' latest '
                                 'message here decides when there is one')
         asker.add_argument('--no-hint', action='store_true')
@@ -225,7 +225,7 @@ class CliCore:
         smoke_ask_p.add_argument('--confirm-text', choices=self.rt.asks.CONFIRM_MODES, default='auto')
         smoke_ask_p.add_argument('--remind-after', default=self.rt.asks.DEFAULT_REMIND, help='Smoke allows short values, e.g. 2m')
         smoke_ask_p.add_argument('--expire-after', default=self.rt.asks.DEFAULT_EXPIRE, help='Smoke allows short values, e.g. 5m')
-        smoke_ask_p.add_argument('--lang', choices=self.rt.asks.LANGS, default='zh')
+        smoke_ask_p.add_argument('--lang', choices=self.rt.asks.LANGS, default=locale.card_lang(self.language))
         smoke_ask_p.add_argument('--live-card', action='store_true',
                                  help='Post a REAL TEST ask card to the PRIVATE decision channel (receiver E2E); default dry')
         smoke_ask_clean = sub.add_parser('smoke-ask-cleanup', help='Stop a smoke-ask watch; refuses real ask cards')
@@ -267,7 +267,8 @@ class CliCore:
         owner.add_argument('--option', action='append', default=[], metavar='ID=LABEL[:KIND]')
         owner.add_argument('--recommend', metavar='ID')
         owner.add_argument('--never-auto', action='store_true')
-        owner.add_argument('--lang', choices=self.rt.asks.LANGS, default='zh', help=f'zh (default) for everything addressed to {self.name}')
+        owner.add_argument('--lang', choices=self.rt.asks.LANGS, default=locale.card_lang(self.language),
+                           help=f'{locale.card_lang(self.language)} (default) for everything addressed to {self.name}')
         owner.add_argument('--about', help='P41: the card this one replaces or follows (its event id, ts or Slack link: the new '
                                           'card threads under it and also shows in the channel), or a GitHub PR link')
         self.rt.card_gate.add_args(owner)

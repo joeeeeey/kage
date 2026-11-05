@@ -402,6 +402,7 @@ class Blockers:
     def __init__(self, language, *, tz, tz_name, owner_key, owner_name, owner_user, ask_owner, worker_slug, run_id_env,
                  internal_names=()):
         self.language = language
+        self.script = 'chinese' if locale.chinese(language) else 'in_the_owner_language'  # O1d: the gate's error words
         self.tz = tz
         self.tz_name = tz_name
         self.owner_user = owner_user
@@ -1111,8 +1112,8 @@ class Blockers:
             brief = str(p.get('brief_zh') or '').strip()
             if not brief or len(brief) > 4000:
                 raise ValueError(f'proposal_{n}_brief_zh_must_be_1_to_4000_characters')
-            if not (_cjk(title) and _cjk(rationale) and _cjk(brief)):
-                raise ValueError(f'proposal_{n}_title_rationale_and_brief_must_be_chinese')
+            if not all(locale.written_for(self.language, t) for t in (title, rationale, brief)):
+                raise ValueError(f'proposal_{n}_title_rationale_and_brief_must_be_{self.script}')
             rt.asks.check_secret_free(operation, title, rationale, brief)
             for field, value in (('title_zh', title), ('rationale_zh', rationale), ('operation', operation)):
                 rt.buttons.check_copy(value, f'proposal_{n}_{field}', first_line_max=None)  # on the card

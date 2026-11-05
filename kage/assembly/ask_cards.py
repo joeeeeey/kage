@@ -28,8 +28,8 @@ SECRET_RES = list(_secrets.PATTERNS)
 (result_line, closed_blocks) = (SLACK.result_line, _slack.closed_blocks)
 (confirm_text, confirm_blocks) = (SLACK.confirm_text, SLACK.confirm_blocks)
 
-def card_blocks(card_id, text, options, lang='zh', hint=True):
-    return SLACK.card_blocks(card_id, text, options, lang, hint)
+def card_blocks(card_id, text, options, lang=None, hint=True):
+    return SLACK.card_blocks(card_id, text, options, lang or ASKS.default_lang, hint)
 
 _OWNER_KEYED = ('OWNER',)  # exported under the deployment's names by kage.app
 _ALIASES = {}  # generic name -> the deployment's name for it

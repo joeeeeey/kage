@@ -17,10 +17,28 @@ import string
 import types
 
 HERE = Path(__file__).resolve().parent
+HAN_RE = re.compile('[\u3400-\u4dbf\u4e00-\u9fff]')
 
 
 class LocaleError(KeyError):
     """No catalog for the language, or no such key in it."""
+
+
+def chinese(language):
+    """Whether an owner of this language tag reads Chinese (zh, zh-CN, zh-Hant, …)."""
+    return str(language or '').split('-')[0].lower() == 'zh'
+
+
+def card_lang(language):
+    """The language code of Kage's own card words (`zh` / `en`, kage.core.asks) for an owner of this language tag."""
+    return 'zh' if chinese(language) else 'en'
+
+
+def written_for(language, text):
+    """Whether `text` is written for an owner of `language`: Han in it for a Chinese owner, a letter in it for anyone
+    else. The gate on the agent's owner-facing sentences (card summaries, proposal texts)."""
+    text = str(text or '')
+    return bool(HAN_RE.search(text)) if chinese(language) else any(c.isalpha() for c in text)
 
 
 def languages():

@@ -1049,7 +1049,7 @@ class EscalationCore:
 
     @_owner_kwargs
     def ask_owner(self, db, db_path, session, provider, cwd, question, options=None, recommend=None, never_auto=False,
-                 lang='zh', now=None, trusted_owner=False, priority='normal', owner_only=False, kind=_OWNER_DEFAULT,
+                 lang=None, now=None, trusted_owner=False, priority='normal', owner_only=False, kind=_OWNER_DEFAULT,
                  watch_extra=None, smoke=False, registry_note=True, footer=None, lint=True, task_thread=True,
                  parent_event=None, live_card=False, poster_cwd=None, about=None, replaces=False, gate=None):
         """Agent-initiated decision card with no inbound Slack event (owner session only).
@@ -1087,6 +1087,7 @@ class EscalationCore:
         cwd = str(Path(cwd).expanduser().absolute())
         if not Path(cwd).is_dir():
             raise ValueError('task_cwd_missing')
+        lang = lang or locale.card_lang(self.language)  # O1d: the owner's language unless the caller names one
         if lang not in self.rt.asks.LANGS:
             raise ValueError('lang_must_be_zh_or_en')
         question = str(question or '').strip()

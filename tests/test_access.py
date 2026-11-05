@@ -97,6 +97,18 @@ class AccessPolicyTest(unittest.TestCase):
             P.normalize_plan({'schema': P.plan_schema_id, 'category': 'access', 'kind': 'person', 'action': 'grant',
                               'system': 'unknown_system'})
 
+    def test_the_card_summary_is_written_in_the_owners_language(self):
+        # O1d (G2): an English owner's summary passes; a Chinese owner's still needs Han, with the same error as before
+        from unittest import mock
+        rt = mock.MagicMock()
+        self.assertEqual(policy('en').validate_summary(rt, ' Remove  Ann from the wiki? '), 'Remove Ann from the wiki?')
+        self.assertEqual(policy('zh-CN').validate_summary(rt, '移除 Ann 的 wiki 账号'), '移除 Ann 的 wiki 账号')
+        with self.assertRaisesRegex(ValueError, '^summary_must_be_one_chinese_sentence_of_at_most_'):
+            policy('zh-CN').validate_summary(rt, 'Remove Ann from the wiki?')
+        with self.assertRaisesRegex(ValueError, '^summary_must_be_one_in_the_owner_language_sentence_of_at_most_'):
+            policy('en').validate_summary(rt, '42 / 7')
+        self.assertEqual((policy('zh-CN').script, policy('en').script), ('chinese', 'in_the_owner_language'))
+
 
 if __name__ == '__main__':
     unittest.main()

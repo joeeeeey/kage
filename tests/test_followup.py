@@ -60,6 +60,11 @@ class FollowupCoreTest(unittest.TestCase):
         self.assertIn("Mira's decision channel", c.about_help)
         self.assertTrue(c.thread_reply_guidance.startswith('Mira typed this decision'))
         self.assertEqual(c.ask_owner_footer('claude', '0123456789', None, lang='en'), 'session 01234567 · Claude')
+        # O1d: without a lang the card words follow the owner's language
+        self.assertEqual(c.ask_owner_footer('claude', '0123456789', None), 'session 01234567 · Claude')
+        self.assertEqual(zh.ask_owner_footer('claude', '0123456789', None), '会话 01234567 · Claude')
+        self.assertIn('HIGH PRIORITY', c.ask_owner_text('codex', 's', 't', 'x', priority='high'))
+        self.assertIn('高优先级', zh.ask_owner_text('codex', 's', 't', 'x', priority='high'))
         self.assertEqual(c.audience_identity([OWNER]), 'bot')
         self.assertEqual(c.audience_identity([OWNER, 'U0000TEST09']), 'user')
         self.assertTrue(c._external('T0000TEST09'))
