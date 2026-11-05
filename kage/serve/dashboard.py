@@ -7,8 +7,8 @@ cache_report), the trace and the message previews are built here over kage.core.
 kage.adapters.slack.previews (previews read Slack through the deployment's own transport leaf), and the pages are
 rendered in memory with the owner's own words only. The database is opened read-only, as on any deployment.
 
-Pages exist in zh-CN only so far: an owner whose language has none gets those (the API text follows the owner's
-language catalog); English pages are a later step.
+Pages exist in English and zh-CN (O1e): an owner whose language has none gets the zh-CN ones (the API text follows
+the owner's language catalog).
 """
 from __future__ import annotations
 from pathlib import Path

@@ -1,0 +1,14 @@
+{
+  "codex-agent.png": {
+    "source": "https://slackmojis.com/emojis/145252-codex-eyes",
+    "description": "Community Codex eyes cloud character"
+  },
+  "claude-agent.png": {
+    "source": "https://slackmojis.com/emojis/136563-claude-code",
+    "description": "Community Claude Code pixel character"
+  },
+  "reference_review": {
+    "url": "https://slackmojis.com/emojis/82365-claude",
+    "decision": "Portrait unrelated to Claude AI branding; not used. Selected Claude Code pixel character instead."
+  }
+}

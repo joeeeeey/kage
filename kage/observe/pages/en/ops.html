@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#eaf8ff">
+<title>Kage · Runs</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/base.css">
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/ops.css">
+<link rel="stylesheet" href="/trace.css">
+</head>
+<body class="ops" data-motion="on">
+<a class="skip" href="#ops-main">Skip to content</a>
+<div class="ops-app">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Kage · Control">
+      <svg class="brand-mark" viewBox="0 0 40 40" width="38" height="38" aria-hidden="true">
+        <defs>
+          <linearGradient id="bm-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#12cfe0"/><stop offset=".55" stop-color="#2f5bff"/><stop offset="1" stop-color="#ff5a6a"/>
+          </linearGradient>
+        </defs>
+        <circle class="bm-ring" cx="20" cy="20" r="16" fill="none" stroke="url(#bm-g)" stroke-width="2.6" stroke-dasharray="6 5" stroke-linecap="round"/>
+        <circle cx="20" cy="20" r="10.5" fill="#fff" stroke="url(#bm-g)" stroke-width="2"/>
+        <path class="bm-star" d="M20 11.5l2.2 6.3 6.3 2.2-6.3 2.2-2.2 6.3-2.2-6.3-6.3-2.2 6.3-2.2z" fill="url(#bm-g)"/>
+      </svg>
+      <div class="brand-text">
+        <h1>Kage</h1>
+        <p>Shadow clone</p>
+      </div>
+    </a>
+    <nav class="ops-nav site-nav" aria-label="Pages">
+      <a class="scope-btn" href="/" data-nav="control" title="Control: ask how any work stands, or tell a task what to do"><span>Control</span></a>
+      <a class="scope-btn" href="/scene" data-nav="scene" title="Scene: the full picture of AI sessions working with Slack colleagues"><span>Scene</span></a>
+      <a class="scope-btn" href="/runs" data-nav="runs" title="The digital worker's background runs and live logs"><span>Runs</span></a>
+      <a class="scope-btn" href="/intake" data-nav="intake" title="Intake: DMs, @{{owner_name}} mentions, and bursts from subscribed channels, with triage records (read-only)"><span>Intake</span></a>
+      <a class="scope-btn" href="/rules" data-nav="rules" title="Rules engine: weekly verdict breakdown, time to approve, {{owner_name}} overrides, rule proposals and backtests (read-only)"><span>Rules</span></a>
+      <a class="scope-btn" href="/routines" data-nav="routines" title="Each task's routines: next / last trigger, source and status (read-only)"><span>Routines</span></a>
+      <a class="scope-btn" href="/gaps" data-nav="gaps" title="Capability blockers and automation gaps: counts by system / type, open blockers, most common paths, skill proposals (read-only)"><span>Gaps</span></a>
+      <a class="scope-btn" href="/learning" data-nav="learning" title="Learning rules from card feedback: counts by shape, {{owner_name}} override rate, &quot;Make it a rule?&quot; cards and adoptions (read-only, no message text)"><span>Learning</span></a>
+      <a class="scope-btn" href="/health" data-nav="health" title="Daemon health: provider overload and recovery, delivery and claims"><span>Health</span></a>
+      <a class="scope-btn" href="/design" data-nav="design" title="Architecture design docs: locally generated review pages (read-only, shown in a sandbox, offline)"><span>Design</span></a>
+      <a class="scope-btn" href="/backlog" data-nav="backlog" title="Old events that will not be woken up automatically (read-only)"><span>Backlog</span></a>
+      <a class="scope-btn" href="/settings" data-nav="settings" title="Digital worker settings: models, routing, scheduling switches"><span>Settings</span></a>
+    </nav>
+    <div class="status-cluster">
+      <div class="chip" id="ops-chip" data-state="loading" role="status" aria-live="polite">
+        <span class="led" aria-hidden="true"></span>
+        <span class="chip-text"><b id="ops-chip-label">Connecting</b><small>LOCAL</small></span>
+      </div>
+      <span class="sync" title="Last sync"><small>SYNC</small> <b id="ops-sync">—</b></span>
+    </div>
+  </header>
+  <main id="ops-main" class="ops-main" tabindex="-1"></main>
+</div>
+
+<dialog id="ops-confirm" class="sheet" aria-labelledby="ops-confirm-title">
+  <div class="sheet-inner">
+    <header class="sheet-head">
+      <div class="sh-title">
+        <p class="eyebrow">CONFIRM · Review changes</p>
+        <h2 id="ops-confirm-title">Save settings?</h2>
+      </div>
+    </header>
+    <div class="sheet-body" id="ops-confirm-body"></div>
+    <footer class="sheet-foot">
+      <button type="button" class="btn ghost" id="ops-confirm-cancel">Cancel</button>
+      <button type="button" class="btn primary" id="ops-confirm-ok">Yes, save</button>
+    </footer>
+  </div>
+</dialog>
+<div class="toasts" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+<script src="/shell.js"></script>
+<script src="/trace.js"></script>
+<script src="/ops.js"></script>
+</body>
+</html>

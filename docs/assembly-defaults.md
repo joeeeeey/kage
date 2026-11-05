@@ -79,7 +79,7 @@ None of this alters existing profiles, stores, configuration files or services.
   the owner), `references/rule-registry-seed/` (no rule) and `scripts/dispatch_runner.py` (verifies the pinned release,
   then `kage.core.runner`). Owner's name, key, program and Kage version are the only values in them.
 - `python3 -m kage --deployment DIR serve dashboard [--port P]`: the console on the loopback interface, the assembled
-  units as its hooks, pages rendered with the owner's words (zh-CN pages until English ones exist).
+  units as its hooks, pages rendered with the owner's words, in the owner's language (en or zh-CN, O1e).
 - `… serve receiver`: Socket Mode (kage.adapters.slack.socket_mode) with the app-level and bot tokens from the secrets
   store and the workspace and bot from the verified profile; buttons, card-thread replies and the owner's control
   messages go to the deployment's own program. No deployment-specific shortcut.
@@ -100,4 +100,5 @@ None of this alters existing profiles, stores, configuration files or services.
   anyone else (`…in_the_owner_language`). Proposal field names (`title_zh`, …) stay as the wire format.
 - `kage init`'s SKILL.md tells dispatched agents the owner's language. Not owner-language: the org tracker's English
   rule, the requester-language checks of replies sent as the owner, the secret-masking patterns.
-- Not yet: the console pages exist in zh-CN only (O1e).
+- The console pages (O1e): `kage/observe/pages/en/` is `pages/zh-CN/` in English — the same files, structure,
+  sentinels, element ids and API paths (a parity test guards it); a page change is made in both languages.
