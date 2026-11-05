@@ -67,6 +67,7 @@ from urllib.parse import parse_qs, urlsplit
 from kage import locale
 from kage.core import control as _control
 from kage.core import mode as _mode
+from kage.onboard import apply as _apply
 from kage.onboard import extract as _extract
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
@@ -631,8 +632,10 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
         except (ValueError, UnicodeError):
             return self.respond(400, {'error': 'invalid_request_body'})
-        if path in ('/api/onboarding/correct', '/api/onboarding/decide'):  # O2f, O3b
+        if path in ('/api/onboarding/correct', '/api/onboarding/decide', '/api/onboarding/accept-verified'):  # O2f, O3b, O3c
             try:
+                if path == '/api/onboarding/accept-verified':
+                    return self.respond(200, self.server.core.onboarding_accept_verified(self.server.db_path))
                 if path == '/api/onboarding/decide':
                     return self.respond(200, self.server.core.onboarding_decide(self.server.db_path, payload))
                 return self.respond(200, self.server.core.onboarding_correct(self.server.db_path, payload))
@@ -1135,7 +1138,9 @@ class DashboardCore:
             except sqlite3.OperationalError:
                 pass
             fixed = _mode.corrections(db)
-            result['intro'] = {'run': _extract.latest_run(db), 'items': _extract.candidates(db)}  # O3b
+            checked = _apply.results(db)  # O3c: Slack's verdict next to each candidate
+            result['intro'] = {'run': _extract.latest_run(db), 'items': [
+                {**i, 'verify': checked.get(i['id'])} for i in _extract.candidates(db)]}  # O3b
         result.update(mode=view['mode'], log=view['log'], counts=view['shadow']['counts'])
         for r in view['shadow']['recent']:
             item = {'id': r['id'], 'at': r['at'], 'kind': r['kind'], 'target': r['target'], 'why': r['why'],
@@ -1782,6 +1787,11 @@ class DashboardCore:
                                              now=now, expect_digest=digest)
         config, _ = self._control_config()
         return {**result, 'digest': self.worker_config.digest(config) if config else None}
+
+    def onboarding_accept_verified(self, path, now=None):
+        """POST /api/onboarding/accept-verified {} (O3c): accept every open candidate Slack verified."""
+        with contextlib.closing(sqlite3.connect(Path(path).resolve().as_uri() + '?mode=rw', uri=True, timeout=3)) as db:
+            return _apply.accept_verified(db, now=now)
 
     def onboarding_decide(self, path, payload, now=None):
         """POST /api/onboarding/decide {id, decision, value?} (O3b): the owner's decision on one candidate

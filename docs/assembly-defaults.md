@@ -158,3 +158,11 @@ None of this alters existing profiles, stores, configuration files or services.
   credential) or rejects each one through `POST /api/onboarding/decide` under the console's write guards (host, same
   origin, the page's CSRF token, JSON, at most 8192 bytes); a decision is kept on the item and can change until it is
   applied. Nothing is applied yet (a later release); never from an agent session.
+- Verification and apply (O3, release c): `onboard verify` checks the candidates against Slack with reads only (the
+  owner's name and time zone against the verified owner identity's profile; a person by exact name in the workspace
+  directory, the Slack id resolved by code); the page shows the verdict and offers "accept all verified" (the only bulk
+  acceptance; `onboard accept-verified` in the terminal). `onboard apply` turns accepted and edited items into the
+  owner's private `confirmed.json` (0600) and, for a generated deployment (its store has the mode row), writes the
+  `owner.json` fields it has (committed in the deployment repository), appends people to the people file (a Slack id
+  only when verified) and writes rules to the live registry as `draft`. An adopted deployment is never written: a
+  `proposal.json` next to `confirmed.json` lists the changes instead. Applied items are final; owner's terminal only.

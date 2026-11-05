@@ -78,6 +78,19 @@ class CliCore:
                                                             timeout=10)) as db:
                         result = extract.run(db, owner.key, entry, text, provider=args.provider, model=model, cap=cap,
                                              language=owner.language, guards=guards)
+            elif args.onboard_command in ('verify', 'accept-verified', 'apply'):  # O3c
+                from kage.onboard import apply as onboard_apply
+                with contextlib.closing(sqlite3.connect(Path(db_path).absolute().as_uri() + '?mode=rw', uri=True,
+                                                        timeout=10)) as db:
+                    if args.onboard_command == 'verify':
+                        result = onboard_apply.verify(db, lambda method, params: self.rt.slack.api_call(
+                            method, self.rt.api_identity(), params=params), self.owner_slack_user)
+                    elif args.onboard_command == 'accept-verified':
+                        result = onboard_apply.accept_verified(db)
+                    else:
+                        result = onboard_apply.apply(db, owner.key, deployment_dir=self.deployment.directory,
+                                                     people_path=self.rt.envelopes.people_path(),
+                                                     registry=self.rt.rule_registry)
             else:
                 db = sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=10) if db_path.is_file() else None
                 try:
@@ -697,6 +710,12 @@ class CliCore:
         onb_ext.add_argument('--model', help='Default: Sonnet 5.5 for claude; required for codex')
         onb_items = onb_sub.add_parser('items', help='The candidates of the latest extraction (nothing applied)')
         onb_items.add_argument('--json', action='store_true')
+        onb_sub.add_parser('verify', help="O3c: check the candidates against Slack (the owner's profile, people in the "
+                                          'workspace directory); reads only')
+        onb_sub.add_parser('accept-verified', help='O3c: accept every open candidate Slack verified (the only bulk accept)')
+        onb_sub.add_parser('apply', help="O3c: apply the accepted items: always the private confirmed profile; a "
+                                         'generated deployment also gets owner.json, people and draft rules written, '
+                                         'an adopted one a proposal file instead')
         # ---- P35 learn rules from the owner's card feedback ----
         idis = sub.add_parser('interaction-distill', help=f"Handling session: fill the one-line distillation of {self.name}'s intent for an interaction (raw text stays in the private store)")
         idis.add_argument('--event', required=True, help='The resolved card event (escalation event id)')

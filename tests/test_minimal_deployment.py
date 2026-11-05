@@ -200,6 +200,20 @@ class MinimalDeploymentTest(unittest.TestCase):
         self.assertIn('6 candidate(s); nothing is applied until they are confirmed', items.stdout)
         with sqlite3.connect(state / 'state.sqlite') as db:
             self.assertNotIn(INTRO.strip(), '\n'.join(db.iterdump()))
+        # O3c: no Slack here, so verification records errors (never a guess); an adopted deployment (no mode row) gets
+        # the private confirmed profile and a proposal, its owner.json untouched
+        verify = self.kage('onboard', 'verify')
+        self.assertEqual(verify.returncode, 0, verify.stderr[-2000:])
+        self.assertNotIn('verified', json.loads(verify.stdout)['results'])
+        with sqlite3.connect(state / 'state.sqlite') as db:
+            db.execute("UPDATE onboarding_items SET status='accepted' WHERE target='owner'")
+        before = (self.root / 'deploy/owner.json').read_bytes()
+        applied = self.kage('onboard', 'apply')
+        self.assertEqual(applied.returncode, 0, applied.stderr[-2000:])
+        self.assertEqual((json.loads(applied.stdout)['applied'], json.loads(applied.stdout)['deployment']), (2, 'adopted'))
+        self.assertEqual((self.root / 'deploy/owner.json').read_bytes(), before)
+        self.assertTrue((self.home / '.local/share/kage/private/mira/proposal.json').is_file())
+        self.assertIn('onboarding_only_from_the_owners_terminal', self.kage('onboard', 'apply', session=SESSION).stderr)
 
 
 if __name__ == '__main__':

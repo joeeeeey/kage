@@ -237,6 +237,7 @@ pre.json { margin-top: var(--sp-2); }
 .ob-quote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--accent-soft); background: var(--surface-2); border-radius: 0 var(--r-xs) var(--r-xs) 0; font-size: var(--fs-sm); line-height: var(--lh); color: var(--ink-2); }
 .ob-quote mark, .oc-was mark { background: rgba(255, 196, 61, .32); color: inherit; padding: 0 2px; border-radius: 3px; }
 .ob-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ob-bulk { margin: var(--sp-2) 0 var(--sp-3); }
 .ob-fields { display: grid; gap: 10px; }
 .ob-field { display: grid; gap: 5px; font: 600 var(--fs-sm) var(--sans); color: var(--ink-2); }
 .ob-field .sub { display: inline; font-weight: 400; }

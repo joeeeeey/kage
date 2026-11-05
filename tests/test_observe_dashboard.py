@@ -265,7 +265,22 @@ class OnboardingTest(unittest.TestCase):
                                                     'value': {'name': 'Jonas Berg', 'role': 'QA lead'}})
             self.assertEqual((status, payload['status']), (200, 'edited'))
             item = core().onboarding(path)['intro']['items'][0]
-            self.assertEqual((item['status'], item['decision']['value']['role']), ('edited', 'QA lead'))
+            self.assertEqual((item['status'], item['decision']['value']['role'], item['verify']), ('edited', 'QA lead', None))
+            # O3c: Slack's verdict next to the item; the bulk accept takes only verified open candidates
+            from kage.onboard import apply as A
+            with contextlib.closing(sqlite3.connect(str(path))) as db:
+                db.execute("INSERT INTO onboarding_items (id, run_id, target, value, quote, start, \"end\", confidence, "
+                           "support, status) VALUES ('c-00000000bb', 'r-1', 'people', ?, 'Lena', 0, 4, 0.9, 'direct', "
+                           "'candidate')", (json.dumps({'name': 'Lena'}),))
+                db.execute(A.VERIFY_TABLE)
+                db.execute("INSERT INTO onboarding_verify VALUES ('c-00000000bb', 'verified', NULL, 'U0000LENA1', 2.0)")
+                db.commit()
+            self.assertEqual(self.post(path, '/api/onboarding/accept-verified', {'x': 1})[0], 400)
+            status, payload = self.post(path, '/api/onboarding/accept-verified', {})
+            self.assertEqual((status, payload['ids']), (200, ['c-00000000bb']))
+            items = {i['id']: i for i in core().onboarding(path)['intro']['items']}
+            self.assertEqual((items['c-00000000bb']['status'], items['c-00000000bb']['verify']['result']),
+                             ('accepted', 'verified'))
 
     def test_an_adopted_store_has_nothing_to_correct_and_is_not_written(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -291,13 +306,15 @@ class OnboardingTest(unittest.TestCase):
             maps = {name: re.search(r'const %s = (\{.*?)\};' % name, js, re.S).group(1)
                     for name in ('MODE_LABEL', 'SHADOW_KIND', 'ROUTE_LABEL', 'MODE_ACTOR', 'HELD_WHY', 'CARD_STATE',
                                  'CORRECT_ROUTE', 'CORRECT_ERROR', 'INTRO_TARGET', 'INTRO_FIELD', 'INTRO_STATE',
-                                 'INTRO_RUN', 'RULE_KIND', 'INTRO_EDIT', 'INTRO_ERROR')}
+                                 'INTRO_RUN', 'RULE_KIND', 'INTRO_EDIT', 'INTRO_ERROR', 'INTRO_VERIFY')}
             keys[lang] = {name: re.findall(r'(?:^|[,{]\s*)(\w+): ', body) for name, body in maps.items()}
         self.assertEqual(keys['en'], keys['zh-CN'])
         self.assertEqual(keys['en']['CORRECT_ROUTE'], ['task', 'reply', 'log', 'ignore'])  # kage.core.observe.ROUTES
         from kage.onboard import extract as X
         self.assertEqual(keys['en']['INTRO_TARGET'], list(X.TARGETS))  # every target has a group on the page
         self.assertEqual(keys['en']['RULE_KIND'], list(X.RULE_KINDS))
+        from kage.onboard import apply as A
+        self.assertEqual(keys['en']['INTRO_VERIFY'], list(A.RESULTS))  # every verification result has a label
         self.assertTrue(set(sum(X.FIELDS.values(), ())) <= set(keys['en']['INTRO_FIELD']))
 
 

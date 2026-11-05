@@ -477,6 +477,8 @@
     org: ['company', 'tracker', 'channels', 'systems', 'team'], people: ['name', 'role', 'relationship', 'communication'],
     rule: ['title', 'statement', 'hint'], playbook: ['hint', 'applies_to'], glossary: ['term', 'meaning', 'asr'] };
   const INTRO_LISTS = ['channels', 'systems', 'asr'];
+  const INTRO_VERIFY = { verified: ['Verified', 'good'], contradicted: ['Slack disagrees', 'bad'], ambiguous: ['Several matches', 'warn'],
+    not_found: ['Not in Slack', null], unverifiable: null, error: ['Check failed', null] };
   const INTRO_ERROR = { candidate_not_found: 'This item is no longer there; reload the page.',
     only_the_owner_decides_candidates: 'Decisions come from you, not from an agent session.',
     text_looks_like_it_contains_a_credential_use_a_one_time_share_link: 'That looks like a credential; leave it out.',
@@ -616,10 +618,32 @@
       sheet.showModal();
       (kind || Object.values(inputs)[0]).focus();
     }
+    function verifyPill(i) {
+      const shown = i.verify && INTRO_VERIFY[i.verify.result];
+      if (!shown) return null;
+      const el = pill(shown[0], shown[1]);
+      if (i.verify.detail) el.title = i.verify.detail;
+      return el;
+    }
+    async function acceptVerified(button) {
+      button.disabled = true;
+      let res;
+      try {
+        res = await api('/api/onboarding/accept-verified', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: '{}' });
+      } catch (e) {
+        const code = e.body && e.body.error;
+        toast(INTRO_ERROR[code] || `${code || e.message}`, 'bad');
+        button.disabled = false;
+        return;
+      }
+      toast(`Accepted ${res.accepted}`, 'good');
+      load();
+    }
     function itemCard(i) {
       const [label, tone] = INTRO_STATE[i.status] || [i.status, null];
       return h('article', { class: 'ob-item', 'data-state': i.status },
-        h('div', { class: 'ob-item-head' }, pill(label, tone), i.support === 'inferred' ? pill('Inferred', 'warn') : null,
+        h('div', { class: 'ob-item-head' }, pill(label, tone), verifyPill(i), i.support === 'inferred' ? pill('Inferred', 'warn') : null,
           h('span', { class: 'sub' }, `confidence ${Math.round((i.confidence || 0) * 100)}%`)),
         h('dl', { class: 'ob-value' }, flatValue(i.target, (i.decision && i.decision.value) || i.value).map(([k, x]) =>
           [h('dt', {}, INTRO_FIELD[k] || k), h('dd', {}, x)])),
@@ -642,7 +666,11 @@
         run.cost_usd != null ? `$${run.cost_usd.toFixed(2)} of $${(run.cap_usd || 0).toFixed(2)}` : 'cost not reported',
         dropped ? ` · ${dropped} dropped by the checks` : null, run.error ? ` · ${run.error}` : null));
       const open = intro.items.filter((i) => i.status === 'candidate').length;
-      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} to confirm. Accepting records your choice; nothing is used until it is applied (a later step).`));
+      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} to confirm. Accepting records your choice; it is used once applied (onboard apply in your terminal).`));
+      const ready = intro.items.filter((i) => i.status === 'candidate' && i.verify && i.verify.result === 'verified').length;
+      if (ready) sec.append(h('div', { class: 'ob-bulk' }, h('button', { type: 'button', class: 'btn sm primary', onclick: (e) => acceptVerified(e.currentTarget) },
+        `Accept all verified (${ready})`)));
+      else if (intro.items.length && !intro.items.some((i) => i.verify)) sec.append(h('p', { class: 'note' }, 'Facts are checked against Slack with onboard verify in your terminal; only verified ones can be accepted together.'));
       for (const [target, name] of Object.entries(INTRO_TARGET)) {
         const items = intro.items.filter((i) => i.target === target);
         if (!items.length) continue;

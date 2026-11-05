@@ -477,6 +477,8 @@
     org: ['company', 'tracker', 'channels', 'systems', 'team'], people: ['name', 'role', 'relationship', 'communication'],
     rule: ['title', 'statement', 'hint'], playbook: ['hint', 'applies_to'], glossary: ['term', 'meaning', 'asr'] };
   const INTRO_LISTS = ['channels', 'systems', 'asr'];
+  const INTRO_VERIFY = { verified: ['已核实', 'good'], contradicted: ['和 Slack 不一致', 'bad'], ambiguous: ['有重名', 'warn'],
+    not_found: ['Slack 里没找到', null], unverifiable: null, error: ['核实失败', null] };
   const INTRO_ERROR = { candidate_not_found: '这一条已经不在了，请刷新页面。',
     only_the_owner_decides_candidates: '确认只能由你本人来做，不能来自 agent 会话。',
     text_looks_like_it_contains_a_credential_use_a_one_time_share_link: '这里像是有凭据，请删掉。',
@@ -616,10 +618,32 @@
       sheet.showModal();
       (kind || Object.values(inputs)[0]).focus();
     }
+    function verifyPill(i) {
+      const shown = i.verify && INTRO_VERIFY[i.verify.result];
+      if (!shown) return null;
+      const el = pill(shown[0], shown[1]);
+      if (i.verify.detail) el.title = i.verify.detail;
+      return el;
+    }
+    async function acceptVerified(button) {
+      button.disabled = true;
+      let res;
+      try {
+        res = await api('/api/onboarding/accept-verified', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+          body: '{}' });
+      } catch (e) {
+        const code = e.body && e.body.error;
+        toast(INTRO_ERROR[code] || `${code || e.message}`, 'bad');
+        button.disabled = false;
+        return;
+      }
+      toast(`已接受 ${res.accepted}`, 'good');
+      load();
+    }
     function itemCard(i) {
       const [label, tone] = INTRO_STATE[i.status] || [i.status, null];
       return h('article', { class: 'ob-item', 'data-state': i.status },
-        h('div', { class: 'ob-item-head' }, pill(label, tone), i.support === 'inferred' ? pill('推断', 'warn') : null,
+        h('div', { class: 'ob-item-head' }, pill(label, tone), verifyPill(i), i.support === 'inferred' ? pill('推断', 'warn') : null,
           h('span', { class: 'sub' }, `置信度 ${Math.round((i.confidence || 0) * 100)}%`)),
         h('dl', { class: 'ob-value' }, flatValue(i.target, (i.decision && i.decision.value) || i.value).map(([k, x]) =>
           [h('dt', {}, INTRO_FIELD[k] || k), h('dd', {}, x)])),
@@ -642,7 +666,11 @@
         run.cost_usd != null ? `$${run.cost_usd.toFixed(2)} / $${(run.cap_usd || 0).toFixed(2)}` : '没有报告费用',
         dropped ? ` · ${dropped} 条被校验丢弃` : null, run.error ? ` · ${run.error}` : null));
       const open = intro.items.filter((i) => i.status === 'candidate').length;
-      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} 条待确认。接受只记下你的选择；要到“生效”那一步（之后的版本）才会用上。`));
+      if (intro.items.length) sec.append(h('p', { class: 'ops-note' }, `${open} 条待确认。接受只记下你的选择；在终端里运行 onboard apply 之后才生效。`));
+      const ready = intro.items.filter((i) => i.status === 'candidate' && i.verify && i.verify.result === 'verified').length;
+      if (ready) sec.append(h('div', { class: 'ob-bulk' }, h('button', { type: 'button', class: 'btn sm primary', onclick: (e) => acceptVerified(e.currentTarget) },
+        `接受全部已核实 (${ready})`)));
+      else if (intro.items.length && !intro.items.some((i) => i.verify)) sec.append(h('p', { class: 'note' }, '在终端里运行 onboard verify 会拿 Slack 核实这些事实；只有已核实的可以一起接受。'));
       for (const [target, name] of Object.entries(INTRO_TARGET)) {
         const items = intro.items.filter((i) => i.target === target);
         if (!items.length) continue;
