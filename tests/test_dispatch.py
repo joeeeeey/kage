@@ -74,6 +74,45 @@ class DispatcherTest(unittest.TestCase):
         self.assertFalse(d.alive(None, None))
         self.assertTrue(isinstance(D.Dispatcher.__dict__['_step'], staticmethod))
 
+    def test_an_install_hold_starts_only_the_control_entrys_runs(self):
+        """C4: dispatch.install_hold — an install's quiet moment: waiting dispatches stay waiting and nothing is revived,
+        except the control task's (the owner's control messages keep being answered)."""
+        import json
+        import tempfile
+        from pathlib import Path
+        from kage.core import worker_config as W
+        defaults = json.loads((Path(__file__).with_name('fixtures') / 'worker_defaults.json').read_text())
+        tmp = tempfile.mkdtemp()
+        raw = json.loads(json.dumps(defaults))
+        raw['dispatch'].update(enabled=True, install_hold=True)
+        raw['control'] = {'enabled': True}
+        (Path(tmp) / 'config.json').write_text(json.dumps(raw))
+        wc = W.WorkerConfig('en', defaults=defaults, config_env='KAGE_TEST_WORKER_CONFIG',
+                            default_path=Path(tmp) / 'config.json', owner_key='owner', owner_name='Mira')
+        import contextlib
+        rt = types.SimpleNamespace(__file__='/nonexistent/runtime.py', liveness=None, worker_config=wc,
+                                   _meta_error=lambda *a: None, transaction=lambda db: contextlib.nullcontext())
+        d = D.Dispatcher(self.db, '/tmp/kage-test.sqlite', rt, probe=object(), spawn=lambda *a: 1,
+                         pid_start=lambda pid: None, killer=lambda pid, sig: None, clock=lambda: 100.0, core=self.core)
+        config = d.config()
+        self.assertEqual((d.held_for_install(config, 'owner-inbox'), d.held_for_install(config, 'release-task'),
+                          d.held_for_install(config, 'owner-control')), (True, True, False))
+        for i, task in enumerate(('release-task', 'owner-control')):
+            self.db.execute("INSERT INTO dispatches (dispatch_id, task_key, task_id, task_path, state, trigger, plan, "
+                            "created_at, updated_at) VALUES (?, ?, ?, '/x', 'waiting', 'event', '[]', ?, ?)",
+                            (f'd{i}', task, task, i, i))
+        started = []
+        d.start = lambda dispatch_id, now=None: started.append(dispatch_id)
+        d.cycle(now=100.0)
+        self.assertEqual(started, ['d1'])
+        self.assertEqual(d.sweep_stranded(now=100.0), [])  # nothing revived while held
+        raw['dispatch']['install_hold'] = False
+        (Path(tmp) / 'config.json').write_text(json.dumps(raw))
+        self.assertFalse(d.held_for_install(d.config(), 'release-task'))
+        started.clear()
+        d.cycle(now=101.0)
+        self.assertEqual(started, ['d0', 'd1'])
+
 
 if __name__ == '__main__':
     unittest.main()

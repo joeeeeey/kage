@@ -102,3 +102,13 @@ None of this alters existing profiles, stores, configuration files or services.
   rule, the requester-language checks of replies sent as the owner, the secret-masking patterns.
 - The console pages (O1e): `kage/observe/pages/en/` is `pages/zh-CN/` in English — the same files, structure,
   sentinels, element ids and API paths (a parity test guards it); a page change is made in both languages.
+
+## An install's quiet moment keeps the control entry (C4)
+
+- `dispatch.install_hold` (default false): while true no new run starts and nothing is revived, except the control
+  task's — the owner's control messages keep being answered during an install. Runs already started finish; held events
+  stay pending and are routed after the hold. A deployment that pins its own worker defaults needs the key in them
+  (`worker_config.DEFAULTS.dispatch.install_hold: false`) to set it.
+- While dispatch cannot run the control task (`dispatch.enabled` false, or the control task paused), a control message
+  from Slack gets one short note in its thread at once, and its answer clock waits (a fresh one after the resume). A
+  control run that reaches a message after its `timeout` still answers or relays it; other failures stay final.

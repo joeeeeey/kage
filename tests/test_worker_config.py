@@ -48,6 +48,20 @@ class WorkerConfigTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.wc.set_value('routing.categories.infra', '"nobody"', 'test', path=path, now=1700000001.0)
 
+    def test_the_install_hold_is_a_dispatch_switch_of_its_own(self):
+        # C4: an install's quiet moment without switching dispatch off (the control entry keeps running)
+        path = self.tmp / 'c.json'
+        self.assertFalse(self.wc.load(path)[0]['dispatch']['install_hold'])
+        self.wc.set_value('dispatch.install_hold', 'true', 'test', path=path, now=1700000000.0)
+        dispatch = self.wc.load(path)[0]['dispatch']
+        self.assertEqual((dispatch['install_hold'], dispatch['enabled']), (True, DEFAULTS['dispatch']['enabled']))
+        with self.assertRaises(ValueError):
+            self.wc.set_value('dispatch.install_hold', '"yes"', 'test', path=path, now=1700000001.0)
+        older = json.loads(json.dumps(DEFAULTS))
+        del older['dispatch']['install_hold']  # a deployment whose pinned defaults predate C4 cannot set it
+        with self.assertRaises(ValueError):
+            config(self.tmp, older).set_value('dispatch.install_hold', 'true', 'test', path=self.tmp / 'd.json')
+
     def test_defaults_are_the_instance_value_not_a_module_global(self):
         other = config(self.tmp, {**DEFAULTS, 'circuit_breaker': {'round_trips_per_hour': 3}})  # another deployment
         self.assertEqual(other.load(self.tmp / 'none.json')[0]['circuit_breaker'], {'round_trips_per_hour': 3})

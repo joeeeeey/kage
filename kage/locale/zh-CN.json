@@ -1396,6 +1396,9 @@
     "control.proposal.failed": "没能处理：{error}",
     "control.card.question_nolink": "要你确认：{what}\n你在总控说的原话：\n{words}\n全文和对话在控制台的“总控”页。\n只有点下面的按钮才算数，在讨论串里回复不会执行。",
     "control.slack.failed": "没能回答这条消息：{code}。控制台的总控页上有记录，可以在那里重试。",
+    "control.slack.paused": "派发暂停中（{why}），恢复后会处理这条消息。",
+    "control.paused.dispatch_off": "安装或维护",
+    "control.paused.task_paused": "总控任务被暂停",
     "control.body.slack_message": "----- {name}'s message (Slack, card channel) -----\nIts text is not in this file: read it with `{cli} control-show --message {id}` (the words re-read from Slack, and the thread so far). Link: {link}\nYour control-reply goes into that message's thread.",
     "control.body.slack_turn": "(a Slack message: control-show shows the thread)",
     "control.facts.slack": "slack card channel · the owner's own hand-typed message ({via})"

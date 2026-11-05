@@ -18,7 +18,7 @@ from kage.adapters.slack import receiver as R
 from kage.core import control as C
 from kage.core import envelope as E
 from kage.core.store import transaction
-from tests.test_control import RUN_SESSION, SESSION, TARGET_SESSION, Runtime, write_config
+from tests.test_control import DEFAULTS, RUN_SESSION, SESSION, TARGET_SESSION, Runtime, write_config
 
 OWNER, BOT, APP, MARKER, TEAM = 'U0000OWNER1', 'U0000BOT001', 'A0000APP001', 'kage_test_agent', 'T0000TEAM01'
 CHANNEL = 'C0000CARDS1'
@@ -444,6 +444,53 @@ class SlackSourceTest(unittest.TestCase):
         self.assertEqual(self.c._row(self.db, mid)['error'], 'no_reply')
         self.assertEqual((self.slack.posted[-1]['thread_ts'], self.rt.sends[-1][2]), (m['ts'], 'control_failed'))
         self.assertIn('no_reply', self.slack.posted[-1]['text'])
+
+    def dispatch(self, **switches):
+        raw = json.loads(json.dumps(DEFAULTS))
+        raw['control'] = {'enabled': True}
+        raw['dispatch'].update(switches)
+        (Path(self.tmp) / 'config.json').write_text(json.dumps(raw))
+
+    def test_while_dispatch_cannot_run_the_control_task_a_message_gets_a_note_and_waits(self):
+        """C4: dispatch switched off (an install's quiet moment the old way, or the owner's stop): one short note at once,
+        the queue's clock waits, a fresh one after the resume; a run that comes after a timeout still answers."""
+        limit = 15 * 60
+        self.dispatch(enabled=False)
+        m = self.slack.say(self.t(10), 'reopen it for Quinn')
+        mid = self.push(m)['message_id']
+        self.c.pump(self.rt, self.db, now=self.now)
+        self.assertEqual((self.slack.posted[-1]['thread_ts'], self.rt.sends[-1][2]), (m['ts'], 'control_paused'))
+        self.assertIn('Dispatch is paused (an install or maintenance)', self.slack.posted[-1]['text'])
+        posts = len(self.slack.posted)
+        self.c.sweep(self.rt, self.db, now=self.now + 3 * limit)
+        self.assertEqual(self.c._row(self.db, mid)['state'], 'queued')
+        self.dispatch(enabled=True, install_hold=True)  # an install hold never blocks the control task
+        self.c.sweep(self.rt, self.db, now=self.now + 3 * limit + limit - 60)
+        self.assertEqual(self.c._row(self.db, mid)['state'], 'queued')
+        self.c.sweep(self.rt, self.db, now=self.now + 3 * limit + limit + 60)
+        self.assertEqual(self.c._row(self.db, mid)['error'], 'timeout')
+        self.assertEqual(len(self.slack.posted), posts + 1)  # one note per message: the pause, then the failure
+        self.hold()
+        self.c.reply(self.rt, self.db, 'db', mid, 'Reopened.', now=self.now + 5 * limit)
+        self.assertEqual((self.c._row(self.db, mid)['state'], self.c._row(self.db, mid)['error']), ('answered', None))
+
+    def test_a_paused_control_task_is_said_too_and_other_failures_stay_final(self):
+        self.dispatch(enabled=True)
+        with transaction(self.db):
+            self.db.execute('CREATE TABLE IF NOT EXISTS dispatch_pauses (task_key TEXT, paused_at REAL, paused_by TEXT, '
+                            'reason TEXT, dispatch_id TEXT, resumed_at REAL, resumed_by TEXT)')
+            self.db.execute("INSERT INTO dispatch_pauses VALUES ('owner-control', ?, 'U0000OWNER1', 'owner_stop', NULL, "
+                            'NULL, NULL)', (self.now,))
+        m = self.slack.say(self.t(10), 'status?')
+        mid = self.push(m)['message_id']
+        self.c.pump(self.rt, self.db, now=self.now)
+        self.assertIn('the control task is paused', self.slack.posted[-1]['text'])
+        with transaction(self.db):
+            self.db.execute("UPDATE control_messages SET state='failed', error='no_reply' WHERE message_id=?", (mid,))
+        self.hold()
+        with self.assertRaises(ValueError) as caught:
+            self.c.reply(self.rt, self.db, 'db', mid, 'late', now=self.now + 60)
+        self.assertEqual(str(caught.exception), 'message_is_failed')
 
     def test_the_console_read_model_links_the_thread_and_holds_no_slack_text(self):
         m = self.slack.say(self.t(10), '秘密以外的普通问题')

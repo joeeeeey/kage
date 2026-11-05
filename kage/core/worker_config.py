@@ -481,7 +481,8 @@ class WorkerConfig:
         _keys(spec, self.defaults['dispatch'], 'dispatch')
         for key, value in spec.items():
             field = f'dispatch_{key}'
-            if key in ('enabled', 'notify_cards', 'progress_updates', 'long_lived_fresh', 'stranded_revive', 'probe_enabled'):
+            if key in ('enabled', 'install_hold', 'notify_cards', 'progress_updates', 'long_lived_fresh', 'stranded_revive',
+                       'probe_enabled'):
                 _bool(value, field)
             elif key == 'long_lived_tasks':
                 if not isinstance(value, list) or len(value) > 20 or len(set(map(str, value))) != len(value) or any(

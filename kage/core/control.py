@@ -556,6 +556,7 @@ class Control:
                            "coalesce(error,'')!=?", (reason, now, reason))
             return {'queued': 0, 'waiting': reason}
         queued = 0
+        blocked = self.dispatch_blocked(db, config, cfg)
         for m in rows:
             body = self._body(rt, db, m, cfg, now)
             path = _memory._write_new(_memory._unique(Path(task['path']) / 'history' / 'control' /
@@ -569,6 +570,8 @@ class Control:
                 db.execute("UPDATE control_messages SET state='queued',event_id=?,error=NULL,attempts=attempts+1,"
                            "updated_at=? WHERE message_id=? AND state='received'", (eid, now, m['message_id']))
             queued += 1
+            if blocked:
+                self._paused_note(rt, db, m, blocked)
         if queued:
             rt.start(_db_path(db))
         return {'queued': queued}
@@ -585,6 +588,7 @@ class Control:
         out = {'working': 0, 'failed': 0, 'expired': 0}
         limit = cfg['answer_timeout_minutes'] * 60
         running = rt.registry.running_session(db, cfg['task'])  # a control run still working may answer yet
+        blocked = self.dispatch_blocked(db, config, cfg)
         for m in [dict(r) for r in db.execute("SELECT * FROM control_messages WHERE role='owner' AND state IN "
                                               "('queued','working')")]:
             e = db.execute('SELECT * FROM events WHERE id=?', (m['event_id'],)).fetchone() if m['event_id'] else None
@@ -597,7 +601,14 @@ class Control:
                 self._fail(db, m['message_id'], 'no_reply', now)
                 self._failed_note(rt, db, m, 'no_reply')
                 out['failed'] += 1
-            elif (m['state'] == 'queued' and now - m['updated_at'] > limit) or now - m['created_at'] > 2 * limit:
+            elif blocked and m['state'] == 'queued':
+                # C4: dispatch cannot run the control task now (switched off, or the task paused): the queue's clock
+                # waits with it, so the message is answered after the resume instead of failing meanwhile
+                with _transaction(db):
+                    db.execute("UPDATE control_messages SET updated_at=? WHERE message_id=? AND state='queued'",
+                               (now, m['message_id']))
+            elif (m['state'] == 'queued' and now - m['updated_at'] > limit) or \
+                    (m['state'] == 'working' and now - m['created_at'] > 2 * limit):
                 self._fail(db, m['message_id'], 'timeout', now)
                 self._failed_note(rt, db, m, 'timeout')
                 out['failed'] += 1
@@ -611,6 +622,30 @@ class Control:
             cur = db.execute('UPDATE control_messages SET text=NULL WHERE text IS NOT NULL AND created_at<?', (cutoff,))
             out['expired'] = cur.rowcount
         return out
+
+    def dispatch_blocked(self, db, config, cfg):
+        """C4: why the control task's run cannot start now — 'dispatch_off' (dispatch.enabled false) or 'task_paused'
+        (the control task paused) — else None. dispatch.install_hold does not block it (the control entry keeps
+        running through an install's quiet moment)."""
+        if not (config.get('dispatch') or {}).get('enabled'):
+            return 'dispatch_off'
+        try:
+            if db.execute('SELECT 1 FROM dispatch_pauses WHERE task_key=? AND resumed_at IS NULL', (cfg['task'],)).fetchone():
+                return 'task_paused'
+        except Exception:  # noqa: BLE001 - no pause table yet: nothing is paused
+            pass
+        return None
+
+    def _paused_note(self, rt, db, m, why):
+        """C4: a Slack message that cannot be dispatched now gets one short note in its thread at once (best effort),
+        instead of a silent wait."""
+        if m['source'] != 'slack':
+            return
+        try:
+            self._slack_post(rt, db, m, self.msg('control.slack.paused', why=self.msg(f'control.paused.{why}')),
+                             'control_paused')
+        except Exception:  # noqa: BLE001 - the message still waits and is answered after the resume
+            pass
 
     def _failed_note(self, rt, db, m, code):
         """C2: a Slack message that failed gets one short note in its thread (best effort)."""
@@ -634,8 +669,8 @@ class Control:
         m = self._row(db, message_id)
         if m is None or m['role'] != 'owner':
             raise ValueError('not_an_owner_message')
-        if m['state'] not in ('queued', 'working', 'answered'):
-            raise ValueError(f"message_is_{m['state']}")
+        if m['state'] not in ('queued', 'working', 'answered') and not (m['state'] == 'failed' and m['error'] == 'timeout'):
+            raise ValueError(f"message_is_{m['state']}")  # C4: a run reaching a timed-out message still answers it
         e = db.execute('SELECT * FROM events WHERE id=?', (m['event_id'],)).fetchone() if m['event_id'] else None
         if e is None:
             raise ValueError('message_not_queued')

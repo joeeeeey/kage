@@ -76,6 +76,7 @@
  },
  "dispatch": {
   "enabled": true,
+  "install_hold": false,
   "concurrency": 3,
   "reserved_intake_slots": 1,
   "liveness_cache_seconds": 20,

@@ -414,6 +414,12 @@ class Dispatcher:
                                  w and w['session'], to and to[0], to and to[1],
                                  json.dumps(live, sort_keys=True, default=str) if live else None, dispatch_id, now))
 
+    def held_for_install(self, config, task_key):
+        """C4: dispatch.install_hold is an install's quiet moment — no new run starts, except the control entry's (the
+        owner's control messages keep being answered); runs already started finish, held events wait, still pending."""
+        return bool(config['dispatch'].get('install_hold')) and \
+            self.rt.worker_config.intake_role(config, task_key) != 'control'
+
     def paused(self, task_key):
         row = self.db.execute('SELECT * FROM dispatch_pauses WHERE task_key=? AND resumed_at IS NULL',
                               (task_key,)).fetchone()
@@ -610,6 +616,8 @@ class Dispatcher:
         task = self.task_for_watch(w, config)
         if task is None:
             return {'action': 'as_today', 'reason': 'unbound_legacy'}
+        if self.held_for_install(config, task['key']):
+            return {'action': 'as_today', 'reason': 'install_hold'}
         pause = self.paused(task['key'])
         if (pause or {}).get('reason') == self.core.takeover_reason and not (
                 w.get('kind') == 'decision' and float(w.get('started') or 0) > pause['paused_at']):
@@ -889,6 +897,8 @@ class Dispatcher:
             return
         for d in [dict(r) for r in self.db.execute("SELECT * FROM dispatches WHERE state='waiting' AND wait_reason IS NULL "
                                                    'AND coalesce(next_at,0)<=? ORDER BY created_at', (now,))]:
+            if self.held_for_install(config, d['task_key']):
+                continue
             try:
                 self.start(d['dispatch_id'], now=now)
             except Exception as exc:  # noqa: BLE001
@@ -1243,7 +1253,8 @@ class Dispatcher:
             self.db.execute("UPDATE stranded_deliveries SET state='handled',updated_at=? WHERE state IN "
                             "('held','rerouted','unowned') AND NOT EXISTS (SELECT 1 FROM events e WHERE "
                             "e.id=stranded_deliveries.event_id AND e.status!='handled')", (now,))
-        if not config['dispatch']['enabled'] or not config['dispatch']['stranded_revive']:
+        if not config['dispatch']['enabled'] or not config['dispatch']['stranded_revive'] or \
+                config['dispatch'].get('install_hold'):  # C4: revived after the install, like every held event
             return []
         owed_since = now - config['dispatch']['max_event_age_hours'] * 3600
         by_watch = {}
