@@ -68,7 +68,7 @@ class MinimalDeploymentTest(unittest.TestCase):
         bin_dir.mkdir()
         (bin_dir / 'claude').write_text('#!/bin/sh\necho "0.0.0 (test agent)"\n')
         os.chmod(bin_dir / 'claude', 0o755)
-        self.env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+        self.env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                          'PYTHONPATH': str(KAGE_ROOT),
                          'PYTHONDONTWRITEBYTECODE': '1', 'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}'})
 

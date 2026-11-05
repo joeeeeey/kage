@@ -88,7 +88,7 @@ class ServeDashboardProgramTest(Base):
         self.records()
         self.init()
         env = {k: v for k, v in os.environ.items() if not k.startswith(('SLACK_', 'KAGE_')) and k != 'PYTHONPATH'}
-        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'KAGE_VERSIONS_DIR': str(self.release.parent), 'PYTHONDONTWRITEBYTECODE': '1'})
         proc = subprocess.Popen([sys.executable, str(self.target / 'scripts/kage.py'), 'serve', 'dashboard', '--port',
                                  '0', '--no-enrichment'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,

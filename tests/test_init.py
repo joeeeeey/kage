@@ -97,10 +97,17 @@ class Base(unittest.TestCase):
         self.home = self.tmp / 'home'
         self.home.mkdir()
         self.release = make_release(self.tmp / 'versions')
-        self.env = mock.patch.dict(os.environ, {'KAGE_SECRETS_BACKEND': 'file', 'KAGE_NO_REAL_SLACK': '1'})
+        self.env = mock.patch.dict(os.environ, {'KAGE_SECRETS_BACKEND': 'file', 'KAGE_NO_REAL_SLACK': '1',
+                                                    'KAGE_NO_AUTOSTART': '1'})
         self.env.start()
         self.addCleanup(self.env.stop)
         os.environ.pop('KAGE_LOCK', None)
+
+    def assert_no_supervisor(self):
+        """No process of this test's deployment is left running (a CLI command must never start a daemon here)."""
+        ps = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True).stdout
+        left = [line for line in ps.splitlines() if str(self.tmp.resolve()) in line or str(self.tmp) in line]
+        self.assertEqual(left, [])
 
     def records(self, key='mira', team=TEAM, user=OWNER):
         state = init.state_dir(key, self.home)
@@ -460,7 +467,7 @@ class ProgramTest(Base):
         self.init()
         env = {k: v for k, v in os.environ.items() if not k.startswith(('SLACK_', 'KAGE_')) and '_DISPATCH_' not in k
                and 'RUN_CONTEXT' not in k and k not in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'PYTHONPATH')}
-        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'KAGE_VERSIONS_DIR': str(self.release.parent), 'PYTHONDONTWRITEBYTECODE': '1'})
         program = self.target / 'scripts/kage.py'
         out = subprocess.run([sys.executable, str(program), '--help'], capture_output=True, text=True, env=env,
@@ -477,7 +484,7 @@ class ProgramTest(Base):
 class CommandTest(Base):
     def run_cli(self, *args):
         env = {k: v for k, v in os.environ.items() if not k.startswith(('SLACK_', 'KAGE_')) and '_DISPATCH_' not in k}
-        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'PYTHONPATH': str(KAGE_ROOT), 'PYTHONDONTWRITEBYTECODE': '1'})
         return subprocess.run([sys.executable, '-m', 'kage', 'init', *args], capture_output=True, text=True, env=env,
                               timeout=120, stdin=subprocess.DEVNULL)
@@ -522,7 +529,7 @@ class AcceptanceTest(Base):
             (bin_dir / 'launchctl').write_text(FAKE_LAUNCHCTL)
             os.chmod(bin_dir / 'launchctl', 0o755)
         env.update({'FAKE_LAUNCHCTL_STATE': str(self.tmp / 'launchd.json'), 'FAKE_LAUNCHCTL_LOG': str(self.tmp / 'launchd.log')})
-        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_SECRETS_BACKEND': 'file',
+        env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'KAGE_VERSIONS_DIR': str(self.release.parent), 'PYTHONDONTWRITEBYTECODE': '1',
                     'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}',
                     **({'CLAUDE_CODE_SESSION_ID': session} if session else {})})
@@ -578,6 +585,7 @@ class AcceptanceTest(Base):
             self.assertEqual(db.execute('SELECT step, status FROM onboarding_steps').fetchall(), [('init', 'done')])
         again = CommandTest.run_cli(self, '--answers', str(path), '--release', str(self.release))
         self.assertIn('is up to date', again.stdout)
+        self.assert_no_supervisor()
         store = secrets.for_owner('mira', home=self.home)
         for f in self.home.rglob('*'):
             if f.is_file() and store.root not in f.parents:
