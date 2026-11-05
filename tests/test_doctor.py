@@ -185,6 +185,13 @@ class DoctorTest(unittest.TestCase):
         self.assertIs(checks['state.database']['ok'], False)
         self.assertEqual(checks['runtime.heartbeat']['detail'], 'store unreadable (OperationalError)')
 
+    def test_a_store_the_runtime_never_used_is_not_a_stopped_runtime(self):
+        db = sqlite3.connect(':memory:')  # O1c4: init's onboarding row only, no runtime table yet
+        db.execute('CREATE TABLE onboarding_steps (step TEXT PRIMARY KEY, status TEXT, at REAL, detail TEXT)')
+        checks = self.by_id(self.run_doctor(self.healthy_probe(), db=db))
+        self.assertIsNone(checks['runtime.heartbeat']['ok'])
+        self.assertEqual(checks['runtime.heartbeat']['detail'], 'the runtime has not started yet')
+
     def test_the_live_probe_refuses_slack_in_tests(self):
         with self.assertRaisesRegex(RuntimeError, 'no_transport'):
             D.Probe(environ={}).auth_test('t')  # never an unguarded call

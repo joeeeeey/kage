@@ -162,16 +162,20 @@ def runtime_checks(db: sqlite3.Connection | None, health: dict[str, Any] | None,
     out = []
     if db is not None:
         try:
-            row = db.execute('SELECT heartbeat FROM runtime WHERE id=1').fetchone() \
-                if db.execute("SELECT 1 FROM sqlite_master WHERE name='runtime'").fetchone() else None
+            started = db.execute("SELECT 1 FROM sqlite_master WHERE name='runtime'").fetchone()
+            row = db.execute('SELECT heartbeat FROM runtime WHERE id=1').fetchone() if started else None
         except sqlite3.Error as exc:
             out.append(check('runtime.heartbeat', True, False, f'store unreadable ({type(exc).__name__})',
                              'check the state directory and the store files'))
         else:
             age = probe.clock() - row[0] if row and row[0] else None
-            out.append(check('runtime.heartbeat', True, age is not None and age < HEARTBEAT_STALE_SECONDS,
-                             f'supervisor heartbeat {int(age)} s ago' if age is not None else 'no supervisor heartbeat',
-                             'start the services (the supervisor writes a heartbeat every few seconds)'))
+            if not started:  # O1c4: a store init made (its onboarding row) before the runtime ever ran
+                out.append(check('runtime.heartbeat', True, None, 'the runtime has not started yet'))
+            else:
+                out.append(check('runtime.heartbeat', True, age is not None and age < HEARTBEAT_STALE_SECONDS,
+                                 f'supervisor heartbeat {int(age)} s ago' if age is not None else
+                                 'no supervisor heartbeat',
+                                 'start the services (the supervisor writes a heartbeat every few seconds)'))
     if health:
         providers = ((health.get('providers') or {}).get('providers') or [])
         degraded = sorted(p.get('provider', '?') for p in providers if p.get('status') not in ('healthy', 'ok'))
