@@ -55,5 +55,22 @@ stored, then passes, and completes note → context → resolve with a scratch H
   (the profile against the record; a profile that predates it is reported as adopted).
 - `KAGE_SECRETS_BACKEND=file` (or `memory`) keeps test harnesses on a scratch HOME away from the user's Keychain.
 
-Kage still does not provide `init` or a workspace bootstrap. Each is a separate onboarding step.
 None of this alters existing profiles, stores, configuration files or services.
+
+## `kage init` (O1c4)
+
+- `python3 -m kage init` runs before any assembly. On a terminal it is the wizard: about ten questions with defaults,
+  the Slack app manifest, the bot and app-level tokens (and the user token for the `as_owner` voice) checked and
+  stored, the owner proven (DM code, or the user token), the answers written (`kage.answers/v1`, 0600, references
+  only). `--answers FILE` runs without a terminal and needs the referenced secrets in the store.
+- The deployment (`~/.local/share/kage/deploy-<key>/`, a private git repository init never pushes) holds the
+  profile, the two neutral packs, `kage.lock` (the running release, verified; every switch on Kage) and
+  `scripts/kage.py`, the deployment's program. The Slack identities in `owner.json` come only from the verified
+  records (`kage.identity/v1`, `kage.bot/v1`), never from the answers. `instance.json` has no `values`.
+- Built in a staging directory, checked (profile, lock, packs), published by rename. A re-run prints what would change
+  and writes it only with `--apply`; packs are never replaced; a symlink, another owner key, a differing verified
+  identity or a pack off its pin refuses. `--adopt DIR` records the onboarding row (`onboarding_steps`) only.
+- Tracker none is written as a reference that matches nothing (`(?!)`): the units compile the pattern.
+- Not yet: the deployment's services (the standalone receiver, the dashboard entry, `services.json`) and the dispatch
+  files (`SKILL.md`, `references/`, the runner) are the next step; without them the deployment answers commands and
+  `doctor`, but runs no service and dispatches no agent.
