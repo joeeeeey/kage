@@ -70,7 +70,23 @@ None of this alters existing profiles, stores, configuration files or services.
 - Built in a staging directory, checked (profile, lock, packs), published by rename. A re-run prints what would change
   and writes it only with `--apply`; packs are never replaced; a symlink, another owner key, a differing verified
   identity or a pack off its pin refuses. `--adopt DIR` records the onboarding row (`onboarding_steps`) only.
-- Tracker none is written as a reference that matches nothing (`(?!)`): the units compile the pattern.
-- Not yet: the deployment's services (the standalone receiver, the dashboard entry, `services.json`) and the dispatch
-  files (`SKILL.md`, `references/`, the runner) are the next step; without them the deployment answers commands and
-  `doctor`, but runs no service and dispatches no agent.
+- Tracker none: `org.json` has no ticket pattern; the units compile `Org.ticket_pattern()`, which never matches (O1c5a).
+
+## A generated deployment runs (O1c5)
+
+- Dispatch files (`kage.onboard.dispatch_files`): `SKILL.md` (the event semantics the dispatched prompts cite),
+  `references/rules.md` (rule-check plans), `references/rules-example.json` (a neutral spec: every access change asks
+  the owner), `references/rule-registry-seed/` (no rule) and `scripts/dispatch_runner.py` (verifies the pinned release,
+  then `kage.core.runner`). Owner's name, key, program and Kage version are the only values in them.
+- `python3 -m kage --deployment DIR serve dashboard [--port P]`: the console on the loopback interface, the assembled
+  units as its hooks, pages rendered with the owner's words (zh-CN pages until English ones exist).
+- `… serve receiver`: Socket Mode (kage.adapters.slack.socket_mode) with the app-level and bot tokens from the secrets
+  store and the workspace and bot from the verified profile; buttons, card-thread replies and the owner's control
+  messages go to the deployment's own program. No deployment-specific shortcut.
+- `services.json` (`kage.services/v1`, `written_by: kage init`): followup (`run`), dashboard, receiver; labels
+  `pro.kage.<key>.<name>`; this Python and the agents' PATH; logs in the state directory.
+  `… services plan|start [--offline]|stop|status` loads them into launchd (plists run Kage's launcher from the pinned
+  release) only after every required doctor check but `services.running` passes; init itself loads nothing. A
+  services.json init did not write refuses: such a deployment keeps its own service tool.
+- Test harnesses set `KAGE_NO_AUTOSTART=1` when they run a deployment's program: CLI commands otherwise start a
+  supervisor in the background.
