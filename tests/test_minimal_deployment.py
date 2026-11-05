@@ -170,6 +170,34 @@ class MinimalDeploymentTest(unittest.TestCase):
             self.assertEqual(db.execute('SELECT status, disposition FROM events WHERE id=?', (event,)).fetchone(),
                              ('handled', 'observe'))
 
+    def test_the_owner_introduces_herself_and_gets_candidates(self):
+        """O3a end to end: the introduction goes to the private directory (never the store), the estimate costs
+        nothing, one no-tools call records candidates, an agent session is refused, nothing is created without a store."""
+        from tests.test_onboard_intro import FAKE, INTRO
+        (self.tmp / 'bin' / 'claude').write_text(FAKE)
+        add = subprocess.run([sys.executable, '-m', 'kage', '--deployment', str(self.root / 'deploy'), 'onboard', 'intro',
+                              'add', '-'], input=INTRO, capture_output=True, text=True, env=self.env, timeout=120)
+        self.assertEqual(add.returncode, 0, add.stderr[-2000:])
+        self.assertTrue(json.loads(add.stdout)['stored'])
+        self.assertEqual(len(json.loads(self.kage('onboard', 'intro', 'list').stdout)['versions']), 1)
+        estimate = self.kage('onboard', 'extract', '--estimate')
+        self.assertLess(json.loads(estimate.stdout)['estimate']['usd'], 1.0)
+        state = self.home / '.local/share/kage/state-mira'
+        missing = self.kage('onboard', 'extract')
+        self.assertNotEqual(missing.returncode, 0)  # no store yet: never created by onboarding
+        self.assertFalse((state / 'state.sqlite').exists())
+        state.mkdir(parents=True, mode=0o700)
+        sqlite3.connect(state / 'state.sqlite').close()
+        refused = self.kage('onboard', 'extract', session=SESSION)
+        self.assertIn('onboarding_only_from_the_owners_terminal', refused.stderr)
+        run = self.kage('onboard', 'extract')
+        self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+        self.assertEqual((json.loads(run.stdout)['status'], json.loads(run.stdout)['items']), ('done', 6))
+        items = self.kage('onboard', 'items')
+        self.assertIn('6 candidate(s); nothing is applied until they are confirmed', items.stdout)
+        with sqlite3.connect(state / 'state.sqlite') as db:
+            self.assertNotIn(INTRO.strip(), '\n'.join(db.iterdump()))
+
 
 if __name__ == '__main__':
     unittest.main()

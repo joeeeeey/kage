@@ -136,3 +136,19 @@ None of this alters existing profiles, stores, configuration files or services.
   under the console's write guards (host, same origin, the page's CSRF token, JSON, at most 2048 bytes). The correction
   is kept next to the row (`shadow_corrections`, created with the first one) as evidence and changes nothing: no mode,
   dispatch or card reads it. Never from an agent session; a store that never observed has nothing to correct.
+
+## The owner's self-introduction (O3, release a)
+
+- `onboard intro add FILE|-` stores a version of the introduction under
+  `~/.local/share/kage/private/<key>/intro/` (0600 files in 0700 directories, refused otherwise; at most 50 000
+  characters; refused when it looks like it carries a credential; the same text is stored once). `onboard intro list`
+  shows the versions (hash, length, time). The text never goes into a repository, a task workspace, `/tmp` or the store.
+- `onboard extract` turns the latest version into candidates with one headless model call with no tools (the provider
+  probe's arguments; Sonnet 5.5 by default, the owner's own quota): `--estimate` prints the estimate only; a run whose
+  estimate is over the cap ($1 by default, `--cap`) is refused before the call. The answer
+  (`kage.onboarding.candidates/v1`) is checked by code: every item must quote the introduction verbatim (code records
+  where), `inferred` items are capped at confidence 0.6, owner and people items keep only their plain fields (never an
+  id from text), a rule is an L1 hint unless it names a guard the engine has.
+- Runs and candidates go to `onboarding_runs` / `onboarding_items` (created with the first run; status `candidate`);
+  `onboard items` lists them. Nothing reads them yet: the confirmation page and applying accepted items come in later
+  releases. All `onboard` commands run from the owner's own terminal only.

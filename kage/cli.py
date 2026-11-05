@@ -44,6 +44,59 @@ class CliCore:
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
 
+    def onboard_command(self, args, db_path):
+        """O3a: `onboard intro add|list`, `onboard extract`, `onboard items`, from the owner's own terminal only. The
+        introduction stays in the private directory; the store gets only the runs and their candidates."""
+        from kage.core import mode as _mode
+        from kage.onboard import extract, intro
+        if any(os.environ.get(k) for k in _mode.AGENT_ENV):
+            print(json.dumps({'error': 'ValueError', 'detail': 'onboarding_only_from_the_owners_terminal'}),
+                  file=sys.stderr)
+            sys.exit(1)
+        owner = self.deployment.owner
+        try:
+            if args.onboard_command == 'intro':
+                if args.action == 'list':
+                    result = {'versions': intro.versions(owner.key)}
+                else:
+                    if not args.file:
+                        raise ValueError('intro_add_needs_a_file_or_-')
+                    text = sys.stdin.read() if args.file == '-' else Path(args.file).read_text(encoding='utf-8')
+                    result = intro.add(owner.key, text)
+            elif args.onboard_command == 'extract':
+                if args.provider == 'codex' and not args.model:
+                    raise ValueError('codex_needs_--model')
+                model = args.model or extract.MODEL
+                cap = extract.EXTRACT_CAP_USD if args.cap is None else args.cap
+                entry, text = intro.read(owner.key)
+                guards = tuple(getattr(self.rt.rule_registry, 'guards', ()))
+                if args.estimate:
+                    result = {'intro': entry, 'cap_usd': cap,
+                              'estimate': extract.estimate(text, model, language=owner.language, guards=guards)}
+                else:
+                    with contextlib.closing(sqlite3.connect(Path(db_path).absolute().as_uri() + '?mode=rw', uri=True,
+                                                            timeout=10)) as db:
+                        result = extract.run(db, owner.key, entry, text, provider=args.provider, model=model, cap=cap,
+                                             language=owner.language, guards=guards)
+            else:
+                db = sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=10) if db_path.is_file() else None
+                try:
+                    items = extract.candidates(db) if db is not None else []
+                finally:
+                    if db is not None:
+                        db.close()
+                if not args.json:
+                    for i in items:
+                        print(f"{i['id']}  {i['target']:<9} {i['confidence']:.2f} {i['support']:<8} "
+                              f"{json.dumps(i['value'], ensure_ascii=False)[:100]}")
+                    print(f'{len(items)} candidate(s); nothing is applied until they are confirmed')
+                    return
+                result = {'items': items}
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            print(json.dumps({'error': type(exc).__name__, 'detail': str(exc)}), file=sys.stderr)
+            sys.exit(1)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+
     def control_command(self, args, db, db_path):
         """Phase 2 C1: the control-* commands (kage.core.control, bound to the owner here)."""
         control = _control.Control(self.language, owner_key=self.key, owner_name=self.name)
@@ -627,6 +680,23 @@ class CliCore:
         man.add_argument('--as-owner', action='store_true', help='Add the user-token scopes (speak as the owner, read the '
                                                                   "owner's DMs, search)")
         man.add_argument('--name', help="The app's name (default: the assistant's display name)")
+        # ---- O3a: the owner's self-introduction (private store) and its candidates ----
+        onb = sub.add_parser('onboard', help=f"Onboarding: {self.name}'s self-introduction (kept in the private directory, "
+                                             'never in a repository) and the candidates extracted from it; '
+                                             f"{self.name}'s own terminal only")
+        onb_sub = onb.add_subparsers(dest='onboard_command', required=True)
+        onb_intro = onb_sub.add_parser('intro', help='Store a new version of the introduction, or list the stored ones')
+        onb_intro.add_argument('action', choices=('add', 'list'))
+        onb_intro.add_argument('file', nargs='?', help='add: a text file, or - for stdin')
+        onb_ext = onb_sub.add_parser('extract', help="Turn the latest introduction into candidates: one no-tools model "
+                                                     "call on the owner's own quota, estimated first, refused above the "
+                                                     'cap')
+        onb_ext.add_argument('--estimate', action='store_true', help='Print the estimate only; call nothing')
+        onb_ext.add_argument('--cap', type=float, default=None, help='Dollar cap for this run (default 1.00)')
+        onb_ext.add_argument('--provider', choices=('claude', 'codex'), default='claude')
+        onb_ext.add_argument('--model', help='Default: Sonnet 5.5 for claude; required for codex')
+        onb_items = onb_sub.add_parser('items', help='The candidates of the latest extraction (nothing applied)')
+        onb_items.add_argument('--json', action='store_true')
         # ---- P35 learn rules from the owner's card feedback ----
         idis = sub.add_parser('interaction-distill', help=f"Handling session: fill the one-line distillation of {self.name}'s intent for an interaction (raw text stays in the private store)")
         idis.add_argument('--event', required=True, help='The resolved card event (escalation event id)')
@@ -831,6 +901,9 @@ class CliCore:
                 sys.exit(1)
             finally:
                 db.close()
+            return
+        if args.command == 'onboard':  # O3a
+            self.onboard_command(args, db_path)
             return
         db = self.rt.connect(db_path)
         if args.command.startswith('control-'):
