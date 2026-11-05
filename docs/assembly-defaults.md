@@ -128,4 +128,7 @@ None of this alters existing profiles, stores, configuration files or services.
   one JSON line `{route: task | reply | log | ignore, why}`; a shadow `triage` row per burst (never the text), the held
   events resolved `observe`, the dispatch `observed`; one call at a time, killed after 3 minutes. The start card shows
   them as "would start a task: …".
-- Not yet (release B2): the console's `/onboarding` page, owner corrections of shadow decisions.
+- The console's `/onboarding` page (O2e, release B2; read-only, `/api/onboarding`): the mode and its log, the start
+  cards, and what observe-only mode held back (triage routes with their one-line why, held runs and Slack posts). The
+  start card links it when the console has an address. A store without the mode row shows `active` and an empty list.
+- Not yet (release B3): owner corrections of shadow triage decisions on that page.

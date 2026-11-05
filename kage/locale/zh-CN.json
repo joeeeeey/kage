@@ -1399,6 +1399,7 @@
     "mode.card.question": "{owner} 你的 Kage 还在只观察模式：这段时间有 {total} 件事只记下、没去做（{summary}）。\n最近几件：\n{lines}\n点 [开始干活] 才会真的回复和派活；点 [再看一天] 明天再报一次。",
     "mode.card.start": "开始干活",
     "mode.card.later": "再看一天",
+    "mode.card.link": "全部记录：{url}",
     "mode.card.counts_sep": "，",
     "mode.card.nothing": "暂时没有",
     "mode.card.no_lines": "（还没有）",

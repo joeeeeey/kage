@@ -440,6 +440,69 @@
   }
 
   // =====================================================================
+  // Onboarding (O2e) — the instance mode and what observe-only mode recorded, read-only
+  // =====================================================================
+  const MODE_LABEL = { installed: ['Installed', 'warn'], observe: ['Observing', 'warn'], active: ['Active', 'good'], paused: ['Paused', 'bad'] };
+  const SHADOW_KIND = { triage: 'Triage', slack_write: 'Slack post', dispatch: 'Agent run' };
+  const ROUTE_LABEL = { task: 'would start a task', reply: 'would reply', log: 'would only record', ignore: 'would ignore', unclear: 'unclear' };
+  const MODE_ACTOR = { services: 'Setup check', owner_button: 'Owner (start card)', owner: 'Owner (terminal)', breaker: 'Safety breaker', init: 'kage init' };
+  const HELD_WHY = { mode_observe: 'Held: observing', mode_installed: 'Held: not started yet', mode_paused: 'Held: paused' };
+  const CARD_STATE = { open: ['Waiting', 'warn'], deciding: ['Deciding', 'warn'], started: ['Started', 'good'], later: ['Another day', null],
+    refused: ['Refused', 'bad'], expired: ['Expired', null], stale: ['Out of date', null] };
+  const MODE_NOTE = {
+    installed: 'Installed: start the services once the doctor passes; the instance then observes before it acts.',
+    observe: 'Observing: nothing is sent or run on your behalf. Below is what it would have done. Start it with the button on the daily start card in your DMs.',
+    active: 'Active: it replies and runs tasks for you. Anything recorded while it was observing stays listed below.',
+    paused: 'Paused: no new run starts until you resume it (`mode resume` in your terminal).',
+  };
+  function Onboarding() {
+    const head = pageHead('Onboarding', 'ONBOARDING · read-only', null);
+    const body = h('section', { class: 'ops-card', id: 'onboarding' });
+    clear(main).append(head, body);
+    async function load() {
+      let data;
+      try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
+      const [label, tone] = MODE_LABEL[data.mode] || [data.mode, null];
+      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · read-only'), h('h2', {}, 'Onboarding'),
+        h('p', { class: 'ops-note' }, MODE_NOTE[data.mode] || ''));
+      const counts = data.counts || {};
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      clear(body).append(h('div', { class: 'counters' },
+        h('div', { class: 'counter' }, h('b', {}, pill(label, tone)), h('span', {}, 'Mode')),
+        h('div', { class: 'counter' }, h('b', {}, total), h('span', {}, 'Recorded, not done')),
+        h('div', { class: 'counter' }, h('b', {}, counts.triage || 0), h('span', {}, 'Messages triaged')),
+        h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, 'Agent runs held')),
+        h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, 'Slack posts held'))));
+      if (!data.row) body.append(h('p', { class: 'ops-note' }, 'This instance predates onboarding: it has always been active.'));
+      body.append(h('h3', {}, 'What it would have done'));
+      if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, 'Nothing recorded'), 'Observe-only mode has not held anything back yet.'));
+      else body.append(h('table', { class: 'ops-table' },
+        h('thead', {}, h('tr', {}, ['Time', 'Kind', 'Where', 'Would have', 'Why'].map((x) => h('th', { scope: 'col' }, x)))),
+        h('tbody', {}, data.recent.map((r) => h('tr', {},
+          h('td', { class: 'num' }, when(r.at)),
+          h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
+          h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
+          h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + ': ' : '') + (r.text || '')),
+          h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)))))));
+      body.append(h('h3', {}, 'Mode changes'));
+      if (!data.log.length) body.append(h('p', { class: 'ops-note' }, 'No change recorded.'));
+      else body.append(h('table', { class: 'ops-table' },
+        h('thead', {}, h('tr', {}, ['Time', 'From', 'To', 'By', 'Reason'].map((x) => h('th', { scope: 'col' }, x)))),
+        h('tbody', {}, data.log.map((r) => h('tr', {},
+          h('td', { class: 'num' }, when(r.at)), h('td', {}, r.old ? (MODE_LABEL[r.old] || [r.old])[0] : '—'),
+          h('td', {}, (MODE_LABEL[r.new] || [r.new])[0]), h('td', {}, MODE_ACTOR[r.actor] || r.actor), h('td', { class: 'sub' }, r.reason || ''))))));
+      if (data.cards.length) {
+        body.append(h('h3', {}, 'Start cards'));
+        body.append(h('table', { class: 'ops-table' },
+          h('thead', {}, h('tr', {}, ['Posted', 'State', 'Settled'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('tbody', {}, data.cards.map((c) => h('tr', {},
+            h('td', { class: 'num' }, when(c.posted_at)), h('td', {}, pill(...(CARD_STATE[c.state] || [c.state, null]))), h('td', { class: 'num' }, when(c.settled_at)))))));
+      }
+    }
+    every(15000, load);
+  }
+
+  // =====================================================================
   // Intake (P2) — read-only, metadata only
   // =====================================================================
   const CONV = { im: 'DM', mpim: 'Group DM', channel: 'Channel' };
@@ -1998,6 +2061,7 @@
   else if (path === '/learning') { document.title = 'Kage · Learning'; Learning(); }
   else if (path === '/health') { document.title = 'Kage · Health'; Health(); }
   else if (path === '/design') { document.title = 'Kage · Design'; Design(); }
+  else if (path === '/onboarding') { document.title = 'Kage · Onboarding'; Onboarding(); }
   else if (path === '/settings') { document.title = 'Kage · Settings'; Settings(); }
   else { clear(main).append(h('div', { class: 'empty' }, h('b', {}, 'Page not found'), h('a', { href: '/runs' }, 'Go to Runs'))); }
 })();

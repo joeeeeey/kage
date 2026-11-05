@@ -66,6 +66,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from kage import locale
 from kage.core import control as _control
+from kage.core import mode as _mode
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -156,7 +157,7 @@ CONTROL_QUERY = {'conversation'}  # S2: the query keys the control page (/) read
 
 
 OPS_PAGES = ('/runs', '/backlog', '/settings', '/intake', '/rules', '/routines', '/gaps', '/learning', '/health',
-             '/design')
+             '/design', '/onboarding')
 
 
 PAGE_CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
@@ -488,6 +489,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(404, {'error': 'run_not_found'})
             if path == '/api/backlog':
                 return self.respond(200, self.server.core.stale_backlog(self.server.db_path))
+            if path == '/api/onboarding':  # O2e
+                return self.respond(200, self.server.core.onboarding(self.server.db_path))
             if path == '/api/intake':
                 return self.respond(200, self.server.core.intake_overview(self.server.db_path))
             if path == '/api/inbox':
@@ -1082,6 +1085,39 @@ class DashboardCore:
         state = self.run_log.read_state(run_dir)
         result['steps'] = int(state.get('steps') or 0)
         result['last_summary'] = state.get('last_summary')
+        return result
+
+    def onboarding(self, path, now=None, limit=200):
+        """O2e: the instance mode (`active` when the store has no row: an adopted deployment), its changes, the start
+        cards and what observe-only mode recorded instead of doing (route and why of a triage, the endpoint and the
+        would-be text of a Slack write, the would-be run of a dispatch). Read-only."""
+        now = time.time() if now is None else now
+        result = {'generated_at': now, 'mode': _mode.ABSENT, 'row': False, 'log': [], 'counts': {}, 'recent': [],
+                  'cards': []}
+        if not Path(path).is_file():
+            result['notice'] = 'state_database_missing'
+            return result
+        with contextlib.closing(read_db(path)) as db:
+            db.execute('BEGIN')
+            view = _mode.overview(db, limit=limit)
+            try:
+                result['row'] = db.execute('SELECT 1 FROM runtime_meta WHERE key=?', (_mode.KEY,)).fetchone() is not None
+                result['cards'] = [dict(r) for r in db.execute(
+                    'SELECT event_id, posted_at, state, settled_at FROM mode_cards ORDER BY posted_at DESC LIMIT 20')]
+            except sqlite3.OperationalError:
+                pass
+        result.update(mode=view['mode'], log=view['log'], counts=view['shadow']['counts'])
+        for r in view['shadow']['recent']:
+            item = {'at': r['at'], 'kind': r['kind'], 'target': r['target'], 'why': r['why'], 'route': None,
+                    'text': r['what']}
+            if r['kind'] in ('triage', 'slack_write'):
+                try:
+                    value = json.loads(r['what'])
+                    item.update(route=value.get('route'), text=value.get('why') if r['kind'] == 'triage' else
+                                value.get('text'), endpoint=value.get('endpoint'))
+                except (ValueError, AttributeError):
+                    pass
+            result['recent'].append(item)
         return result
 
     def stale_backlog(self, path, now=None, max_age_hours=None):

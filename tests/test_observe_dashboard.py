@@ -119,6 +119,51 @@ class PagesTest(unittest.TestCase):
                 W.render(language, VALUES)
 
 
+class OnboardingTest(unittest.TestCase):
+    """O2e: the /onboarding read model (mode, log, start cards, what observe-only mode recorded), read-only."""
+
+    def test_the_read_model_of_an_observing_and_of_an_adopted_store(self):
+        from kage.core import mode as M
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'state.sqlite'
+            c = core()
+            self.assertEqual(c.onboarding(path, now=10.0)['notice'], 'state_database_missing')
+            db = sqlite3.connect(str(path))
+            db.execute('CREATE TABLE runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            db.commit()
+            adopted = c.onboarding(path, now=10.0)
+            self.assertEqual((adopted['mode'], adopted['row'], adopted['recent'], adopted['cards']), ('active', False, [], []))
+            M.write(db, 'installed', 'init', now=1.0)
+            M.write(db, 'observe', 'services', now=2.0)
+            M.shadow(db, 'triage', 'mira-inbox', json.dumps({'burst': 'b1', 'route': 'task', 'why': 'Needs work.'}),
+                     'mode_observe', now=3.0)
+            M.shadow(db, 'slack_write', 'C0000TEST01', json.dumps({'endpoint': 'chat.postMessage', 'text': 'On it'}),
+                     'mode_observe', now=4.0)
+            M.shadow(db, 'dispatch', 'release-task', 'start a run (event: events)', 'mode_observe', now=5.0)
+            db.close()
+            view = c.onboarding(path, now=10.0)
+        self.assertEqual((view['mode'], view['row'], view['counts']),
+                         ('observe', True, {'triage': 1, 'slack_write': 1, 'dispatch': 1}))
+        self.assertEqual([r['new'] for r in view['log']], ['observe', 'installed'])
+        by_kind = {r['kind']: r for r in view['recent']}
+        self.assertEqual((by_kind['triage']['route'], by_kind['triage']['text']), ('task', 'Needs work.'))
+        self.assertEqual((by_kind['slack_write']['endpoint'], by_kind['slack_write']['text']), ('chat.postMessage', 'On it'))
+        self.assertEqual(by_kind['dispatch']['text'], 'start a run (event: events)')
+        self.assertIn('/onboarding', D.OPS_PAGES)
+
+    def test_both_languages_carry_the_page_with_the_same_label_keys(self):
+        import re
+        keys = {}
+        for lang in ('en', 'zh-CN'):
+            js = (W.Pages.for_owner(lang, VALUES) / 'ops.js').read_bytes().decode()
+            self.assertIn("path === '/onboarding'", js, lang)
+            self.assertIn("api('/api/onboarding')", js, lang)
+            maps = {name: re.search(r'const %s = (\{.*?)\};' % name, js, re.S).group(1)
+                    for name in ('MODE_LABEL', 'SHADOW_KIND', 'ROUTE_LABEL', 'MODE_ACTOR', 'HELD_WHY', 'CARD_STATE')}
+            keys[lang] = {name: re.findall(r'(?:^|[,{]\s*)(\w+): ', body) for name, body in maps.items()}
+        self.assertEqual(keys['en'], keys['zh-CN'])
+
+
 class StylesTest(unittest.TestCase):
     """S1: one shared stylesheet (base.css: the design tokens and the shared components), linked first by every page,
     served under the same allow-list as the other sheets; local only; no text under the 10 px floor."""

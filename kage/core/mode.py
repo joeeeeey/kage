@@ -245,6 +245,9 @@ class StartCards:
         lines = '\n'.join('• ' + ' '.join(str(w).split())[:140] for w in latest) or self.msg('mode.card.no_lines')
         question = self.msg('mode.card.question', owner=f'<@{owner}>' if owner else self.name, total=total,
                             summary=summary, lines=lines)
+        base = getattr(rt, 'DASHBOARD_URL', None)  # O2e: the console's list of everything recorded
+        if isinstance(base, str) and base.startswith(('http://', 'https://')):
+            question += '\n' + self.msg('mode.card.link', url=base.rstrip('/') + '/onboarding')
         card = rt.supervisor_card(db, question, [f"start={self.msg('mode.card.start')}:approve",
                                                  f"later={self.msg('mode.card.later')}:other"],
                                   never_auto=True, kind='mode_start', refs={'mode': 'observe'}, now=now,

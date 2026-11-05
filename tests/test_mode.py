@@ -149,6 +149,7 @@ class StartCardTest(unittest.TestCase):
         card = self.cards[0]
         self.assertIn(f'<@{self.OWNER}> Your Kage is still in observe-only mode: 2 things', card['question'])
         self.assertIn('1 agent runs', card['question'])
+        self.assertNotIn('/onboarding', card['question'])  # no console address configured: no link
         self.assertIn('reply "on it" in #general', card['question'])
         self.assertEqual(self.cards_core.line('triage', json.dumps({'burst': 'b1', 'route': 'task', 'why': 'Needs work.'})),
                          'would start a task: Needs work.')  # O2c rows read as their route and why
@@ -174,6 +175,13 @@ class StartCardTest(unittest.TestCase):
         self.assertIn('Started', self.posts[-1]['text'])
         self.cards_core.step(self.rt, self.db, now=100.0 + 9 * M.DIGEST_SECONDS)
         self.assertEqual(len(self.cards), 3)  # active: no more cards
+
+    def test_the_card_links_the_console_list_when_the_console_has_an_address(self):
+        M.write(self.db, 'installed', 'init', now=1.0)
+        M.write(self.db, 'observe', 'services', now=2.0)
+        self.rt.DASHBOARD_URL = 'http://127.0.0.1:8776/'
+        self.cards_core.step(self.rt, self.db, now=100.0)
+        self.assertIn('Everything recorded: http://127.0.0.1:8776/onboarding', self.cards[0]['question'])
 
     def test_an_unanswered_card_expires_and_a_typed_decision_does_not_start(self):
         M.write(self.db, 'installed', 'init')

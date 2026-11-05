@@ -440,6 +440,69 @@
   }
 
   // =====================================================================
+  // Onboarding (O2e) — 实例模式，以及只观察模式记下而没去做的事，只读
+  // =====================================================================
+  const MODE_LABEL = { installed: ['已安装', 'warn'], observe: ['只观察', 'warn'], active: ['干活中', 'good'], paused: ['已暂停', 'bad'] };
+  const SHADOW_KIND = { triage: '分拣', slack_write: 'Slack 发送', dispatch: '派活' };
+  const ROUTE_LABEL = { task: '会建任务', reply: '会回复', log: '只记录', ignore: '不管', unclear: '没看清' };
+  const MODE_ACTOR = { services: '体检', owner_button: '本人（开工卡片）', owner: '本人（终端）', breaker: '安全熔断', init: 'kage init' };
+  const HELD_WHY = { mode_observe: '只观察中，压下', mode_installed: '还没启动，压下', mode_paused: '已暂停，压下' };
+  const CARD_STATE = { open: ['等你点', 'warn'], deciding: ['处理中', 'warn'], started: ['已开工', 'good'], later: ['再看一天', null],
+    refused: ['不认这次点击', 'bad'], expired: ['已过期', null], stale: ['已过时', null] };
+  const MODE_NOTE = {
+    installed: '已安装：体检通过后启动服务，实例会先只观察，再干活。',
+    observe: '只观察：不会代你发任何消息、也不会派活。下面是它本来会做的事。用私信里每天那张卡片上的按钮让它开始干活。',
+    active: '干活中：会替你回复和派活。只观察期间记下的事仍列在下面。',
+    paused: '已暂停：恢复前不会开始新的运行（在终端里运行 `mode resume`）。',
+  };
+  function Onboarding() {
+    const head = pageHead('上手', 'ONBOARDING · 只读', null);
+    const body = h('section', { class: 'ops-card', id: 'onboarding' });
+    clear(main).append(head, body);
+    async function load() {
+      let data;
+      try { data = await api('/api/onboarding'); online(true); } catch (e) { online(false); return; }
+      const [label, tone] = MODE_LABEL[data.mode] || [data.mode, null];
+      clear(head.querySelector('div')).append(h('p', { class: 'eyebrow' }, 'ONBOARDING · 只读'), h('h2', {}, '上手'),
+        h('p', { class: 'ops-note' }, MODE_NOTE[data.mode] || ''));
+      const counts = data.counts || {};
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      clear(body).append(h('div', { class: 'counters' },
+        h('div', { class: 'counter' }, h('b', {}, pill(label, tone)), h('span', {}, '模式')),
+        h('div', { class: 'counter' }, h('b', {}, total), h('span', {}, '只记下、没去做')),
+        h('div', { class: 'counter' }, h('b', {}, counts.triage || 0), h('span', {}, '分拣过的消息')),
+        h('div', { class: 'counter' }, h('b', {}, counts.dispatch || 0), h('span', {}, '压下的派活')),
+        h('div', { class: 'counter' }, h('b', {}, counts.slack_write || 0), h('span', {}, '压下的 Slack 发送'))));
+      if (!data.row) body.append(h('p', { class: 'ops-note' }, '这个实例早于上手流程：它一直是干活状态。'));
+      body.append(h('h3', {}, '本来会做的事'));
+      if (!data.recent.length) body.append(h('div', { class: 'empty' }, h('b', {}, '还没有记录'), '只观察模式还没有压下任何事。'));
+      else body.append(h('table', { class: 'ops-table' },
+        h('thead', {}, h('tr', {}, ['时间', '类型', '在哪', '本来会', '理由'].map((x) => h('th', { scope: 'col' }, x)))),
+        h('tbody', {}, data.recent.map((r) => h('tr', {},
+          h('td', { class: 'num' }, when(r.at)),
+          h('td', {}, pill(SHADOW_KIND[r.kind] || r.kind, null)),
+          h('td', {}, h('span', { class: 'mono' }, r.target || '—')),
+          h('td', {}, r.kind === 'triage' ? (ROUTE_LABEL[r.route] || r.route || '—') : (r.endpoint ? r.endpoint + '：' : '') + (r.text || '')),
+          h('td', { class: 'sub' }, r.kind === 'triage' ? (r.text || '') : (HELD_WHY[r.why] || r.why)))))));
+      body.append(h('h3', {}, '模式变化'));
+      if (!data.log.length) body.append(h('p', { class: 'ops-note' }, '还没有变化。'));
+      else body.append(h('table', { class: 'ops-table' },
+        h('thead', {}, h('tr', {}, ['时间', '从', '到', '谁', '原因'].map((x) => h('th', { scope: 'col' }, x)))),
+        h('tbody', {}, data.log.map((r) => h('tr', {},
+          h('td', { class: 'num' }, when(r.at)), h('td', {}, r.old ? (MODE_LABEL[r.old] || [r.old])[0] : '—'),
+          h('td', {}, (MODE_LABEL[r.new] || [r.new])[0]), h('td', {}, MODE_ACTOR[r.actor] || r.actor), h('td', { class: 'sub' }, r.reason || ''))))));
+      if (data.cards.length) {
+        body.append(h('h3', {}, '开始卡片'));
+        body.append(h('table', { class: 'ops-table' },
+          h('thead', {}, h('tr', {}, ['发出', '状态', '结束'].map((x) => h('th', { scope: 'col' }, x)))),
+          h('tbody', {}, data.cards.map((c) => h('tr', {},
+            h('td', { class: 'num' }, when(c.posted_at)), h('td', {}, pill(...(CARD_STATE[c.state] || [c.state, null]))), h('td', { class: 'num' }, when(c.settled_at)))))));
+      }
+    }
+    every(15000, load);
+  }
+
+  // =====================================================================
   // Intake (收件, P2) — read-only, metadata only
   // =====================================================================
   const CONV = { im: '私信', mpim: '群私信', channel: '频道' };
@@ -1998,6 +2061,7 @@
   else if (path === '/learning') { document.title = 'Kage · 学习'; Learning(); }
   else if (path === '/health') { document.title = 'Kage · 健康'; Health(); }
   else if (path === '/design') { document.title = 'Kage · 设计'; Design(); }
+  else if (path === '/onboarding') { document.title = 'Kage · 上手'; Onboarding(); }
   else if (path === '/settings') { document.title = 'Kage · 设置'; Settings(); }
   else { clear(main).append(h('div', { class: 'empty' }, h('b', {}, '页面不存在'), h('a', { href: '/runs' }, '去运行记录'))); }
 })();

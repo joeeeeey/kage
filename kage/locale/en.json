@@ -1399,6 +1399,7 @@
     "mode.card.question": "{owner} Your Kage is still in observe-only mode: {total} things were recorded instead of done ({summary}).\nLatest:\n{lines}\nPress [Start working] to let it reply and run tasks for real; [Watch one more day] reports again tomorrow.",
     "mode.card.start": "Start working",
     "mode.card.later": "Watch one more day",
+    "mode.card.link": "Everything recorded: {url}",
     "mode.card.counts_sep": ", ",
     "mode.card.nothing": "none yet",
     "mode.card.no_lines": "(none yet)",
