@@ -3,6 +3,7 @@ import dataclasses
 import datetime as dt
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -84,6 +85,7 @@ class LoadExampleTest(unittest.TestCase):
         self.assertTrue(rx.fullmatch('OPS-123456'))
         self.assertIsNone(rx.fullmatch('OPS-1234567'))
         self.assertIsNone(rx.fullmatch('HR-1'))
+        self.assertEqual(profile.load(EXAMPLE).org.ticket_pattern(), profile.load(EXAMPLE).org.ticket_ref)
 
 
 class OwnerValidationTest(unittest.TestCase):
@@ -201,6 +203,8 @@ class OrgValidationTest(unittest.TestCase):
         org = profile.parse_org({'schema': profile.ORG_SCHEMA, 'name': 'Solo'})
         self.assertEqual(org.tracker, 'none')
         self.assertIsNone(org.ticket_ref_re())
+        self.assertEqual(org.ticket_pattern(), profile.NO_TICKET)
+        self.assertIsNone(re.search(org.ticket_pattern(), 'PM-1 OPS-12'))
         self.assertEqual(dict(org.channels), {})
 
     def test_case_sensitive_reference(self):

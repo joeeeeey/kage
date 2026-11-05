@@ -184,8 +184,8 @@ class GenerateTest(Base):
         self.assertEqual((d.owner.key, d.owner.slack_workspace, d.owner.slack_user), ('mira', TEAM, OWNER))
         self.assertEqual((d.owner.assistant_slack_bot_user, d.owner.assistant_slack_app), (BOT_USER, APP_ID))
         self.assertEqual((d.owner.slack_workspace_url, d.org.tracker), (URL, 'none'))
-        rx = d.org.ticket_ref_re()
-        self.assertFalse(any(rx.search(t) for t in ('', 'PM-1', 'OPS-12', 'none', '(?!)')))
+        self.assertIsNone(d.org.ticket_ref_re())  # O1c5a: tracker none writes no pattern; the units match nothing
+        self.assertNotIn('ref', json.loads((t / 'deploy/org.json').read_text())['tickets'])
         lock = json.loads((t / 'kage.lock').read_text())
         self.assertEqual(lock['kage']['version'], kage.__version__)
         self.assertEqual(sorted(lock['packs']), ['default.access', 'mira.playbook'])
@@ -196,6 +196,11 @@ class GenerateTest(Base):
         a.verify()
         a.bridge.pack('default.access')
         a.bridge.pack('mira.playbook')
+        with mock.patch.dict(os.environ, {'HOME': str(self.home)}):
+            units = {name: a.leaf(name) for name in ('intake', 'task_lifecycle')}
+        for rx in (units['intake'].TASK_REF_RE, units['task_lifecycle'].LINEAR_TASK_RE,
+                   units['task_lifecycle'].TICKET_ID_RE):
+            self.assertFalse(any(rx.search(text) for text in ('', 'PM-1', 'OPS-12', 'pm-1-task', 'none', '(?!)')), rx)
         self.assertEqual(stat.S_IMODE(init.state_dir('mira', self.home).stat().st_mode), 0o700)
         self.assertTrue((self.home / 'kage-tasks').is_dir())
         with sqlite3.connect(init.state_dir('mira', self.home) / 'state.sqlite') as db:

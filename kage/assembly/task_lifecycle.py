@@ -13,8 +13,8 @@ import uuid
 kage_bridge = _app.bridge
 SHANGHAI = kage_bridge.deployment().owner.tz()
 _TICKET_FLAGS = '(?i)' if kage_bridge.deployment().org.ticket_ref_ignorecase else ''
-LINEAR_TASK_RE = re.compile(_TICKET_FLAGS + '^' + kage_bridge.deployment().org.ticket_ref + '(?:$|-)')
-TICKET_ID_RE = re.compile(_TICKET_FLAGS + kage_bridge.deployment().org.ticket_ref)
+LINEAR_TASK_RE = re.compile(_TICKET_FLAGS + '^' + kage_bridge.deployment().org.ticket_pattern() + '(?:$|-)')
+TICKET_ID_RE = re.compile(_TICKET_FLAGS + kage_bridge.deployment().org.ticket_pattern())
 _k = kage_bridge.module('lifecycle', 'kage.core.lifecycle')
 _owner = kage_bridge.deployment().owner
 LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TASK_RE, ticket_id_re=TICKET_ID_RE, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), tracker_helper=_app.value('task_lifecycle.tracker_helper'))

@@ -27,6 +27,7 @@ OWNER_SCHEMA = 'kage.owner/v1'
 ORG_SCHEMA = 'kage.org/v1'
 INSTANCE_SCHEMA = 'kage.instance/v1'
 FILES = {'owner': 'owner.json', 'org': 'org.json', 'instance': 'instance.json'}
+NO_TICKET = '(?!)'  # Org.ticket_pattern() without a tracker: matches nothing
 
 LANGUAGE_RE = re.compile(r'[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*')
 OFFSET_RE = re.compile(r'([+-])(\d{2}):(\d{2})')
@@ -89,6 +90,11 @@ class Org:
         if self.ticket_ref is None:
             return None
         return re.compile(self.ticket_ref, re.I if self.ticket_ref_ignorecase else 0)
+
+    def ticket_pattern(self):
+        """The ticket reference's regex source for the units that compile it: the org's, else one that never matches
+        (an org without a tracker has no ticket to find)."""
+        return NO_TICKET if self.ticket_ref is None else self.ticket_ref
 
 
 @dataclasses.dataclass(frozen=True)

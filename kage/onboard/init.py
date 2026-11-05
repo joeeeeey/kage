@@ -57,9 +57,6 @@ PROGRAM = 'scripts/kage.py'
 ACCESS_PACK = ('default.access', 'deploy/packs/default/access.py')
 PACK_FILES = ('deploy/packs/default/access.py',)  # + deploy/packs/<key>/playbook.py
 OLD_SUFFIX = '.kage-old-'
-# tracker none: a ticket reference that matches nothing. The intake and task_lifecycle units compile the org's
-# pattern unconditionally (a profile without one does not assemble); O1c5 moves the none case into the units.
-NO_TICKETS = '(?!)'
 STAGING_PREFIX = '.kage-init-'
 ONBOARDING_TABLE = ('CREATE TABLE IF NOT EXISTS onboarding_steps (step TEXT PRIMARY KEY, status TEXT NOT NULL, '
                     'at REAL NOT NULL, detail TEXT NOT NULL)')
@@ -197,7 +194,7 @@ def files(answers, owner_record, bot_record, pin):
         'assistant': {'display': f"{who['short_name']}'s kage",
                       'slack': {'bot_user': bot_record['bot_user_id'], 'app': bot_record['app_id']}},
     }
-    org = {'schema': profile.ORG_SCHEMA, 'name': who['name'], 'tickets': {'tracker': 'none', 'ref': NO_TICKETS},
+    org = {'schema': profile.ORG_SCHEMA, 'name': who['name'], 'tickets': {'tracker': 'none'},
            'channels': {}}
     instance = {
         'schema': profile.INSTANCE_SCHEMA,
