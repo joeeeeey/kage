@@ -53,8 +53,8 @@ def _shape(name, token):
         raise TokenRefused(f'not_a_{name.replace("-", "_")}')
 
 
-def _ask(call, method, token):
-    payload, headers = call(method, token)
+def _ask(call, method, token, params=None):
+    payload, headers = call(method, token, params) if params else call(method, token)
     if not isinstance(payload, dict) or payload.get('ok') is not True:
         error = payload.get('error') if isinstance(payload, dict) else None
         raise TokenRefused(f'slack_{method}_refused_{error or "unknown"}')
@@ -73,7 +73,19 @@ def check_bot(token, *, call=slack_call, scopes=manifest.BOT_SCOPES):
         raise TokenRefused('bot_token_is_not_a_bot')
     granted, missing = _scopes(headers, scopes)
     return {'kind': 'bot', 'team_id': auth['team_id'], 'team': auth.get('team'), 'bot_user_id': auth['user_id'],
-            'bot_id': auth['bot_id'], 'scopes': granted, 'missing_scopes': missing}
+            'bot_id': auth['bot_id'], 'url': auth.get('url'), 'scopes': granted, 'missing_scopes': missing}
+
+
+def bot_app(token, bot, *, call=slack_call):
+    """O1c4: the app id of the checked bot (`bots.info`, scope users:read); the profile's `assistant.slack.app` comes
+    only from here. `bot`: check_bot's result for `token`."""
+    payload, _headers = _ask(call, 'bots.info', token, {'bot': bot['bot_id']})
+    info = payload.get('bot') or {}
+    if info.get('id') != bot['bot_id'] or info.get('user_id') not in (None, bot['bot_user_id']) or info.get('deleted'):
+        raise TokenRefused('bots_info_names_another_bot')
+    if not isinstance(info.get('app_id'), str) or not info['app_id'].startswith('A'):
+        raise TokenRefused('bots_info_has_no_app')
+    return info['app_id']
 
 
 def check_app(token, *, call=slack_call):

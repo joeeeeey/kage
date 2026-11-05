@@ -25,6 +25,9 @@ from kage.onboard.tokens import TokenRefused, slack_call
 
 SCHEMA = 'kage.identity/v1'
 RECORD, CHALLENGE = 'owner-identity.json', 'identity-challenge.json'
+BOT_SCHEMA, BOT_RECORD = 'kage.bot/v1', 'bot-identity.json'  # O1c4: the checked bot (no token)
+URL_RE, APP_RE, BOT_ID_RE = re.compile(r'https://[a-z0-9][a-z0-9-]*\.slack\.com'), re.compile(r'A[A-Z0-9]{4,20}'), \
+    re.compile(r'B[A-Z0-9]{4,20}')
 CODE_TTL = 600
 ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'  # no 0 / O / 1 / I
 TEAM_RE, USER_RE = re.compile(r'T[A-Z0-9]{4,20}'), re.compile(r'[UW][A-Z0-9]{4,20}')
@@ -139,14 +142,51 @@ def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time):
     return record
 
 
+def record_bot(state_dir, bot, app_id, *, clock=time.time):
+    """O1c4: keep the checked bot's facts for the profile (`bot`: tokens.check_bot's result; `app_id`: tokens.bot_app's):
+    workspace, workspace URL, bot user, bot id, app id. No token, no scope list."""
+    d = _private_dir(state_dir)
+    url = (bot.get('url') or '').rstrip('/')
+    record = {'schema': BOT_SCHEMA, 'team_id': bot['team_id'], 'url': url, 'bot_user_id': bot['bot_user_id'],
+              'bot_id': bot['bot_id'], 'app_id': app_id, 'verified_at': round(clock(), 3)}
+    _check_bot(record)
+    _write(d / BOT_RECORD, record)
+    return record
+
+
+def _check_bot(record):
+    if record.get('schema') != BOT_SCHEMA or not TEAM_RE.fullmatch(record.get('team_id') or '') or not URL_RE.fullmatch(
+            record.get('url') or '') or not re.fullmatch(r'[UB][A-Z0-9]{4,20}', record.get('bot_user_id') or '') \
+            or not BOT_ID_RE.fullmatch(record.get('bot_id') or '') or not APP_RE.fullmatch(record.get('app_id') or ''):
+        raise TokenRefused('bot_record_malformed')
+
+
+def _private_file(path):
+    st = os.lstat(path)
+    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
+        raise TokenRefused('identity_record_not_private')
+
+
+def load_bot(state_dir):
+    """The recorded bot, or None; a malformed record raises TokenRefused."""
+    path = Path(state_dir) / BOT_RECORD
+    if not path.exists():
+        return None
+    _private_file(path)
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except ValueError:
+        raise TokenRefused('bot_record_malformed') from None
+    _check_bot(record)
+    return record
+
+
 def load(state_dir):
     """The recorded identity, or None; a malformed record raises TokenRefused."""
     path = Path(state_dir) / RECORD
     if not path.exists():
         return None
-    st = os.lstat(path)
-    if not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) & 0o077:
-        raise TokenRefused('identity_record_not_private')
+    _private_file(path)
     record = json.loads(path.read_text(encoding='utf-8'))
     if record.get('schema') != SCHEMA or record.get('method') not in ('user_token', 'dm_code') or not TEAM_RE.fullmatch(
             record.get('team_id') or '') or not USER_RE.fullmatch(record.get('user_id') or ''):
