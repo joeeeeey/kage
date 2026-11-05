@@ -275,7 +275,7 @@ def plan(target, wanted):
             raise InitError(f'not_a_plain_file: {rel}')
         data = path.read_bytes()
         if _is_pack(rel):
-            if lock_pins.get(rel) not in (None, _sha(data)):
+            if data != wanted[rel] and lock_pins.get(rel) != _sha(data):  # only a pinned pack is kept as it is
                 raise InitError(f'pack_differs_from_its_pin: {rel}')
             out.append({'path': rel, 'action': 'keep' if data != wanted[rel] else 'same'})
         else:

@@ -330,6 +330,18 @@ class RerunTest(Base):
         identity.prove_by_user_token(init.state_dir('mira', self.home), {'team_id': TEAM, 'user_id': OWNER})
         self.assertEqual({p: p.read_bytes() for p in self.target.rglob('*') if p.is_file()}, before)
 
+    def test_an_unpinned_pack_is_never_pinned_by_a_rerun(self):
+        lock = json.loads((self.target / 'kage.lock').read_text())
+        del lock['packs']['mira.playbook']
+        (self.target / 'kage.lock').write_text(json.dumps(lock))
+        self.assertEqual(self.init(apply=True)['applied'], True)  # the template's own bytes: pinned again
+        pack = self.target / 'deploy/packs/mira/playbook.py'
+        pack.write_bytes(pack.read_bytes() + b'# not pinned anywhere\n')
+        (self.target / 'kage.lock').write_text(json.dumps(lock))  # the lock again without that pack's pin
+        with self.assertRaises(init.InitError) as cm:
+            self.init(apply=True)
+        self.assertIn('pack_differs_from_its_pin', str(cm.exception))
+
     def test_another_owners_deployment_at_the_target_refuses(self):
         state = init.state_dir('lena', self.home)
         init._private_mkdir(state)
