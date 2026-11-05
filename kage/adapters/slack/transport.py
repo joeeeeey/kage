@@ -33,7 +33,7 @@ class Transport:
                  user_token_file_env='SLACK_USER_TOKEN_FILE', user_token_file='~/.config/slack/token',
                  bot_token_env='SLACK_BOT_TOKEN', bot_token_file_env='SLACK_BOT_TOKEN_FILE',
                  bot_token_file='~/.config/slack/bot-token', post_send=None, call=None, emoji_example='eyes',
-                 secret_store=None):
+                 secret_store=None, write_guard=None):
         self.guard_env, self.owner_name, self.expected_bot_user = guard_env, owner_name, expected_bot_user
         self.user_token_env, self.user_token_file_env, self.user_token_file = (user_token_env, user_token_file_env,
                                                                                user_token_file)
@@ -42,6 +42,7 @@ class Transport:
         self.call = call or self.api_call
         self.emoji_example = emoji_example  # the second name in the add_reactions usage error (a deployment's own)
         self.secret_store = secret_store  # O1c3: tokens from the owner's secrets port instead of env / files
+        self.write_guard = write_guard  # O2b: (endpoint, payload) -> None, or raises (kage.core.mode.WriteGuard)
 
     def offline(self):
         return os.environ.get(self.guard_env) == '1'
@@ -52,6 +53,8 @@ class Transport:
 
     def api_call(self, endpoint, token, params=None, json_body=None):
         self.require_live(endpoint)
+        if self.write_guard is not None:
+            self.write_guard(endpoint, json_body if json_body is not None else params)
         url = f'{API_BASE}/{endpoint}'
         headers = {'Authorization': f'Bearer {token}'}
         if json_body is not None:
@@ -73,6 +76,8 @@ class Transport:
 
     def api_call_form(self, endpoint, token, fields):
         self.require_live(endpoint)
+        if self.write_guard is not None:
+            self.write_guard(endpoint, fields)
         url = f'{API_BASE}/{endpoint}'
         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/x-www-form-urlencoded'}
         payload = {k: v for k, v in fields.items() if v is not None and v != ''}

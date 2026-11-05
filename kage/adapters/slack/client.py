@@ -35,7 +35,8 @@ class Client:
         """`token_files`: the transport's bot_token_file, user_token_file_env and bot_token_file_env, when a deployment
         names its own (O1c2: Kage's own leaf scopes them to the owner); otherwise the transport's defaults. Or
         `secret_store` (O1c3: Kage's own leaf), and the tokens come only from that store."""
-        unknown = set(token_files) - {'bot_token_file', 'user_token_file_env', 'bot_token_file_env', 'secret_store'}
+        unknown = set(token_files) - {'bot_token_file', 'user_token_file_env', 'bot_token_file_env', 'secret_store',
+                                      'write_guard'}
         if unknown:
             raise TypeError('unknown token file options: ' + ', '.join(sorted(unknown)))
         self.followup_helper = followup_helper

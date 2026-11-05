@@ -28,6 +28,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 
@@ -146,6 +147,7 @@ class Services:
 
     def start(self, doctor):
         self.gate(doctor)
+        self.observe_after_doctor()
         self.agents.mkdir(parents=True, exist_ok=True)
         for name, _ in ARGS:
             svc = self.spec['services'][name]
@@ -160,6 +162,17 @@ class Services:
             if loaded.returncode != 0:
                 raise ServicesError(f'bootstrap_failed: {name} (launchctl exit {loaded.returncode})')
         return self.status()
+
+    def observe_after_doctor(self):
+        """O2a: the required doctor checks passed, so an `installed` instance moves to observe-only before its services
+        start (any other mode stays: a restart never changes it)."""
+        from kage.core import mode as _mode
+        from kage.onboard.init import state_dir
+        path = state_dir(self.key, _home()) / 'state.sqlite'
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with sqlite3.connect(str(path)) as db:
+            if _mode.read(db, default='installed') == 'installed':
+                _mode.write(db, 'observe', 'services', 'the required doctor checks pass')
 
     def stop(self):
         for name, _ in ARGS:

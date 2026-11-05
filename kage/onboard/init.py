@@ -46,6 +46,7 @@ import time
 
 import kage
 from kage import packs, profile
+from kage.core import mode as _mode
 from kage.onboard import answers as _answers
 from kage.onboard import dispatch_files
 from kage.onboard import services as _services
@@ -473,6 +474,8 @@ def run(answers, *, target=None, apply=False, release=None, home=None):
         os.replace(tmp, path)
     record_step(state_dir(key, home) / 'state.sqlite', 'init', 'done',
                 {'release': pin['version'], 'changed': len(changes), 'git': report['git']})
+    with sqlite3.connect(state_dir(key, home) / 'state.sqlite') as db:  # O2a: a new instance starts `installed`
+        _mode.write(db, 'installed', 'init', 'kage init')
     report['applied'] = True
     return report
 

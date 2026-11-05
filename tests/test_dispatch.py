@@ -113,6 +113,46 @@ class DispatcherTest(unittest.TestCase):
         d.cycle(now=101.0)
         self.assertEqual(started, ['d0', 'd1'])
 
+    def test_outside_active_mode_no_run_starts_and_what_would_have_is_recorded(self):
+        """O2b: the instance mode gates every start; a store without the row (predates O2) starts as before."""
+        import contextlib
+        import json
+        import tempfile
+        from pathlib import Path
+        from kage.core import mode as M
+        from kage.core import worker_config as W
+        defaults = json.loads((Path(__file__).with_name('fixtures') / 'worker_defaults.json').read_text())
+        tmp = tempfile.mkdtemp()
+        raw = json.loads(json.dumps(defaults))
+        raw['dispatch'].update(enabled=True)
+        (Path(tmp) / 'config.json').write_text(json.dumps(raw))
+        wc = W.WorkerConfig('en', defaults=defaults, config_env='KAGE_TEST_WORKER_CONFIG',
+                            default_path=Path(tmp) / 'config.json', owner_key='owner', owner_name='Mira')
+        rt = types.SimpleNamespace(__file__='/nonexistent/runtime.py', liveness=None, worker_config=wc,
+                                   _meta_error=lambda *a: None, transaction=lambda db: contextlib.nullcontext())
+        d = D.Dispatcher(self.db, '/tmp/kage-test.sqlite', rt, probe=object(), spawn=lambda *a: 1,
+                         pid_start=lambda pid: None, killer=lambda pid, sig: None, clock=lambda: 100.0, core=self.core)
+        self.db.execute("INSERT INTO dispatches (dispatch_id, task_key, task_id, task_path, state, trigger, reason, plan, "
+                        "created_at, updated_at) VALUES ('d0', 'release-task', 'release-task', '/x', 'waiting', 'event', "
+                        "'events', '[]', 1, 1)")
+        started = []
+        d.start = lambda dispatch_id, now=None: started.append(dispatch_id)
+        self.db.execute('CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        M.write(self.db, 'installed', 'init')
+        M.write(self.db, 'observe', 'services')
+        d.cycle(now=100.0)
+        d.cycle(now=101.0)
+        self.assertEqual(started, [])
+        shadow = M.overview(self.db)['shadow']
+        self.assertEqual((shadow['counts'], shadow['recent'][0]['target']), ({'dispatch': 1}, 'release-task'))
+        M.write(self.db, 'active', 'owner_button')
+        d.cycle(now=102.0)
+        self.assertEqual(started, ['d0'])
+        self.db.execute("DELETE FROM runtime_meta WHERE key='instance.mode'")
+        started.clear()
+        d.cycle(now=103.0)
+        self.assertEqual(started, ['d0'])  # no row: as before O2
+
 
 if __name__ == '__main__':
     unittest.main()

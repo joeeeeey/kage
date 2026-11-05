@@ -617,6 +617,11 @@ class CliCore:
                                             'posts nothing, changes nothing')
         doc.add_argument('--offline', action='store_true', help='No Slack call (skips the two auth.test reads)')
         doc.add_argument('--json', action='store_true', help='The report as JSON')
+        mode_p = sub.add_parser('mode', help=f'O2: the instance mode (installed / observe / active / paused) and the actions '
+                                             f'observe-only mode recorded instead of doing them; changes from {self.name}\'s '
+                                             'own terminal only (observe -> active is the start card\'s button)')
+        mode_p.add_argument('change', nargs='?', choices=('show', 'observe', 'pause', 'resume'), default='show')
+        mode_p.add_argument('--reason', default='')
         man = sub.add_parser('manifest', help='Onboarding: print the Slack app manifest for this deployment (paste it at '
                                               'api.slack.com/apps) and the steps after it; reads nothing, posts nothing')
         man.add_argument('--as-owner', action='store_true', help='Add the user-token scopes (speak as the owner, read the '
@@ -806,6 +811,27 @@ class CliCore:
                     db.close()
             print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else doctor.text(report))
             sys.exit(0 if report['ok'] else 1)
+        if args.command == 'mode':  # O2a
+            from kage.core import mode as _mode
+            db = sqlite3.connect(str(db_path), timeout=10)
+            try:
+                if args.change != 'show':
+                    if any(os.environ.get(k) for k in ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')):
+                        print(json.dumps({'error': 'ValueError', 'detail': 'mode_changes_only_from_the_owners_terminal'}),
+                              file=sys.stderr)
+                        sys.exit(1)
+                    new = {'observe': 'observe', 'pause': 'paused', 'resume': 'active'}[args.change]
+                    if args.change == 'resume' and _mode.read(db) != 'paused':
+                        print(json.dumps({'error': 'ValueError', 'detail': 'resume_is_only_from_paused'}), file=sys.stderr)
+                        sys.exit(1)
+                    _mode.write(db, new, 'owner', args.reason or 'owner terminal')
+                print(json.dumps(_mode.overview(db), ensure_ascii=False, indent=2))
+            except ValueError as exc:
+                print(json.dumps({'error': 'ValueError', 'detail': str(exc)}), file=sys.stderr)
+                sys.exit(1)
+            finally:
+                db.close()
+            return
         db = self.rt.connect(db_path)
         if args.command.startswith('control-'):
             result = self.control_command(args, db, db_path)

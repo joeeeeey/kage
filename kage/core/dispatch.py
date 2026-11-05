@@ -20,6 +20,7 @@ import time
 import uuid
 
 from kage import locale
+from kage.core import mode as _mode
 from kage.core.worker_config import control_settings as _control_settings
 
 HELD = 'dispatched'
@@ -895,8 +896,15 @@ class Dispatcher:
             return
         if not config['dispatch']['enabled']:
             return
-        for d in [dict(r) for r in self.db.execute("SELECT * FROM dispatches WHERE state='waiting' AND wait_reason IS NULL "
-                                                   'AND coalesce(next_at,0)<=? ORDER BY created_at', (now,))]:
+        waiting = [dict(r) for r in self.db.execute("SELECT * FROM dispatches WHERE state='waiting' AND wait_reason IS NULL "
+                                                    'AND coalesce(next_at,0)<=? ORDER BY created_at', (now,))]
+        current = _mode.read(self.db)  # O2b: a store without the row predates O2 (active: as before)
+        if current != 'active':
+            for d in waiting:  # observe-only: no run starts; what would have started is recorded
+                _mode.shadow(self.db, 'dispatch', d['task_key'], f"start a run ({d['trigger']}: {d['reason'] or ''})",
+                             f'mode_{current}', now=now)
+            return
+        for d in waiting:
             if self.held_for_install(config, d['task_key']):
                 continue
             try:

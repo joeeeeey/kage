@@ -564,6 +564,11 @@ class AcceptanceTest(Base):
         doctor = self.program('doctor', '--offline')
         text = doctor.stdout + doctor.stderr
         self.assertIn('ok    services.running: 3 / 3 running', text)
+        # O2a: init wrote `installed`, `services start` (the required checks pass) moved it to observe-only
+        mode = json.loads(self.program('mode').stdout)
+        self.assertEqual((mode['mode'], [r['new'] for r in reversed(mode['log'])]), ('observe', ['installed', 'observe']))
+        refused = self.program('mode', 'resume')
+        self.assertEqual((refused.returncode, json.loads(refused.stderr)['detail']), (1, 'resume_is_only_from_paused'))
         self.assertIn('doctor: all required checks pass', text, text[-3000:])
         task = self.home / 'kage-tasks/t1'
         task.mkdir()
