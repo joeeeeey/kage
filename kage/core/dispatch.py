@@ -21,6 +21,7 @@ import uuid
 
 from kage import locale
 from kage.core import mode as _mode
+from kage.core import observe as _observe
 from kage.core.worker_config import control_settings as _control_settings
 
 HELD = 'dispatched'
@@ -903,6 +904,10 @@ class Dispatcher:
             for d in waiting:  # observe-only: no run starts; what would have started is recorded
                 _mode.shadow(self.db, 'dispatch', d['task_key'], f"start a run ({d['trigger']}: {d['reason'] or ''})",
                              f'mode_{current}', now=now)
+            try:  # O2c: in observe mode the intake tasks' bursts get a no-tools triage call instead
+                _observe.step(self, waiting, config, now)
+            except Exception as exc:  # noqa: BLE001 - observing never stops the loop
+                self.rt._meta_error(self.db, 'observe_triage_error', exc)
             return
         for d in waiting:
             if self.held_for_install(config, d['task_key']):

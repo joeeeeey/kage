@@ -123,5 +123,9 @@ None of this alters existing profiles, stores, configuration files or services.
   with their own Slack transport keep it unguarded.
 - The start card (code-owned, button-only, daily while observing): counts per kind and the latest shadow actions,
   [开始干活] / [再看一天].
-- Not yet (release B): triage with a no-tools model call in observe mode, the console's `/onboarding` page, owner
-  corrections of shadow decisions.
+- Triage while observing (O2c, release B1): for each held intake dispatch one no-tools call of the inbox model (the
+  provider probe's tool-off arguments, a private scratch directory, the burst's own messages re-read from Slack) answers
+  one JSON line `{route: task | reply | log | ignore, why}`; a shadow `triage` row per burst (never the text), the held
+  events resolved `observe`, the dispatch `observed`; one call at a time, killed after 3 minutes. The start card shows
+  them as "would start a task: …".
+- Not yet (release B2): the console's `/onboarding` page, owner corrections of shadow decisions.

@@ -221,9 +221,19 @@ class StartCards:
     def digest(self, db, since=None):
         where, args = ('WHERE at>=?', (since,)) if since else ('', ())
         counts = dict(db.execute(f'SELECT kind, count(*) FROM shadow_actions {where} GROUP BY kind', args))
-        latest = [r[0] for r in db.execute(f'SELECT what FROM shadow_actions {where} ORDER BY at DESC LIMIT ?',
-                                           (*args, DIGEST_LINES))]
+        latest = [self.line(kind, what) for kind, what in db.execute(
+            f'SELECT kind, what FROM shadow_actions {where} ORDER BY at DESC LIMIT ?', (*args, DIGEST_LINES))]
         return counts, latest
+
+    def line(self, kind, what):
+        """One shadow action as a card line: a triage row (O2c) as its route and why, any other row as recorded."""
+        if kind == 'triage':
+            try:
+                value = json.loads(what)
+                return self.msg('mode.triage_line', route=self.msg(f"mode.route.{value['route']}"), why=value['why'] or '')
+            except (ValueError, KeyError, TypeError, LookupError):
+                pass
+        return what
 
     def post(self, rt, db, now):
         owner = _owner_user(rt)

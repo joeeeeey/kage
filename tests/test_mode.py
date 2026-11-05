@@ -150,6 +150,8 @@ class StartCardTest(unittest.TestCase):
         self.assertIn(f'<@{self.OWNER}> Your Kage is still in observe-only mode: 2 things', card['question'])
         self.assertIn('1 agent runs', card['question'])
         self.assertIn('reply "on it" in #general', card['question'])
+        self.assertEqual(self.cards_core.line('triage', json.dumps({'burst': 'b1', 'route': 'task', 'why': 'Needs work.'})),
+                         'would start a task: Needs work.')  # O2c rows read as their route and why
         self.assertEqual([o.split(':')[-1] for o in card['options']], ['approve', 'other'])
         self.assertEqual((card['kind'], card['never_auto']), ('mode_start', True))
         self.assertIsNotNone(self.db.execute("SELECT 1 FROM button_only_cards WHERE event_id='ev0'").fetchone())
