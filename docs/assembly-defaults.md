@@ -112,3 +112,16 @@ None of this alters existing profiles, stores, configuration files or services.
 - While dispatch cannot run the control task (`dispatch.enabled` false, or the control task paused), a control message
   from Slack gets one short note in its thread at once, and its answer clock waits (a fresh one after the resume). A
   control run that reaches a message after its `timeout` still answers or relays it; other failures stay final.
+
+## Observe-only mode (O2, release A)
+
+- `instance.mode` (`runtime_meta`): `installed` (kage init) → `observe` (`services start` after its doctor gate) →
+  `active` (only the owner's own click on the start card) ↔ `paused`; `mode show | observe | pause | resume` from the
+  owner's terminal. A store without the row (an adopted deployment) is `active`: nothing changes for it.
+- While not `active`: the dispatcher starts no run, and the standalone Slack leaf lets writes through only to the
+  owner's verified private card destination; everything else is a `shadow_actions` row (`ShadowedWrite`). Deployments
+  with their own Slack transport keep it unguarded.
+- The start card (code-owned, button-only, daily while observing): counts per kind and the latest shadow actions,
+  [开始干活] / [再看一天].
+- Not yet (release B): triage with a no-tools model call in observe mode, the console's `/onboarding` page, owner
+  corrections of shadow decisions.

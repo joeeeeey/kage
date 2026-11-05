@@ -21,6 +21,7 @@ import urllib.error
 
 from kage import locale
 from kage.core import control as _control
+from kage.core import mode as _mode
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -149,6 +150,7 @@ class LoopCore:
         self.rt = rt
         self.key, self.name = owner_key, owner_name
         self.control = _control.Control(language, owner_key=owner_key, owner_name=owner_name)  # Phase 2 C1
+        self.start_cards = _mode.StartCards(language, owner_key=owner_key, owner_name=owner_name)  # O2d
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1131,6 +1133,10 @@ class LoopCore:
                     self.control.settle(self.rt, db)  # C1b: the owner's click on a confirm card runs the relay / launch
                 except Exception as exc:  # noqa: BLE001
                     self._meta_error(db, 'control_error', exc)
+                try:
+                    self.start_cards.step(self.rt, db)  # O2d: observe-only mode's daily start card (one read while active)
+                except Exception as exc:  # noqa: BLE001
+                    self._meta_error(db, 'mode_card_error', exc)
             running = self.rt.due_watches(db, time.time())
             self.read_cache.clear()
             for w in running:

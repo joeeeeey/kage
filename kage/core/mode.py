@@ -11,6 +11,10 @@ reaction, upload, channel change) goes out only to a destination the private-des
 owner's own card channel or IM), every other one becomes a `shadow_actions` row {kind, target, what, why} and raises
 `ShadowedWrite`; the dispatcher starts no run (its would-be runs are shadow rows too). Enforced in the transport and
 the dispatcher, never in prompts.
+
+The start card (O2d): while the mode is `observe`, once a day a code-owned, button-only card to the owner's private
+destination says what observe-only mode recorded (counts per kind, the latest lines) with [开始干活] / [再看一天]; only
+the owner's own click on [开始干活] moves the mode to `active`.
 """
 from __future__ import annotations
 import hashlib
@@ -18,6 +22,8 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+
+from kage import locale
 
 MODES = ('installed', 'observe', 'active', 'paused')
 KEY = 'instance.mode'
@@ -172,3 +178,124 @@ class WriteGuard:
         finally:
             db.close()
         raise ShadowedWrite(f'observe_mode:{mode}:{endpoint}')
+
+
+CARD_SCHEMA = '''
+  CREATE TABLE IF NOT EXISTS mode_cards (event_id TEXT PRIMARY KEY, posted_at REAL NOT NULL, state TEXT NOT NULL,
+                                         settled_at REAL);
+  CREATE TABLE IF NOT EXISTS button_only_cards (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, at REAL NOT NULL);
+'''
+DIGEST_SECONDS = 86400   # one start card a day while the mode stays observe
+CARD_TTL = 2 * 86400     # an unanswered card expires; the next one comes with the next day's digest
+DIGEST_LINES = 5
+
+
+def _owner_user(rt):
+    from kage.core import control as _control
+    return _control._owner_user(rt)
+
+
+class StartCards:
+    """O2d: the daily start card of an observe-only instance (a supervisor step; nothing while the mode is not observe,
+    so an active instance only reads one row)."""
+
+    def __init__(self, language, *, owner_key, owner_name):
+        self.language, self.key, self.name = language, owner_key, owner_name
+
+    def msg(self, key, **values):
+        return locale.message(self.language, key, **values)
+
+    def step(self, rt, db, now=None):
+        if read(db) != 'observe':
+            return {}
+        now = time.time() if now is None else now
+        db.executescript(SCHEMA + CARD_SCHEMA)
+        out = {'settled': self.settle(rt, db, now)}
+        if read(db) == 'observe':
+            open_card = db.execute("SELECT 1 FROM mode_cards WHERE state='open'").fetchone()
+            last = db.execute('SELECT max(posted_at) FROM mode_cards').fetchone()[0]
+            if not open_card and (last is None or now - last >= DIGEST_SECONDS):
+                out['posted'] = self.post(rt, db, now)
+        return out
+
+    def digest(self, db, since=None):
+        where, args = ('WHERE at>=?', (since,)) if since else ('', ())
+        counts = dict(db.execute(f'SELECT kind, count(*) FROM shadow_actions {where} GROUP BY kind', args))
+        latest = [r[0] for r in db.execute(f'SELECT what FROM shadow_actions {where} ORDER BY at DESC LIMIT ?',
+                                           (*args, DIGEST_LINES))]
+        return counts, latest
+
+    def post(self, rt, db, now):
+        owner = _owner_user(rt)
+        counts, latest = self.digest(db)
+        total = sum(counts.values())
+        summary = self.msg('mode.card.counts_sep').join(
+            self.msg(f'mode.kind.{k}', n=n) if f'mode.kind.{k}' in locale.catalog(self.language)['messages'] else f'{k} {n}'
+            for k, n in sorted(counts.items())) or self.msg('mode.card.nothing')
+        lines = '\n'.join('• ' + ' '.join(str(w).split())[:140] for w in latest) or self.msg('mode.card.no_lines')
+        question = self.msg('mode.card.question', owner=f'<@{owner}>' if owner else self.name, total=total,
+                            summary=summary, lines=lines)
+        card = rt.supervisor_card(db, question, [f"start={self.msg('mode.card.start')}:approve",
+                                                 f"later={self.msg('mode.card.later')}:other"],
+                                  never_auto=True, kind='mode_start', refs={'mode': 'observe'}, now=now,
+                                  first_line_max=None)
+        with db:
+            db.execute("INSERT OR IGNORE INTO mode_cards (event_id, posted_at, state) VALUES (?, ?, 'open')",
+                       (card['event_id'], now))
+            db.execute('INSERT OR IGNORE INTO button_only_cards VALUES (?, ?, ?)', (card['event_id'], 'mode_start', now))
+        return card['event_id']
+
+    def settle(self, rt, db, now):
+        """Each open start card -> one outcome: only the owner's own button click (provenance slack_button, role approver)
+        on [开始干活] moves observe -> active; [再看一天] keeps observing; anything else is refused; no click within
+        CARD_TTL -> expired. The claim (open -> deciding) makes a second supervisor do nothing."""
+        done = []
+        owner = _owner_user(rt)
+        for c in [dict(zip(('event_id', 'posted_at'), r)) for r in db.execute(
+                "SELECT event_id, posted_at FROM mode_cards WHERE state='open' ORDER BY posted_at")]:
+            try:
+                d = db.execute('SELECT d.actor, d.provenance, d.role, d.choice, c.options FROM decisions d JOIN '
+                               'escalation_cards c ON c.event_id=d.event_id WHERE d.event_id=?', (c['event_id'],)).fetchone()
+            except sqlite3.OperationalError:
+                d = None
+            if d is None and now - c['posted_at'] < CARD_TTL:
+                continue
+            with db:
+                claimed = db.execute("UPDATE mode_cards SET state='deciding' WHERE event_id=? AND state='open'",
+                                     (c['event_id'],))
+            if claimed.rowcount != 1:
+                continue
+            if d is None:
+                state = 'expired'
+            else:
+                actor, provenance, role, choice, options = d
+                kind = rt.buttons.resolve_choice(choice, rt.buttons.card_model(options))['kind']
+                if not owner or actor != owner or provenance != 'slack_button' or role != 'approver':
+                    state = 'refused'
+                elif kind == 'approve':
+                    try:
+                        write(db, 'active', 'owner_button', 'the start card', now=now, expect='observe')
+                        state = 'started'
+                    except ValueError:  # the mode changed since the card was posted
+                        state = 'stale'
+                else:
+                    state = 'later'
+            with db:
+                db.execute('UPDATE mode_cards SET state=?, settled_at=? WHERE event_id=?', (state, now, c['event_id']))
+            self._result(rt, db, c['event_id'], self.msg(f'mode.result.{state}'))
+            done.append({'event_id': c['event_id'], 'state': state})
+        return done
+
+    @staticmethod
+    def _result(rt, db, card_event, text):
+        """Best effort: a bot line in the card's thread saying what happened."""
+        try:
+            esc = db.execute('SELECT thread_ts FROM escalations WHERE event_id=?', (card_event,)).fetchone()
+            card = db.execute('SELECT channel FROM escalation_cards WHERE event_id=?', (card_event,)).fetchone()
+            if not esc or not card or not esc[0]:
+                return None
+            sent = rt.slack.api_call('chat.postMessage', rt.api_identity(bot=True), json_body={
+                'channel': card[0], 'thread_ts': esc[0], 'text': text, 'unfurl_links': False})
+            return (sent or {}).get('ts')
+        except Exception:  # noqa: BLE001 - the outcome stands; only the receipt is missing
+            return None
