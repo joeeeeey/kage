@@ -61,7 +61,8 @@ class ServeDashboardTest(Base):
         self.assertEqual((values['owner_name'], values['owner_key'], values['tz_name']), ('Mira', 'mira', 'Europe/Berlin'))
         self.assertEqual(values['service_label'], 'pro.kage.mira.followup')
         self.assertEqual(values['tail_command'], 'scripts/kage.py tail')
-        self.assertEqual(dashboard.page_language('en'), dashboard.FALLBACK_PAGES)
+        self.assertEqual(dashboard.page_language('en'), 'en')                       # O1e: English pages exist
+        self.assertEqual(dashboard.page_language('fr'), dashboard.FALLBACK_PAGES)
 
     def test_every_read_api_answers_on_loopback(self):
         _core, server_class = dashboard.build(self.assembly)

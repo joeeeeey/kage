@@ -44,8 +44,9 @@ def core(language='en', web=None):
 
 class PagesTest(unittest.TestCase):
     def test_every_sentinel_is_filled_once(self):
-        self.assertEqual(W.languages(), ['zh-CN'])
-        self.assertEqual(set(W.sentinels('zh-CN')), set(VALUES))
+        self.assertEqual(W.languages(), ['en', 'zh-CN'])  # O1e: English pages
+        for language in W.languages():
+            self.assertEqual(set(W.sentinels(language)), set(VALUES), language)
         pages = W.Pages.for_owner('zh-CN', VALUES)
         ops = (pages / 'ops.js').read_bytes().decode()
         self.assertNotIn('{{', ops)
@@ -56,6 +57,59 @@ class PagesTest(unittest.TestCase):
             (pages / 'assets' / '../ops.js').read_bytes()
         once = W.Pages.for_owner('zh-CN', {**VALUES, 'owner_name': '{{owner_key}}'})
         self.assertIn('{{owner_key}}', (once / 'index.html').read_bytes().decode())  # a value is never re-read
+
+    def test_the_english_pages_are_the_chinese_pages_in_english(self):
+        """O1e: pages/en/ has the files of pages/zh-CN/ with the same structure (sentinels and their counts, HTML tags with
+        their ids / classes / links / data-* attributes, the API paths, element lookups and data-* names the scripts
+        use) and no Chinese text: a line with Han or full-width signs is only one the zh-CN page has verbatim (a
+        character class in code: text width, Markdown punctuation)."""
+        from html.parser import HTMLParser
+        han = re.compile('[\u3400-\u4dbf\u4e00-\u9fff\uff00-\uffef\u3000-\u303f]')
+        zh_root, en_root = W.ROOT / 'zh-CN', W.ROOT / 'en'
+        files = sorted(p.relative_to(zh_root).as_posix() for p in zh_root.rglob('*') if p.is_file())
+        self.assertEqual(files, sorted(p.relative_to(en_root).as_posix() for p in en_root.rglob('*') if p.is_file()))
+
+        class Shape(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.items = []
+
+            def handle_starttag(self, tag, attrs):
+                keep = ('id', 'class', 'href', 'src', 'rel', 'type', 'name', 'for', 'role', 'hidden')
+                self.items.append((tag, tuple(sorted((k, v if k in keep or k.startswith('data-') else None)
+                                                     for k, v in attrs if k != 'lang'))))
+
+        uses = re.compile(r"/api/[a-z0-9_/-]+|getElementById\(\s*['\"][^'\"]+|querySelector(?:All)?\(\s*['\"][^'\"]+"
+                          r"|data-[a-z-]+|\{\{[a-z_A-Z]+\}\}")
+        for rel in files:
+            zh, en = zh_root / rel, en_root / rel
+            if zh.suffix not in ('.js', '.html', '.css', '.json'):
+                self.assertEqual(zh.read_bytes(), en.read_bytes(), rel)
+                continue
+            zt, et = zh.read_text(encoding='utf-8'), en.read_text(encoding='utf-8')
+            zh_lines = set(zt.splitlines())
+            left = [line for line in et.splitlines() if han.search(line) and line not in zh_lines]
+            self.assertEqual(left, [], rel)
+            self.assertEqual(sorted(uses.findall(zt)), sorted(uses.findall(et)), rel)
+            if zh.suffix == '.html':
+                shapes = []
+                for text in (zt, et):
+                    parser = Shape()
+                    parser.feed(text)
+                    shapes.append(parser.items)
+                self.assertEqual(shapes[0], shapes[1], rel)
+                self.assertIn('<html lang="en">', et)
+
+    @unittest.skipUnless(shutil.which('node'), 'node is not installed')
+    def test_every_rendered_page_script_parses(self):
+        for language in W.languages():
+            pages = W.Pages.for_owner(language, VALUES)
+            with tempfile.TemporaryDirectory() as tmp:
+                for name in sorted(p.name for p in (W.ROOT / language).glob('*.js')):
+                    path = Path(tmp) / name
+                    path.write_bytes((pages / name).read_bytes())
+                    run = subprocess.run(['node', '--check', str(path)], capture_output=True, text=True, timeout=60)
+                    self.assertEqual(run.returncode, 0, (language, name, run.stderr[-600:]))
 
     def test_missing_values_and_languages(self):
         with self.assertRaises(W.PagesError):
@@ -195,7 +249,7 @@ class ConsoleShellTest(unittest.TestCase):
 
     def test_no_page_script_writes_html(self):
         """Data reaches the page only as text nodes and checked attributes (createElement / textContent)."""
-        for path in sorted((Path(W.__file__).parent / 'pages' / 'zh-CN').glob('*.js')):
+        for path in sorted((Path(W.__file__).parent / 'pages').glob('*/*.js')):
             text = path.read_text(encoding='utf-8')
             for sink in (r'\.innerHTML\b', r'\.outerHTML\b', r'insertAdjacentHTML', r'document\.write',
                          r'\beval\s*\(', r'new\s+Function\b', r'DOMParser', r'createContextualFragment'):
