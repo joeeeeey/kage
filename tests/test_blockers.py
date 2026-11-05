@@ -14,6 +14,27 @@ def blockers(language='en', key='owner', name='Mira'):
 
 
 class BlockersTest(unittest.TestCase):
+    def test_gap_proposals_are_written_in_the_owners_language(self):
+        # O1d (G2): the gate passes an English owner's English texts (the next check, the slug, refuses here) and keeps
+        # a Chinese owner's Han requirement with the same error as before
+        from unittest import mock
+
+        def items(c, title, rationale, brief):
+            doc = {'schema': c.proposals_schema_id, 'proposals': [{'system': 'wiki', 'operation': 'add a page',
+                                                                    'title_zh': title, 'rationale_zh': rationale,
+                                                                    'brief_zh': brief}]}
+            c._proposal_items(mock.MagicMock(), None, doc, {'max_skill_proposals_per_run': 3}, 0)
+
+        english = ('Wiki page skill', 'Pages are added by hand every week', 'Build a skill that adds a wiki page.')
+        with self.assertRaisesRegex(ValueError, 'slug'):
+            items(blockers('en'), *english)
+        with self.assertRaisesRegex(ValueError, '^proposal_0_title_rationale_and_brief_must_be_in_the_owner_language$'):
+            items(blockers('en'), '42', *english[1:])
+        with self.assertRaisesRegex(ValueError, '^proposal_0_title_rationale_and_brief_must_be_chinese$'):
+            items(blockers('zh-CN'), *english)
+        with self.assertRaisesRegex(ValueError, 'slug'):
+            items(blockers('zh-CN'), 'wiki 页面技能', '每周手工加页面', '做一个加 wiki 页面的技能。')
+
     def test_owner_bound_values(self):
         B = blockers()
         self.assertIn('owner_manual', B.resolutions)

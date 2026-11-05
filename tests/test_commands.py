@@ -32,6 +32,22 @@ class CommandsTest(unittest.TestCase):
                          'Full log: `run-tail r1` · http://127.0.0.1:9999/runs/r1')
         self.assertTrue(core('zh-CN').smoke_step1.startswith('🧪 TEST smoke-dispatch 第 1 步'))
 
+    def test_the_card_words_default_to_the_owners_language(self):
+        # O1d (G2): smoke-ask / ask without --lang use the owner's card language (zh for a Chinese owner, as before)
+        class Stop(Exception):
+            pass
+
+        def inputs(responders, text, options, confirm, remind, expire, reminder, lang, smoke=False):
+            raise Stop(lang, text)
+
+        for language, lang, label in (('en', 'en', '🧪 TEST · smoke-ask'), ('zh-CN', 'zh', '🧪 TEST')):
+            c = core(language, _ask_inputs=inputs, claude=types.SimpleNamespace(provider=lambda w: 'claude'),
+                     asks=types.SimpleNamespace(DEFAULT_REMIND='4h', DEFAULT_EXPIRE='2d'))
+            with self.subTest(language=language), self.assertRaises(Stop) as stopped:
+                c.smoke_ask(None, None, '00000000-0000-4000-8000-000000000001', 'claude', '/', 'Ship it?')
+            self.assertEqual(stopped.exception.args[0], lang)
+            self.assertTrue(stopped.exception.args[1].startswith(label), stopped.exception.args[1])
+
     def test_the_owner_key_names_the_hook_ask_and_the_terminal_check(self):
         out, called = io.StringIO(), []
         c = core(owner_key='mira', dispatch=types.SimpleNamespace(KEEP_WARM_ID_RE=__import__('re').compile('kw-.*')),
