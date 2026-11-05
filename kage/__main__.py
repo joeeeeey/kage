@@ -3,7 +3,9 @@
 The arguments are the program's own (`status`, `tail RUN`, `--help`, …; `ask-owner…` is the owner's `ask-<key>…`);
 the program name in its usage is the deployment's. An assembly that cannot be made (a switch off, another release pinned, a transitional module missing or
 altered) is refused before anything runs: exit 3, one JSON line on stderr. A failing command ends like the program's
-own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors withheld)."""
+own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors withheld).
+
+`python3 -m kage init …` (O1c4) creates or adopts a deployment and runs before any assembly (kage.onboard.init_cli)."""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -13,8 +15,11 @@ import sys
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ['init']:  # O1c4: onboarding runs before any assembly (there may be no deployment yet)
+        from kage.onboard import init_cli
+        return init_cli.main(argv[1:])
     if len(argv) < 2 or argv[0] != '--deployment':
-        print('usage: python3 -m kage --deployment DIR [arguments]', file=sys.stderr)
+        print('usage: python3 -m kage --deployment DIR [arguments] | python3 -m kage init [--help]', file=sys.stderr)
         return 2
     from kage import app
     try:
