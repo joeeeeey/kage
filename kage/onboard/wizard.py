@@ -22,6 +22,12 @@ from kage.ports import secrets
 
 TRIES = 3
 POLL_SECONDS = 5
+SCOPES_STEP = '''
+  The bot lacks scopes: {missing}
+  The app was not made from the manifest above, or not reinstalled after it changed. In Slack:
+    a. https://api.slack.com/apps → this app → App Manifest: replace it with the manifest above, Save
+    b. Install App → Reinstall to {team}, Allow
+    c. OAuth & Permissions → copy the Bot User OAuth Token (xoxb-…) and paste it below'''
 
 
 class WizardError(ValueError):
@@ -142,14 +148,23 @@ def run(io=None, *, home=None, environ=None, call=tokens.slack_call, store=None,
     io.say('\n8. Create the Slack app from this manifest:\n')
     io.say(manifest.render(display, as_owner=voice == 'as_owner'))
     io.say()
-    bot = _token(io, store, tokens.BOT, 'Bot token (xoxb-…)', lambda t: tokens.admit(store, tokens.BOT, t, call=call))
+
+    def admit_bot(token):
+        return tokens.admit(store, tokens.BOT, token, call=call)
+
+    bot = _token(io, store, tokens.BOT, 'Bot token (xoxb-…)', admit_bot)
+    for _ in range(TRIES):  # F7: an app not made from the manifest (or not reinstalled) stops here, not later
+        if not bot.get('missing_scopes'):
+            break
+        io.say(SCOPES_STEP.format(missing=', '.join(bot['missing_scopes']), team=bot.get('team') or 'the workspace'))
+        bot = _token(io, store, tokens.BOT, 'Bot token after the reinstall (xoxb-…)', admit_bot)
+    if bot.get('missing_scopes'):
+        raise WizardError('bot_scopes_missing: ' + ', '.join(bot['missing_scopes']))
     try:
         app_id = tokens.bot_app(store.get(tokens.BOT), bot, call=call)
     except tokens.TokenRefused as exc:
         raise WizardError(f'bot_app_unknown: {exc.code}') from None
     identity.record_bot(state, bot, app_id, clock=clock)
-    if bot.get('missing_scopes'):
-        io.say('  the bot lacks scopes: ' + ', '.join(bot['missing_scopes']) + ' (doctor reports them)')
     _token(io, store, tokens.APP, 'App-level token (xapp-…, connections:write)',
            lambda t: tokens.admit(store, tokens.APP, t, call=call))
     if voice == 'as_owner':

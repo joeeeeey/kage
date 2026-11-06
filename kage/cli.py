@@ -875,7 +875,8 @@ class CliCore:
                 store = getattr(getattr(self.rt.slack, 'TRANSPORT', None), 'secret_store', None)
                 report = doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
                                     db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
-                                    offline=args.offline, secret_store=store)
+                                    offline=args.offline, secret_store=store,
+                                    voice=doctor.voice(getattr(self.deployment.owner, 'key', 'owner'), store))
             finally:
                 if db is not None:
                     db.close()

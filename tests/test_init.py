@@ -24,6 +24,7 @@ KAGE_ROOT = Path(kage.__file__).resolve().parents[1]
 TEAM, OWNER, BOT_USER, BOT_ID, APP_ID = 'T0000TEST01', 'U0000TEST01', 'U0000BOT01', 'B0000TEST01', 'A0000TEST01'
 URL = 'https://northwind-example.slack.com'
 BOT_TOKEN, APP_TOKEN, USER_TOKEN = 'xoxb-' + '0000-INIT', 'xapp-' + '1-A0000INIT-0000-abc', 'xoxp-' + '0000-INIT'
+THIN_TOKEN = 'xoxb-' + '0000-THIN'  # F7: a bot of an app not made from the manifest
 
 
 def make_release(versions, commit='c0ffee' + '0' * 34):
@@ -55,9 +56,10 @@ class FakeSlack:
 
     def __call__(self, method, token, params=None):
         self.calls.append(method)
-        if method == 'auth.test' and token == BOT_TOKEN:
-            return ({'ok': True, 'team_id': TEAM, 'user_id': BOT_USER, 'bot_id': BOT_ID, 'url': URL + '/'},
-                    {'x-oauth-scopes': ','.join(manifest.BOT_SCOPES)})
+        if method == 'auth.test' and token in (BOT_TOKEN, THIN_TOKEN):
+            scopes = manifest.BOT_SCOPES if token == BOT_TOKEN else ('chat:write', 'im:history')
+            return ({'ok': True, 'team_id': TEAM, 'team': 'Northwind', 'user_id': BOT_USER, 'bot_id': BOT_ID,
+                     'url': URL + '/'}, {'x-oauth-scopes': ','.join(scopes)})
         if method == 'auth.test' and token == USER_TOKEN:
             return {'ok': True, 'team_id': TEAM, 'user_id': OWNER, 'url': URL + '/'}, {}
         if method == 'auth.test':
@@ -66,9 +68,16 @@ class FakeSlack:
             return {'ok': True, 'bot': {'id': params['bot'], 'app_id': APP_ID, 'user_id': BOT_USER}}, {}
         if method == 'apps.connections.open' and token == APP_TOKEN:
             return {'ok': True, 'url': 'wss://example.invalid/socket'}, {}
-        if method == 'conversations.list':
-            return {'ok': True, 'channels': [{'id': 'D0000TEST01'}]}, {}
+        if method == 'conversations.list':  # F5: as Slack lists a new bot's DMs, Slackbot's first
+            return {'ok': True, 'channels': [{'id': 'D0000SLACKBOT', 'user': 'USLACKBOT'},
+                                             {'id': 'D0000GONE01', 'user': 'U0000GONE01', 'is_user_deleted': True},
+                                             {'id': 'D0000HIDDEN', 'user': 'U0000HIDDEN'},
+                                             {'id': 'D0000TEST01', 'user': OWNER}]}, {}
         if method == 'conversations.history':
+            if params['channel'] in ('D0000SLACKBOT', 'D0000GONE01'):
+                return {'ok': False, 'error': 'channel_not_found'}, {}
+            if params['channel'] == 'D0000HIDDEN':
+                return {'ok': False, 'error': 'not_in_channel'}, {}
             return {'ok': True, 'messages': [m for m in self.dms if float(m['ts']) > float(params['oldest'])]}, {}
         raise AssertionError(method)
 
@@ -435,6 +444,38 @@ class WizardTest(Base):
                     for secret in (BOT_TOKEN, APP_TOKEN):
                         self.assertNotIn(secret.encode(), f.read_bytes(), f)
         self.assertFalse(any(BOT_TOKEN in line or APP_TOKEN in line for line in io.out))
+
+    def test_missing_bot_scopes_stop_at_the_manifest_step(self):
+        """F7: the wizard does not go on with a bot that lacks scopes; it shows the manifest update + reinstall and
+        reads the bot token again."""
+        slack = FakeSlack()
+
+        def on_say(text):
+            m = re.search(r'KAGE-[A-Z2-9]{5}-[A-Z2-9]{5}', text)
+            if m:
+                slack.dms.append({'type': 'message', 'user': OWNER, 'team': TEAM, 'text': m.group(0),
+                                  'ts': f'{time.time() + 1:.6f}'})
+
+        io = ScriptIO(self.REPLIES, [THIN_TOKEN, BOT_TOKEN, APP_TOKEN], on_say)
+        wizard.run(io, home=self.home, call=slack, sleep=lambda s: None)
+        step = next(i for i, line in enumerate(io.out) if 'The bot lacks scopes:' in line)
+        self.assertIn('groups:read', io.out[step])
+        self.assertIn('App Manifest', io.out[step])
+        self.assertIn('Reinstall to Northwind', io.out[step])
+        self.assertLess(slack.calls.index('bots.info'), slack.calls.index('apps.connections.open'))
+        self.assertEqual(secrets.for_owner('mira', home=self.home).get(tokens.BOT), BOT_TOKEN)
+        self.assertEqual(identity.load(init.state_dir('mira', self.home))['method'], 'dm_code')
+
+    def test_scopes_still_missing_stop_without_answers(self):
+        slack = FakeSlack()
+        io = ScriptIO(self.REPLIES, [THIN_TOKEN] * (wizard.TRIES + 1))
+        with self.assertRaises(wizard.WizardError) as cm:
+            wizard.run(io, home=self.home, call=slack, sleep=lambda s: None)
+        self.assertTrue(str(cm.exception).startswith('bot_scopes_missing: '), cm.exception)
+        self.assertEqual(sum('The bot lacks scopes:' in line for line in io.out), wizard.TRIES)
+        self.assertNotIn('apps.connections.open', slack.calls)  # stopped before the next token
+        self.assertNotIn('bots.info', slack.calls)
+        self.assertFalse((self.home / '.config/kage/mira/answers.json').exists())
 
     def test_as_owner_voice_proves_by_the_user_token(self):
         replies = list(self.REPLIES)

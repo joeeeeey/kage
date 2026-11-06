@@ -98,8 +98,11 @@ class MinimalDeploymentTest(unittest.TestCase):
                         {'x-oauth-scopes': ','.join(manifest.BOT_SCOPES)})
             if method == 'apps.connections.open' and token == app_token:
                 return {'ok': True, 'url': 'wss://example.invalid/socket'}, {}
-            if method == 'conversations.list' and token == bot_token:
-                return {'ok': True, 'channels': [{'id': 'D0000TEST01'}]}, {}
+            if method == 'conversations.list' and token == bot_token:  # F5: Slackbot's DM is listed first
+                return {'ok': True, 'channels': [{'id': 'D0000SLACKBOT', 'user': 'USLACKBOT'},
+                                                 {'id': 'D0000TEST01', 'user': owner_id}]}, {}
+            if method == 'conversations.history' and params['channel'] == 'D0000SLACKBOT':
+                return {'ok': False, 'error': 'channel_not_found'}, {}
             if method == 'conversations.history' and token == bot_token:
                 return {'ok': True, 'messages': [m for m in dms if float(m['ts']) > float(params['oldest'])]}, {}
             raise AssertionError(method)

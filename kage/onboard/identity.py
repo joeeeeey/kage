@@ -7,7 +7,8 @@ Two proofs:
 - `dm_code`, for the default assistant mode without a user token: `new_challenge` makes a one-time code that is shown
   only in the owner's terminal and stored only as a hash; the owner sends it to the bot as a direct message;
   `prove_by_dm` reads the bot's own DMs with the bot token and accepts exactly one sender — a person of the bot's
-  workspace, not the bot — within CODE_TTL. The code is used once.
+  workspace, not the bot — within CODE_TTL. The code is used once. Slackbot's DM with the bot, a deleted person's DM
+  and a DM whose history Slack does not show the bot (`channel_not_found` / `not_in_channel`) are skipped, not fatal.
 A bot token's auth.test names the bot, not the installer, so it is never a proof of the owner.
 """
 from __future__ import annotations
@@ -32,6 +33,8 @@ CODE_TTL = 600
 ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'  # no 0 / O / 1 / I
 TEAM_RE, USER_RE = re.compile(r'T[A-Z0-9]{4,20}'), re.compile(r'[UW][A-Z0-9]{4,20}')
 MAX_PAGES = 10
+SKIPPED_IM_USERS = frozenset({'USLACKBOT'})  # the bot's auto-created DM with Slackbot: its history is never readable
+SKIPPED_IM_ERRORS = frozenset({'channel_not_found', 'not_in_channel'})  # one DM the bot cannot read: skip it
 
 
 def _private_dir(state_dir):
@@ -84,12 +87,15 @@ def prove_by_user_token(state_dir, user, *, clock=time.time):
     return record
 
 
-def _pages(call, token, method, params, key):
+def _pages(call, token, method, params, key, skip=frozenset()):
+    """The items under `key` over Slack's cursor pages; an error in `skip` ends the listing instead of raising."""
     cursor = None
     for _ in range(MAX_PAGES):
         payload, _headers = call(method, token, {**params, **({'cursor': cursor} if cursor else {})})
         if not isinstance(payload, dict) or payload.get('ok') is not True:
             error = payload.get('error') if isinstance(payload, dict) else None
+            if error in skip:
+                return
             raise TokenRefused(f'slack_{method}_refused_{error or "unknown"}')
         yield from payload.get(key) or []
         cursor = (payload.get('response_metadata') or {}).get('next_cursor')
@@ -112,10 +118,11 @@ def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time):
         raise TokenRefused('identity_challenge_expired')
     senders = {}
     for im in _pages(call, bot_token, 'conversations.list', {'types': 'im', 'limit': 200}, 'channels'):
-        if not im.get('id'):
+        if not im.get('id') or im.get('user') in SKIPPED_IM_USERS or im.get('is_user_deleted'):
             continue
         history = _pages(call, bot_token, 'conversations.history',
-                         {'channel': im['id'], 'oldest': f'{created:.6f}', 'limit': 200}, 'messages')
+                         {'channel': im['id'], 'oldest': f'{created:.6f}', 'limit': 200}, 'messages',
+                         skip=SKIPPED_IM_ERRORS)
         for m in history:
             if m.get('subtype') or m.get('bot_id') or m.get('user') in (None, bot['bot_user_id']):
                 continue

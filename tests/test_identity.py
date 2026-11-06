@@ -96,6 +96,40 @@ class IdentityTest(unittest.TestCase):
                          'U0000OWNER')
         self.assertIn(('users.info', {'user': 'U0000OWNER'}), fake.calls)  # no team on the message: asked
 
+    def test_unreadable_dms_are_skipped(self):
+        """F5: a new bot's DM list starts with Slackbot's DM, whose history Slack never shows the bot
+        (channel_not_found); a deleted person's DM and one the bot is not in are skipped too, not fatal."""
+        code = self.challenge()
+        listed = [{'id': 'D0000SLACKBOT', 'user': 'USLACKBOT'},
+                  {'id': 'D0000GONE01', 'user': 'U0000GONE01', 'is_user_deleted': True},
+                  {'id': 'D0000NOTFOUND', 'user': 'U0000X'}, {'id': 'D0000NOTIN', 'user': 'U0000Y'},
+                  {'id': 'D1', 'user': 'U0000OWNER'}]
+        refused = {'D0000SLACKBOT': 'channel_not_found', 'D0000NOTFOUND': 'channel_not_found',
+                   'D0000NOTIN': 'not_in_channel'}
+        fake = FakeSlack({'D1': [msg('U0000OWNER', code, T0 + 1, team='T0000TEST')]})
+        calls = []
+
+        def slack(method, token, params=None):
+            calls.append((method, (params or {}).get('channel')))
+            if method == 'conversations.list':
+                return {'ok': True, 'channels': listed}, {}
+            if method == 'conversations.history' and params['channel'] in refused:
+                return {'ok': False, 'error': refused[params['channel']]}, {}
+            if method == 'conversations.history':
+                assert params['channel'] == 'D1', params  # Slackbot's and the deleted person's DM are never read
+            return fake(method, token, params)
+
+        self.assertEqual(identity.prove_by_dm(self.state, BOT_TOKEN, BOT, call=slack, clock=self.clock)['user_id'],
+                         'U0000OWNER')
+        read = [c for m, c in calls if m == 'conversations.history']
+        self.assertEqual(read, ['D0000NOTFOUND', 'D0000NOTIN', 'D1'])
+        self.challenge()  # any other refusal still stops the proof, and the code stays for a retry
+        refused['D0000NOTIN'] = 'missing_scope'
+        with self.assertRaises(TokenRefused) as e:
+            identity.prove_by_dm(self.state, BOT_TOKEN, BOT, call=slack, clock=self.clock)
+        self.assertEqual(e.exception.code, 'slack_conversations.history_refused_missing_scope')
+        self.assertTrue((self.state / identity.CHALLENGE).exists())
+
     def test_refusals(self):
         cases = [
             ({'D1': [msg('U0000A', 'X', T0 + 1), msg('U0000B', 'X', T0 + 2)]}, {},

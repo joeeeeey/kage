@@ -122,6 +122,42 @@ class DoctorTest(unittest.TestCase):
         self.assertIs(checks['slack.bot_identity']['ok'], False)
         self.assertIsNone(checks['slack.user_identity']['ok'])
 
+    def test_the_assistant_voice_has_no_user_token_to_check(self):
+        """F6: voice assistant skips the user token (none by design); as_owner requires it; an adopted deployment
+        (voice unknown) checks a configured one and skips an empty one."""
+        empty = {'bot': lambda: 'bot-token', 'user': lambda: ''}
+        probe = self.healthy_probe()
+        report = self.run_doctor(probe, tokens=empty, voice='assistant')
+        user = self.by_id(report)['slack.user_identity']
+        self.assertEqual((user['ok'], user['required']), (None, False))
+        self.assertIn('voice assistant', user['detail'])
+        self.assertNotIn('slack.user_scopes', self.by_id(report))
+        self.assertEqual(probe.calls, ['bot-token'])
+        self.assertNotIn('slack.user_identity', report['failed'])
+        probe = self.healthy_probe()
+        report = self.run_doctor(probe, voice='assistant')  # a stray user token is not read either
+        self.assertEqual(probe.calls, ['bot-token'])
+        report = self.run_doctor(self.healthy_probe(), tokens=empty, voice='as_owner')
+        self.assertIn('slack.user_identity', report['failed'])
+        self.assertEqual(self.by_id(report)['slack.user_identity']['detail'], 'no user token (LookupError)')
+        self.assertTrue(self.run_doctor(self.healthy_probe(), voice='as_owner')['ok'])
+        probe = self.healthy_probe()
+        report = self.run_doctor(probe, tokens=empty)
+        self.assertIsNone(self.by_id(report)['slack.user_identity']['ok'])
+        self.assertEqual(probe.calls, ['bot-token'])
+        self.assertTrue(report['ok'], report['failed'])
+
+    def test_the_voice_of_a_deployment(self):
+        home = Path(self.tmp.name) / 'home'
+        store = secrets.FileStore('mira', home / '.config/kage/mira/secrets')
+        self.assertIsNone(D.voice('mira', None, home))  # its own transport reads its tokens
+        self.assertEqual(D.voice('mira', store, home), 'assistant')
+        store.put(secrets.SLACK_USER, 'xoxp-' + '0000-TEST')
+        self.assertEqual(D.voice('mira', store, home), 'as_owner')
+        answers = home / '.config/kage/mira/answers.json'
+        answers.write_text(json.dumps({'slack': {'voice': 'assistant'}}))
+        self.assertEqual(D.voice('mira', store, home), 'assistant')  # the answers decide
+
     def test_state_services_heartbeat_and_destination_failures(self):
         os.chmod(self.db_path.parent, 0o755)
         self.db.execute('UPDATE runtime SET heartbeat=1.0')

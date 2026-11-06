@@ -90,15 +90,41 @@ class Probe:
         return link.split('zoneinfo/', 1)[1] if 'zoneinfo/' in link else None
 
 
-def slack_checks(owner, probe: Probe, tokens: dict[str, Callable[[], str]], offline: bool) -> list[dict[str, Any]]:
+def voice(owner_key: str, secret_store, home=None) -> str | None:
+    """F6: the voice of a deployment `kage init` wrote — its answers file, else whether the secrets store holds a user
+    token ('as_owner' / 'assistant'); None for a deployment whose own transport reads its tokens."""
+    if secret_store is None:
+        return None
+    from kage.onboard import init  # noqa: PLC0415 - only for its config path
+    try:
+        found = json.loads((init.config_dir(owner_key, home) / 'answers.json').read_text(encoding='utf-8'))
+        if (found.get('slack') or {}).get('voice') in ('assistant', 'as_owner'):
+            return found['slack']['voice']
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        return 'as_owner' if secret_store.has(SLACK_USER) else 'assistant'
+    except SecretError:
+        return None
+
+
+def slack_checks(owner, probe: Probe, tokens: dict[str, Callable[[], str]], offline: bool,
+                 voice: str | None = None) -> list[dict[str, Any]]:
+    """`voice`: 'assistant' skips the user token (the bot speaks; there is none by design), 'as_owner' requires it,
+    None (an adopted deployment) checks a configured one."""
     out = []
-    for kind, required in (('bot', True), ('user', False)):
+    for kind, required in (('bot', True), ('user', voice == 'as_owner')):
         name = f'slack.{kind}_identity'
         if offline:
             out.append(check(name, required, None, 'skipped (--offline)'))
             continue
+        if kind == 'user' and voice == 'assistant':
+            out.append(check(name, False, None, 'skipped (voice assistant: the bot speaks, no user token)'))
+            continue
         try:
             token = tokens[kind]()
+            if not token:
+                raise LookupError('empty')
         except Exception as exc:  # noqa: BLE001 - a missing token is the finding
             out.append(check(name, required, False if required else None, f'no {kind} token ({type(exc).__name__})',
                              f'store the {kind} token where the deployment reads it'))
@@ -293,10 +319,11 @@ def port_checks(store) -> list[dict[str, Any]]:
 
 
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
-        profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None) -> dict[str, Any]:
+        profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None,
+        voice: str | None = None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
     scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
-    checks = (slack_checks(owner, probe, tokens, offline) + state_checks(db_path, db) + runtime_checks(db, health, probe)
+    checks = (slack_checks(owner, probe, tokens, offline, voice) + state_checks(db_path, db) + runtime_checks(db, health, probe)
               + service_checks(root, probe) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
               + secret_checks(scan) + port_checks(secret_store) + identity_checks(owner, Path(db_path).parent))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
