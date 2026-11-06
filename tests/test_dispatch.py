@@ -113,6 +113,36 @@ class DispatcherTest(unittest.TestCase):
         d.cycle(now=101.0)
         self.assertEqual(started, ['d0', 'd1'])
 
+    def test_a_suspect_delivered_since_leaves_the_stranded_counts(self):
+        """F8: an event held by an install hold is seen as a suspect by the first sweep after it and delivered by the
+        ordinary revive; the next sweep drops that suspect (it never needed reviving) and keeps every other row."""
+        import contextlib
+        import json
+        import tempfile
+        from pathlib import Path
+        from kage.core import worker_config as W
+        defaults = json.loads((Path(__file__).with_name('fixtures') / 'worker_defaults.json').read_text())
+        tmp = tempfile.mkdtemp()
+        raw = json.loads(json.dumps(defaults))
+        raw['dispatch'].update(enabled=True, install_hold=True)  # the clean-up runs even while held
+        (Path(tmp) / 'config.json').write_text(json.dumps(raw))
+        wc = W.WorkerConfig('en', defaults=defaults, config_env='KAGE_TEST_WORKER_CONFIG',
+                            default_path=Path(tmp) / 'config.json', owner_key='owner', owner_name='Mira')
+        rt = types.SimpleNamespace(__file__='/nonexistent/runtime.py', liveness=None, worker_config=wc,
+                                   _meta_error=lambda *a: None, transaction=lambda db: contextlib.nullcontext())
+        d = D.Dispatcher(self.db, '/tmp/kage-test.sqlite', rt, probe=object(), spawn=lambda *a: 1,
+                         pid_start=lambda pid: None, killer=lambda pid, sig: None, clock=lambda: 100.0, core=self.core)
+        rows = (('e-delivered', 'handled', 'suspect'), ('e-waiting', 'queued', 'suspect'), ('e-held', 'handled', 'held'),
+                ('e-open', 'queued', 'held'))
+        for event, status, state in rows:
+            self.db.execute("INSERT INTO events (id, watch_id, status, received) VALUES (?, 'w1', ?, 90)", (event, status))
+            self.db.execute("INSERT INTO stranded_deliveries (event_id, watch_id, provider, session, status, state, "
+                            "first_seen, updated_at) VALUES (?, 'w1', 'claude', 's1', 'queued', ?, 95, 95)", (event, state))
+        self.assertEqual(d.sweep_stranded(now=100.0), [])
+        left = dict(self.db.execute('SELECT event_id, state FROM stranded_deliveries').fetchall())
+        self.assertEqual(left, {'e-waiting': 'suspect', 'e-held': 'handled', 'e-open': 'held'})
+        self.assertEqual(D.stranded_overview(self.db, 100.0)['counts'], {'handled': 1, 'held': 1, 'suspect': 1})
+
     def test_outside_active_mode_no_run_starts_and_what_would_have_is_recorded(self):
         """O2b: the instance mode gates every start; a store without the row (predates O2) starts as before."""
         import contextlib
