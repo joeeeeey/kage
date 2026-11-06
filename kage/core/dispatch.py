@@ -1267,9 +1267,10 @@ class Dispatcher:
                             "('held','rerouted','unowned') AND NOT EXISTS (SELECT 1 FROM events e WHERE "
                             "e.id=stranded_deliveries.event_id AND e.status!='handled')", (now,))
             # F8: a suspect whose event was delivered since (by its own session, or the revive after an install hold)
-            # never needed this path: dropped, like a suspect whose session proved live (`_stranded_clear`).
-            self.db.execute("DELETE FROM stranded_deliveries WHERE state='suspect' AND NOT EXISTS (SELECT 1 FROM events e "
-                            "WHERE e.id=stranded_deliveries.event_id AND e.status!='handled')")
+            # never needed this path: dropped, like a suspect whose session proved live (`_stranded_clear`). A suspect
+            # whose event vanished stays as before (P39).
+            self.db.execute("DELETE FROM stranded_deliveries WHERE state='suspect' AND EXISTS (SELECT 1 FROM events e "
+                            "WHERE e.id=stranded_deliveries.event_id AND e.status='handled')")
         if not config['dispatch']['enabled'] or not config['dispatch']['stranded_revive'] or \
                 config['dispatch'].get('install_hold'):  # C4: revived after the install, like every held event
             return []

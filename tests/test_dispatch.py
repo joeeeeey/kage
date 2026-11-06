@@ -115,7 +115,8 @@ class DispatcherTest(unittest.TestCase):
 
     def test_a_suspect_delivered_since_leaves_the_stranded_counts(self):
         """F8: an event held by an install hold is seen as a suspect by the first sweep after it and delivered by the
-        ordinary revive; the next sweep drops that suspect (it never needed reviving) and keeps every other row."""
+        ordinary revive; the next sweep drops that suspect (it never needed reviving) and keeps every other row.
+        0.75.0 also dropped the suspect of a vanished event, which the skill's P39 twin test keeps: 0.76.0 does not."""
         import contextlib
         import json
         import tempfile
@@ -134,14 +135,17 @@ class DispatcherTest(unittest.TestCase):
                          pid_start=lambda pid: None, killer=lambda pid, sig: None, clock=lambda: 100.0, core=self.core)
         rows = (('e-delivered', 'handled', 'suspect'), ('e-waiting', 'queued', 'suspect'), ('e-held', 'handled', 'held'),
                 ('e-open', 'queued', 'held'))
-        for event, status, state in rows:
-            self.db.execute("INSERT INTO events (id, watch_id, status, received) VALUES (?, 'w1', ?, 90)", (event, status))
+        for event, status, state in rows + (('e-vanished', None, 'suspect'),):
+            if status:
+                self.db.execute("INSERT INTO events (id, watch_id, status, received) VALUES (?, 'w1', ?, 90)",
+                                (event, status))
             self.db.execute("INSERT INTO stranded_deliveries (event_id, watch_id, provider, session, status, state, "
                             "first_seen, updated_at) VALUES (?, 'w1', 'claude', 's1', 'queued', ?, 95, 95)", (event, state))
         self.assertEqual(d.sweep_stranded(now=100.0), [])
         left = dict(self.db.execute('SELECT event_id, state FROM stranded_deliveries').fetchall())
-        self.assertEqual(left, {'e-waiting': 'suspect', 'e-held': 'handled', 'e-open': 'held'})
-        self.assertEqual(D.stranded_overview(self.db, 100.0)['counts'], {'handled': 1, 'held': 1, 'suspect': 1})
+        self.assertEqual(left, {'e-waiting': 'suspect', 'e-held': 'handled', 'e-open': 'held',
+                                'e-vanished': 'suspect'})  # a vanished event's suspect stays (P39)
+        self.assertEqual(D.stranded_overview(self.db, 100.0)['counts'], {'handled': 1, 'held': 1, 'suspect': 2})
 
     def test_outside_active_mode_no_run_starts_and_what_would_have_is_recorded(self):
         """O2b: the instance mode gates every start; a store without the row (predates O2) starts as before."""
