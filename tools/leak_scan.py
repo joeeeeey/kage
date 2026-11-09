@@ -6,7 +6,8 @@ gitleaks finds secrets; this finds identifiers that are not secret but must not 
   denylist   a word whose sha256 is listed in tools/leak-denylist.sha256 (names, company words, project and task
              names, real chat ids), or a compound of words joined by - _ . (a project name such as `some-project`,
              lower-cased and joined by -, whose parts alone are ordinary words). Only hashes are stored, so the list
-             itself names nobody. Add one with `--hash WORD` (or `--hash some-project`).
+             itself names nobody. Add one with `--hash WORD` (or `--hash some-project`). Two adjacent words are a
+             person's full name: `--hash 'first last'`.
   chat-id    a real-looking Slack id (T…, U…, W…, B…, C…, G…, D…, A…, E… with digits). Synthetic ids in tests
              and examples contain TEST, FAKE, EXAMPLE or 0000.
   home-path  an absolute home directory of a named user (/Users/<name>/, /home/<name>/).
@@ -75,6 +76,11 @@ def scan_text(text, denied, keys=False):
         for word in WORD_RE.findall(line):
             if digest(word) in denied:
                 yield found(number, 'denylist', word)
+        words = WORD_RE.findall(line)
+        for pair in zip(words, words[1:]):  # N2: a person's full name, two adjacent words ("first last")
+            joined = ' '.join(pair)
+            if digest(joined) in denied:
+                yield found(number, 'denylist', joined)
         for compound in COMPOUND_RE.findall(line):  # every run of 2+ adjacent parts, joined by -
             parts = re.split(r'[-_.]', compound)
             for i in range(len(parts)):
