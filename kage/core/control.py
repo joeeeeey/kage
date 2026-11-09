@@ -275,12 +275,12 @@ class Control:
         return float(row[0])
 
     def typed(self, rt, db, channel, m, root=None):
-        """The owner's own hand-typed message: a top-level message (`root` None) or a reply in thread `root`. Exactly the
+        """The owner's own hand-typed message (0.77.0: or an owner-like approver's): a top-level message (`root` None) or a reply in thread `root`. Exactly the
         classification card replies use (kage.adapters.slack.envelope: our marker, our app id, our send ledger, another
         app, a bot -> not the owner's), plus: the owner's user id, no subtype, no bot id / app id / bot profile."""
-        owner = _owner_user(rt)
+        owners = owner_users(rt)
         ts = str(m.get('ts') or '')
-        if not owner or m.get('user') != owner or not TS_RE.fullmatch(ts) or m.get('subtype') or m.get('bot_id') or \
+        if m.get('user') not in owners or not TS_RE.fullmatch(ts) or m.get('subtype') or m.get('bot_id') or \
                 m.get('app_id') or m.get('bot_profile'):
             return False
         thread = m.get('thread_ts')
@@ -300,7 +300,7 @@ class Control:
         return env['author_kind'] == 'human' and env['trust'] == e.owner_trust and env['authority'] == e.owner_intent
 
     def _read(self, rt, channel, ts, root=None):
-        """One message read back from Slack (the owner's token, read-only), or None."""
+        """One message read back from Slack (the owner's token, read-only; a bot-only deployment's bot token), or None."""
         if root and root != ts:
             found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
                 'channel': channel, 'ts': root, 'oldest': ts, 'latest': ts, 'inclusive': 'true', 'limit': 2,
@@ -357,7 +357,8 @@ class Control:
 
     def slack_push(self, rt, db, channel, ts, user, now=None):
         """The receiver's realtime path for a NEW top-level message in a decision channel: refs only; the message is
-        read back and verified here (`typed`). Nothing while the entry or its card channel is off."""
+        read back and verified here (`typed`). Nothing while the entry or its card channel is off. 0.77.0: an
+        owner-like approver's message too (`typed`)."""
         now = time.time() if now is None else now
         if not (CHANNEL_RE.fullmatch(str(channel)) and TS_RE.fullmatch(str(ts)) and USER_RE.fullmatch(str(user))):
             return {'ok': False, 'outcome': 'refused', 'reason': 'invalid_refs'}
@@ -366,7 +367,7 @@ class Control:
             return {'ok': True, 'outcome': 'skipped', 'reason': 'control_off'}
         if channel not in rt.card_threads.decision_channels(rt):
             return {'ok': False, 'outcome': 'refused', 'reason': 'not_a_decision_channel'}
-        if user != _owner_user(rt):
+        if user not in owner_users(rt):
             return {'ok': True, 'outcome': 'skipped', 'reason': 'not_the_owner'}
         initialize(db)
         with _transaction(db):  # the receiver is forwarding: the fallback poll may skip its history read meanwhile
@@ -425,7 +426,7 @@ class Control:
         since = self._since(db, now)
         pushed = _meta_float(db, PUSH_KEY)
         out = {'at': now, 'recorded': 0, 'reads': 0, 'history': {}, 'threads': 0, 'error': None}
-        owner = _owner_user(rt)
+        owners = owner_users(rt)
         token = None
         try:
             for channel in rt.card_threads.decision_channels(rt):
@@ -437,7 +438,7 @@ class Control:
                     out['history'][channel] = 'skipped_receiver_pushed'
                     continue
                 token = token or rt.api_identity()
-                out['history'][channel] = self._poll_history(rt, db, cfg, token, channel, key, state, owner, now, out)
+                out['history'][channel] = self._poll_history(rt, db, cfg, token, channel, key, state, owners, now, out)
             due = [dict(r) for r in db.execute('SELECT * FROM control_threads WHERE updated_at>? ORDER BY '
                                                'coalesce(polled_at,0), updated_at DESC', (now - THREAD_ACTIVE,))]
             due = [t for t in due if force or now - t['updated_at'] <= THREAD_HOT or
@@ -454,7 +455,7 @@ class Control:
             rt.start(_db_path(db))
         return out
 
-    def _poll_history(self, rt, db, cfg, token, channel, key, state, owner, now, out):
+    def _poll_history(self, rt, db, cfg, token, channel, key, state, owners, now, out):
         """One channel's new top-level messages, newest page first (Slack's order). A walk = every message in (cursor,
         latest]; it may span polls (Slack's page cursor kept in `walk`); the cursor moves to the newest ts read only
         when the walk is complete. Messages are recorded as soon as read (a re-read is a duplicate)."""
@@ -470,7 +471,7 @@ class Control:
                     if float(m['ts']) <= float(state['cursor']) or float(m['ts']) > float(walk['latest']):
                         continue
                     walk['high'] = max(walk['high'], m['ts'], key=float)
-                    if m.get('user') != owner or m.get('thread_ts') not in (None, '', m['ts']):
+                    if m.get('user') not in owners or m.get('thread_ts') not in (None, '', m['ts']):
                         continue
                     if self.typed(rt, db, channel, m) and self._record_slack(rt, db, cfg, channel, m, None, 'poll', now):
                         out['recorded'] += 1
@@ -701,7 +702,8 @@ class Control:
             root = self._root(db, m)
             found = rt.slack.api_call('conversations.replies', rt.api_identity(), params={
                 'channel': m['channel'], 'ts': root, 'limit': 50, 'include_all_metadata': 'true'})
-            out['thread'] = [{'role': 'owner' if x.get('user') == _owner_user(rt) and not x.get('bot_id') else 'other',
+            owners = owner_users(rt)
+            out['thread'] = [{'role': 'owner' if x.get('user') in owners and not x.get('bot_id') else 'other',
                               'ts': x.get('ts'), 'text': x.get('text')}
                              for x in found.get('messages') or [] if isinstance(x, dict) and
                              float(x.get('ts') or 0) <= float(m['ts'])]
@@ -805,11 +807,13 @@ class Control:
                        (relay_id, m['message_id'], row['task_id'], out['mode'], out['event'], out['dispatch_id'], note, now))
         return out
 
-    def launch(self, rt, db, db_path, message_id, title, *, linear=False, now=None):
+    def launch(self, rt, db, db_path, message_id, title, *, ticket=False, now=None, linear=None):
         """New work from the owner's message: a new task workspace (the deployment's workspace bootstrap) whose first
         session gets the owner's words as its brief (control.allow_launch; control.launches_per_day). A tracker ticket
-        only with `linear` (only when the owner asked for one). From a console message: a confirm card first."""
+        only with `ticket` (only when the owner asked for one; `linear`: its pre-N2 name). From a console message: a
+        confirm card first."""
         now = time.time() if now is None else now
+        ticket = bool(ticket or linear)
         m, _, cfg = self._held(rt, db, message_id)
         if not cfg['allow_launch']:
             raise ValueError('control_launch_off')
@@ -821,12 +825,12 @@ class Control:
             raise ValueError('no_workspace_bootstrap_in_this_deployment')
         self._original(m, rt)
         if m['source'] == 'console' or cfg['confirm_slack']:
-            return self._propose(rt, db, m, cfg, 'launch', now, title=title, linear=linear)
-        return self._launch(rt, db, db_path, m, cfg, title, linear, now)
+            return self._propose(rt, db, m, cfg, 'launch', now, title=title, ticket=ticket)
+        return self._launch(rt, db, db_path, m, cfg, title, ticket, now)
 
-    def _launch(self, rt, db, db_path, m, cfg, title, linear, now):
+    def _launch(self, rt, db, db_path, m, cfg, title, ticket, now):
         body = self._relay_body(m, self._original(m, rt), None, now)
-        data = rt.intake.run_bootstrap(title, title, body, linear=bool(linear), agent=cfg['provider'], root=rt.registry.root())
+        data = rt.intake.run_bootstrap(title, title, body, linear=bool(ticket), agent=cfg['provider'], root=rt.registry.root())
         launched = rt.launch_task(db, db_path, data['workspace'], 'auto', body, wait_seconds=0, now=now, persist=False)
         relay_id = _new_id('cr')
         with _transaction(db):
@@ -835,7 +839,7 @@ class Control:
                         now))
         return {'ok': True, 'relay_id': relay_id, 'task_id': launched['task_id'], 'workspace': data['workspace'],
                 'dispatch_id': launched.get('dispatch_id'), 'authority': rt.envelopes.ENVELOPES.owner_intent,
-                'linear': bool(linear)}
+                'linear': bool(ticket)}  # the result key and the stored column keep the pre-N2 name (N2b)
 
     def _count_since(self, db, since, launch=False):
         """Relays (or launches) done plus proposals made since `since`: a run cannot flood the owner with cards."""
@@ -847,7 +851,7 @@ class Control:
         return done + asked
 
     # ---- C1b: the confirm card ---------------------------------------------------------------------------------------
-    def _propose(self, rt, db, m, cfg, kind, now, task=None, note=None, mode=None, title=None, linear=False):
+    def _propose(self, rt, db, m, cfg, kind, now, task=None, note=None, mode=None, title=None, ticket=False):
         """A confirm card to the owner (code-owned, never_auto, button only) for a relay / launch from a console
         message; nothing runs until `settle` sees the owner's own click."""
         pid = _new_id('cp')
@@ -859,7 +863,7 @@ class Control:
         if kind == 'relay':
             what = self.msg('control.card.relay_' + mode, task=task['task_id'], title=task.get('title') or task['task_id'])
         else:
-            what = self.msg('control.card.launch_' + ('ticket' if linear else 'local'), title=title)
+            what = self.msg('control.card.launch_' + ('ticket' if ticket else 'local'), title=title)
         question = self.msg('control.card.question', what=what, words=short, link=link) if link else \
             self.msg('control.card.question_nolink', what=what, words=short)
         card = rt.supervisor_card(db, question, [f"confirm={self.msg('control.card.confirm')}:approve",
@@ -869,24 +873,24 @@ class Control:
         with _transaction(db):
             db.execute('INSERT INTO control_proposals (proposal_id,message_id,kind,task_id,title,note,linear,mode,state,'
                        "card_event,created_at) VALUES (?,?,?,?,?,?,?,?,'proposed',?,?)",
-                       (pid, m['message_id'], kind, task['task_id'] if task else None, title, note, int(bool(linear)), mode,
+                       (pid, m['message_id'], kind, task['task_id'] if task else None, title, note, int(bool(ticket)), mode,
                         card['event_id'], now))
             db.execute('INSERT OR IGNORE INTO button_only_cards VALUES (?,?,?)', (card['event_id'], 'control_proposal', now))
         return {'ok': True, 'state': 'proposed', 'proposal_id': pid, 'kind': kind,
-                'task_id': task['task_id'] if task else None, 'title': title, 'mode': mode, 'linear': bool(linear),
+                'task_id': task['task_id'] if task else None, 'title': title, 'mode': mode, 'linear': bool(ticket),
                 'card_event': card['event_id'],
                 'next': self.msg('control.card.next', name=self.name)}
 
     def settle(self, rt, db, now=None):
         """Supervisor step: each proposal's confirm card -> exactly one outcome. Only the owner's own button click
-        (decision provenance slack_button, role approver) on 确认 runs the relay / launch; 取消 cancels; a typed reply or
-        anyone else's decision runs nothing (refused); no click within PROPOSAL_TTL -> expired. The claim
-        (proposed -> deciding) makes a second click or a second supervisor do nothing."""
+        (decision provenance slack_button, role approver; 0.77.0: or an owner-like approver's) on 确认 runs the relay /
+        launch; 取消 cancels; a typed reply or anyone else's decision runs nothing (refused); no click within
+        PROPOSAL_TTL -> expired. The claim (proposed -> deciding) makes a second click or a second supervisor do nothing."""
         if not present(db):
             return []
         now = time.time() if now is None else now
         done = []
-        owner = _owner_user(rt)  # None: every decision is refused (fail closed)
+        owners = owner_users(rt)  # empty: every decision is refused (fail closed); 0.77.0: owner-like approvers too
         for p in [dict(r) for r in db.execute("SELECT * FROM control_proposals WHERE state='proposed' ORDER BY created_at")]:
             d = db.execute('SELECT d.*, c.options FROM decisions d JOIN escalation_cards c ON c.event_id=d.event_id '
                            'WHERE d.event_id=?', (p['card_event'],)).fetchone() if p['card_event'] else None
@@ -901,7 +905,7 @@ class Control:
             result, error, relay_id = None, None, None
             if d is None:
                 state = 'expired'
-            elif not owner or d['actor'] != owner or d['provenance'] != 'slack_button' or d['role'] != 'approver':
+            elif d['actor'] not in owners or d['provenance'] != 'slack_button' or d['role'] != 'approver':
                 state = 'refused'
             elif rt.buttons.resolve_choice(d['choice'], rt.buttons.card_model(d['options']))['kind'] != 'approve':
                 state = 'cancelled'
@@ -1387,6 +1391,19 @@ class SlackWords:
 
 
 # ---- module helpers ------------------------------------------------------------------------------------------------
+def owner_users(rt):
+    """The owner, plus whoever counts as the owner (0.77.0: the approvers of a bot-only deployment with
+    `intake.owner_like: approvers`, kage.core.authority.owner_like_users); empty without an owner (fail closed)."""
+    owner = _owner_user(rt)
+    return frozenset({owner}) | owner_like(rt) if owner else frozenset()
+
+
+def owner_like(rt):
+    """0.77.0: who else counts as the owner (kage.core.envelope.Envelopes.owner_like); none on a runtime without it."""
+    envelopes = getattr(getattr(rt, 'envelopes', None), 'ENVELOPES', None)
+    return frozenset(getattr(envelopes, 'owner_like', frozenset)())
+
+
 def _owner_user(rt):
     """The owner's chat user id from the deployment profile (the assembled runtime always has it), else the hub's
     OWNER; None when neither is there."""

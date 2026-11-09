@@ -40,6 +40,27 @@ def card_route(config, now, never_auto=False):
     return {'channel': config['decision_channel'], 'delegates': [], 'ooo': False, 'window': None}
 
 
+def owner_like_users(worker_config, buttons, _cache={}):
+    """0.77.0: the people who count as the owner besides the owner: the approvers, when the deployment speaks as its
+    bot (`intake.identity: bot`) and says so (`intake.owner_like: approvers`); empty otherwise, and on any config error
+    (fails closed). Read at most every 30 s."""
+    import time
+    now = time.monotonic()
+    key = (id(worker_config), id(buttons))
+    hit = _cache.get(key)
+    if hit and now - hit[0] < 30:
+        return hit[1]
+    users = frozenset()
+    try:
+        intake = worker_config.load()[0]['intake']
+        if intake.get('identity') == 'bot' and intake.get('owner_like') == 'approvers':
+            users = frozenset(str(u) for u in buttons.load_config().get('approvers') or [])
+    except Exception:  # noqa: BLE001 - a broken config grants nothing
+        users = frozenset()
+    _cache[key] = (now, users)
+    return users
+
+
 def decision_channels(config):
     return {config['decision_channel'], *([config['ooo']['channel']] if config['ooo']['channel'] else [])}
 

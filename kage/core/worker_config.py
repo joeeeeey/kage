@@ -629,6 +629,12 @@ class WorkerConfig:
             elif key in ('inbox_task', 'oncall_task'):
                 if not isinstance(value, str) or not TASK_ID_RE.fullmatch(value):
                     _fail(field, 'must_be_a_task_workspace_name')
+            elif key == 'identity':  # 0.77.0: whose token intake reads and answers with (bot = the assistant only)
+                if value not in ('user', 'bot'):
+                    _fail(field, 'must_be_one_of_user_bot')
+            elif key == 'owner_like':  # 0.77.0: whose messages to the bot count as the owner's own (bot identity)
+                if value not in ('owner', 'approvers'):
+                    _fail(field, 'must_be_one_of_owner_approvers')
             elif key.endswith('_provider'):
                 if value not in PROVIDERS:
                     _fail(field, 'must_be_codex_or_claude')

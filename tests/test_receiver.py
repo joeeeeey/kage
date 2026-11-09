@@ -150,5 +150,44 @@ class CardReplyTest(unittest.TestCase):
         self.assertEqual([r.card_reply_ttl(v) for v in (True, float('nan'), 1, 600)], [300.0, 300.0, 30.0, 600.0])
 
 
+
+class IntakePushTest(unittest.TestCase):
+    """0.77.0 bot intake: @mentions of the bot and DMs to it -> `intake-push` refs (ids only)."""
+
+    def event(self, **event):
+        base = {'type': 'app_mention', 'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': OWNER}
+        return {'type': 'event_callback', 'team_id': TEAM, 'event': {**base, **event}}
+
+    def test_which_events_are_intake(self):
+        self.assertTrue(r.is_intake_event(self.event()))
+        dm = self.event(type='message', channel='D0000TEST01', channel_type='im')
+        self.assertTrue(r.is_intake_event(dm))
+        self.assertFalse(r.is_intake_event(self.event(type='message', channel_type='channel')))  # a plain channel post
+        self.assertFalse(r.is_intake_event(self.event(type='message', channel='D0000TEST01', channel_type='im',
+                                                      thread_ts='1700000000.000100')))  # a DM thread reply: card path
+        self.assertFalse(r.is_intake_event({'type': 'event_callback', 'event': 'x'}))
+
+    def test_refs_drops_and_command(self):
+        refs, why = r.intake_refs(self.event(), expected_team_id=TEAM)
+        self.assertEqual((refs, why), ({'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': OWNER}, ''))
+        refs, _ = r.intake_refs(self.event(thread_ts='1700000000.000100'), expected_team_id=TEAM)
+        self.assertEqual(refs['thread_ts'], '1700000000.000100')  # a mention inside a thread
+        for event, code in (({'subtype': 'bot_message'}, 'has_subtype'), ({'bot_id': 'B1'}, 'has_bot_id'),
+                            ({'channel': 'X1'}, 'bad_channel'), ({'ts': 'now'}, 'bad_ts'), ({'user': 'W1'}, 'bad_user'),
+                            ({'thread_ts': 'later'}, 'bad_thread_ts')):
+            self.assertEqual(r.intake_refs(self.event(**event), expected_team_id=TEAM), (None, code))
+        self.assertEqual(r.intake_refs(self.event(), expected_team_id='T0000TEST02'), (None, 'unexpected_team'))
+        cmd = r.intake_push_command({**refs}, python='py', script=Path('/x/kage.py'))
+        self.assertEqual(cmd[-9:], ['intake-push', '--channel', 'C0000TEST01', '--ts', '1700000001.000200', '--user',
+                                    OWNER, '--thread-ts', '1700000000.000100'])
+        self.assertNotIn('--thread-ts', r.intake_push_command(r.intake_refs(self.event(), expected_team_id=TEAM)[0],
+                                                              python='py', script=Path('/x/kage.py')))
+
+    def test_the_gate_comes_from_the_runtime(self):
+        base = {'ok': True, 'enabled': True, 'channels': [], 'users': []}
+        self.assertFalse(r.parse_card_reply_config(base)['intake_push'])
+        self.assertTrue(r.parse_card_reply_config({**base, 'intake_push': True})['intake_push'])
+
+
 if __name__ == '__main__':
     unittest.main()

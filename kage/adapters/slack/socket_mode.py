@@ -279,6 +279,41 @@ class SocketModeRunner:
                        "channel_id": self.ns._safe(event.get("channel")), "message_ts": self.ns._safe(event.get("ts"))}, stderr=True)
             return None
 
+    def process_intake(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """0.77.0 bot intake: an @mention of the bot or a DM to it -> the runtime's `intake-push` (refs only) when the
+        runtime takes them (`card-reply-config` "intake_push", on only for a bot-identity intake). None otherwise (not
+        such an event, or the gate is off: the event goes on to the card-reply path as before). A deployment whose
+        receiver namespace has no intake functions never reaches it. Logs carry ids and codes only, never the text."""
+        is_intake = getattr(self.ns, "is_intake_event", None)
+        if is_intake is None or not is_intake(payload):
+            return None
+        try:
+            if not self.card_reply_settings().get("intake_push"):
+                return None
+            refs, code = self.ns.intake_refs(payload, expected_team_id=self.args.expected_team_id)
+            if refs is None:
+                event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+                record = {"event": "intake_dropped", "reason": code, "channel_id": self.ns._safe(event.get("channel")),
+                          "message_ts": self.ns._safe(event.get("ts"))}
+                self._log(record)
+                return record
+            script, db, _ = self._followup_target()
+            result = self._followup_json(self.ns.intake_push_command(refs, python=sys.executable, script=script, db=db),
+                                         "intake_push")
+            record = {
+                "event": "intake_pushed",
+                "channel_id": self.ns._safe(refs["channel"]),
+                "message_ts": self.ns._safe(refs["ts"]),
+                "ok": bool(result.get("ok")),
+                "outcome": self.ns._safe(result.get("outcome"), self.ns.SAFE_CODE_RE),
+                "reason": self.ns._safe(result.get("reason"), self.ns.SAFE_CODE_RE),
+            }
+            self._log(record)
+            return record
+        except Exception as exc:  # noqa: BLE001 - one bad event never stops the dispatch thread
+            self._log({"event": "intake_push_error", "error_type": type(exc).__name__}, stderr=True)
+            return {"event": "intake_push_error"}
+
     def process_control_message(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         """A new top-level message in a decision channel -> the runtime's `control-push` (refs only; the runtime
         reads it back and keeps it only if it is the owner's own hand-typed message) when the cached gate says the
@@ -424,6 +459,8 @@ class SocketModeRunner:
                 self._seen.popitem(last=False)
         payload = envelope.get("payload") or {}
         if envelope.get("type") == "events_api":
+            if self.process_intake(payload) is not None:  # 0.77.0: a message to the bot, when the runtime takes them
+                return False
             if self.ns.is_card_reply_event(payload):
                 self.process_card_reply(payload)
             return False

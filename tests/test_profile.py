@@ -238,6 +238,19 @@ class InstanceValidationTest(unittest.TestCase):
                 profile.parse_instance({'schema': profile.INSTANCE_SCHEMA, 'agent_marker': bad})
 
 
+    def test_console_public_origins(self):
+        self.assertEqual(profile.parse_instance({'schema': profile.INSTANCE_SCHEMA}).public_origins, ())
+        ok = profile.parse_instance({'schema': profile.INSTANCE_SCHEMA,
+                                     'console': {'public_origins': ['https://console.example.com']}})
+        self.assertEqual(ok.public_origins, ('https://console.example.com',))
+        for bad in ('http://console.example.com', 'https://console.example.com/', 'https://Console.example.com',
+                    'https://localhost', ['https://console.example.com'], 'https://*.example.com'):
+            with self.subTest(bad=bad), self.assertRaises(profile.ProfileError):
+                profile.parse_instance({'schema': profile.INSTANCE_SCHEMA, 'console': {'public_origins': [bad]}})
+        with self.assertRaises(profile.ProfileError):
+            profile.parse_instance({'schema': profile.INSTANCE_SCHEMA, 'console': {'public_origins': 'https://a.example'}})
+
+
 class FileHandlingTest(unittest.TestCase):
     def test_missing_document(self):
         with DeploymentDir(org=None) as d, self.assertRaises(profile.ProfileError) as ctx:

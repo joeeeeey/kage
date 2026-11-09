@@ -1,5 +1,6 @@
 import types
 import unittest
+import unittest.mock
 import zoneinfo
 
 from kage.core import dispatch as D
@@ -40,9 +41,13 @@ class DispatchCoreTest(unittest.TestCase):
 
     def test_cards_labels_and_env(self):
         c = core()
-        blocks = c.run_card_blocks('text', 'status', 'd1')
-        labels = [e['text']['text'] for b in blocks if b['type'] == 'actions' for e in b['elements']]
-        self.assertEqual(labels, ['⏹ Stop', '📺 Watch in iTerm', 'View'])
+        def labels():
+            blocks = c.run_card_blocks('text', 'status', 'd1')
+            return [e['text']['text'] for b in blocks if b['type'] == 'actions' for e in b['elements']]
+        with unittest.mock.patch.object(D, 'ITERM', True):
+            self.assertEqual(labels(), ['⏹ Stop', '📺 Watch in iTerm', 'View'])
+        with unittest.mock.patch.object(D, 'ITERM', False):  # 0.77.0: off macOS, no iTerm to open
+            self.assertEqual(labels(), ['⏹ Stop', 'View'])
         self.assertEqual(c.trigger_summary(['slack_message', 'slack_message', 'note']), 'Slack message × 2, task note × 1')
         self.assertEqual(c._waited(7200), 'waited 2 h')
         env = c.strip_agent_env({'TEST_RUN_ID': 'r1', 'CLAUDE_CODE_X': '1', 'CODEX_THREAD_ID': 't', 'PATH': '/bin'})

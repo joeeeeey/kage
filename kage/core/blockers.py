@@ -1219,7 +1219,7 @@ class Blockers:
             '', self.msg('blockers.skill_task_prompt.6'), item['brief_zh']])
 
     def launch_skill_task(self, rt, db, db_path, p, now, runner=None):
-        """Bootstrap `local-task-<today>-<slug>` (no Linear, no iTerm) and queue its first headless session."""
+        """Bootstrap `local-task-<today>-<slug>` (no ticket, no terminal tab) and queue its first headless session."""
         item = json.loads(p['proposal'])
         config_all = rt.worker_config.load()[0]
         provider = item['provider'] if item['provider'] != 'auto' else \

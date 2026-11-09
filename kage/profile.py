@@ -9,7 +9,8 @@ no values for any of them:
                                    the names of shared channels
   instance.json  kage.instance/v1  where this instance's files are: the task workspace root and other named
                                    paths, kept exactly as written (a "~/..." path stays "~/..." in text); the
-                                   marker this instance puts on the messages its agents send
+                                   marker this instance puts on the messages its agents send; the https origins
+                                   its console is also reached at behind a proxy (`console.public_origins`)
 
 Loading is strict. Any problem raises ProfileError and nothing is half-loaded, so a caller can fall back as a
 whole. A profile file that is group- or world-writable is refused, like any other file that decides who may
@@ -43,6 +44,7 @@ CHANNEL_NAME_RE = re.compile(r'#[a-z0-9][a-z0-9._-]{0,79}')
 PATH_NAME_RE = re.compile(r'[a-z][a-z0-9_]{0,63}')
 OWNER_KEY_RE = re.compile(r'[a-z][a-z0-9_]{0,31}')
 MARKER_RE = re.compile(r'[a-z][a-z0-9_]{2,63}')
+ORIGIN_RE = re.compile(r'https://[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:[0-9]{1,5})?')
 DEFAULT_AGENT_MARKER = 'kage_agent_sent'
 DEFAULT_ASSISTANT = 'assistant'   # how text names the assistant (bot) when owner.json gives no assistant.display
 TRACKERS = ('linear', 'jira', 'none')
@@ -101,6 +103,7 @@ class Org:
 class Instance:
     paths: types.MappingProxyType      # name -> path text exactly as written in instance.json
     agent_marker: str = DEFAULT_AGENT_MARKER   # hidden marker (event type) on every message this instance's agents send
+    public_origins: tuple = ()  # 0.77.0: https origins a proxy serves the console at (it still binds the loopback only)
 
     @property
     def workspace_root(self):
@@ -212,7 +215,11 @@ def parse_instance(raw):
     marker = _text(raw, 'agent_marker') or DEFAULT_AGENT_MARKER
     if not MARKER_RE.fullmatch(marker):
         raise ProfileError('agent_marker must be a lower-case identifier such as kage_agent_sent')
-    return Instance(paths=types.MappingProxyType(paths), agent_marker=marker)
+    origins = _obj(raw, 'console').get('public_origins', [])
+    if not isinstance(origins, list) or len(origins) > 5 or any(
+            not isinstance(o, str) or not ORIGIN_RE.fullmatch(o) for o in origins):
+        raise ProfileError('console.public_origins must be up to 5 origins such as https://console.example.com')
+    return Instance(paths=types.MappingProxyType(paths), agent_marker=marker, public_origins=tuple(origins))
 
 
 def _read(path):

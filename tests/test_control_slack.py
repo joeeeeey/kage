@@ -152,6 +152,17 @@ class SlackSourceTest(unittest.TestCase):
             self.db.execute('INSERT INTO agent_sends (channel, ts, kind) VALUES (?,?,?)', (CHANNEL, typed['ts'], 'x'))
         self.assertFalse(self.c.typed(self.rt, self.db, CHANNEL, typed), 'in our send ledger')
 
+    def test_an_owner_like_approvers_message_counts_as_the_owners(self):
+        """0.77.0: in a bot-only deployment with `intake.owner_like: approvers` the approvers count as the owner."""
+        approver = 'U0000APPR01'
+        self.rt.envelopes.ENVELOPES.owner_like = lambda: frozenset({approver})
+        m = self.slack.say(self.t(10), '今天有在做哪些事情？', user=approver)
+        self.assertTrue(self.c.typed(self.rt, self.db, CHANNEL, m))
+        self.assertEqual(self.push(m)['outcome'], 'recorded')
+        self.assertEqual(self.push(self.slack.say(self.t(11), 'x', user='U0000OTHER1'))['reason'], 'not_the_owner')
+        self.rt.envelopes.ENVELOPES.owner_like = frozenset  # off again: an approver is just an approver
+        self.assertEqual(self.push(self.slack.say(self.t(12), 'y', user=approver))['reason'], 'not_the_owner')
+
     def test_the_explicit_checks_hold_even_if_the_classification_were_wrong(self):
         """Defense in depth: with a classifier that would call anything the owner's own words, an app id, a bot, a
         subtype or another author still never counts."""

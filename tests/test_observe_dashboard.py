@@ -513,6 +513,24 @@ class DashboardCoreTest(unittest.TestCase):
         self.assertEqual(core('zh-CN').watch_visuals({'state': 'stopped'}, 100.0)['freshness']['label'], '已关闭')
         self.assertEqual(c._inbox_tasks(), ('mira-inbox',))
 
+    def test_a_public_origin_behind_a_proxy(self):
+        """0.77.0: instance.json `console.public_origins`: that host and origin pass the host / same-origin checks; the
+        server still binds the loopback only."""
+        handler = D.Handler.__new__(D.Handler)
+        handler.server = types.SimpleNamespace(server_port=8777, public_origins=('https://console.example.com',))
+        for headers, expected in (
+                ({'Host': 'console.example.com', 'Origin': 'https://console.example.com'}, (True, True)),
+                ({'Host': '127.0.0.1:8777', 'Origin': 'https://console.example.com'}, (True, True)),  # the proxy's Host
+                ({'Host': '127.0.0.1:8777', 'Origin': 'http://127.0.0.1:8777'}, (True, True)),
+                ({'Host': 'console.example.com', 'Origin': 'http://console.example.com'}, (True, False)),
+                ({'Host': 'evil.example', 'Origin': 'https://evil.example'}, (False, False)),
+                ({'Host': '127.0.0.1:8777', 'Origin': 'https://evil.example'}, (True, False))):
+            handler.headers = headers
+            self.assertEqual((handler.valid_host(), handler.same_origin()), expected, headers)
+        handler.server = types.SimpleNamespace(server_port=8777)  # none configured: the loopback only, as before
+        handler.headers = {'Host': 'console.example.com', 'Origin': 'https://console.example.com'}
+        self.assertEqual((handler.valid_host(), handler.same_origin()), (False, False))
+
     def test_the_server_binds_loopback_only_and_reads_state(self):
         path = self.tmp / 'state.sqlite'
         with sqlite3.connect(path) as db:

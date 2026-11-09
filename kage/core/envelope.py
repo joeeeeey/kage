@@ -125,12 +125,15 @@ class Envelopes:
         self.authorities = ('none', f'{owner_key}_intent', 'decision_verified', 'routine_owner')
         self.owner_trust, self.owner_intent = owner_key, f'{owner_key}_intent'
         self.rule_hand_typed, self.rule_non_message = f'{owner_key}_hand_typed', f'{owner_key}_non_message'
+        self.owner_like = frozenset  # 0.77.0: who else counts as the owner (kage.app wires authority.owner_like_users)
 
     def person_trust(self, user, *, delegates=(), other_team=False, guest=False, people=None):
         """(trust, rule) of a human user. Names, mentions and text never change it; the channel adapter says whether
         the user is from another workspace (`other_team`) or a guest account (`guest`)."""
         if user == self.owner_user:
             return self.owner_trust, self.owner_trust
+        if user and user in self.owner_like():
+            return self.owner_trust, 'owner_like_approver'
         if user in delegates:
             return 'delegate', 'ooo_delegate'
         if other_team:

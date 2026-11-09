@@ -1,8 +1,8 @@
 """P34 no-orphan task lifecycle (任务不孤儿). Deterministic, no model.
 
 A dispatched run must leave its task in exactly ONE closure state, each with an owner + trigger + deadline or terminal:
-Done (Linear Done) / Not-actionable (Canceled + reason) / Waiting-on-a-named-person (an @-mention to a specific Slack
-id + a watch + a ~1-day reminder; Linear In Review, assignee stays the owner) / Waiting-on-the owner (an open card) /
+Done (ticket Done) / Not-actionable (Canceled + reason) / Waiting-on-a-named-person (an @-mention to a specific Slack
+id + a watch + a ~1-day reminder; ticket In Review, assignee stays the owner) / Waiting-on-the owner (an open card) /
 Agent-continuing (a running or scheduled session) / Blocked (a report-blocker card). A run that ends with none of these
 (the case: "suggested next steps" and stopped, ticket left In Progress with no owner) is an orphan.
 
@@ -11,11 +11,11 @@ Agent-continuing (a running or scheduled session) / Blocked (a report-blocker ca
   running sessions, a status.md terminal marker) or to `orphan`.
 - `closure_guard` (dispatcher, at run end): a `success` run that left the task an orphan AND whose final message merely
   handed off / suggested next steps (no completion, no mechanism) gets ONE assistant card to the owner. Conservative: only
-  Linear-ticket, runtime-managed, non-smoke tasks; one card per task per cooldown; misses rather than noise.
+  ticket, runtime-managed, non-smoke tasks; one card per task per cooldown; misses rather than noise.
 - `orphan_sweep` (supervisor, deduped, every `tasks.sweep_interval_minutes`): scans ONLY runtime-managed tasks (≥1
   `dispatches` row) the runtime launched or that were registered after the P0 backfill — a backfilled folder only ever
   revived by an event is never swept (`sweep_tasks`). An orphan that has been idle past `tasks.orphan_idle_hours` and
-  that Linear still shows non-terminal (read via the deployment's tracker helper, best effort) gets one card. Each Linear read is
+  that the tracker still shows non-terminal (read via the deployment's tracker helper, best effort) gets one card. Each read is
   persisted (a Done / Canceled ticket is not read again until the task is dispatched again) and one sweep's liveness
   probes and reads share a wall-clock budget. Local tasks are exempt (looser; never swept).
 - `deadline_watchdog` (supervisor): a registered `task_deadlines` row surfaces one card `tasks.deadline_lead_hours`
@@ -44,17 +44,18 @@ import time
 import uuid
 
 from kage import locale
+from kage.adapters import trackers as _trackers
 
 ID_RE = re.compile(r'(?:or|dl)[0-9a-f]{14}')
 
 
-SWEEP_LINEAR_TTL = 300.0
+SWEEP_TRACKER_TTL = 300.0
 
 
-SWEEP_LINEAR_BUDGET = 15.0
+SWEEP_TRACKER_BUDGET = 15.0
 
 
-LINEAR_TIMEOUT, LINEAR_MIN_TIMEOUT = 20.0, 5.0
+TRACKER_TIMEOUT, TRACKER_MIN_TIMEOUT = 20.0, 5.0
 
 
 LIFECYCLE_SINCE_KEY = 'lifecycle_since'   # P38 (F36): runtime_meta; the cut-over when there is no backfill marker
@@ -76,7 +77,7 @@ def initialize(db):
         linear_state TEXT, card_event TEXT, card_channel TEXT, card_ts TEXT, choice TEXT, decided_by TEXT,
         decided_at REAL, dispatch_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL, error TEXT);
       CREATE INDEX IF NOT EXISTS orphan_cards_task ON orphan_cards(task_id, state);
-      -- P38 (F30): the sweep's last Linear read per task (state NULL = unreadable). A terminal read stands until the
+      -- P38 (F30): the sweep's last tracker read per task (state NULL = unreadable). A terminal read stands until the
       -- task is dispatched again (`dispatches` = its dispatch count at the read); read_at orders the next sweep.
       CREATE TABLE IF NOT EXISTS task_linear_reads (
         task_id TEXT PRIMARY KEY, state TEXT, type TEXT, terminal INTEGER NOT NULL DEFAULT 0,
@@ -122,7 +123,7 @@ def runtime_managed(db, task_id):
 
 
 def runtime_managed_tasks(db):
-    """DISTINCT task_id of every runtime-managed, drivable (Linear-ticket, non-smoke) task."""
+    """DISTINCT task_id of every runtime-managed, drivable (ticket, non-smoke) task."""
     return [r[0] for r in db.execute('SELECT DISTINCT task_id FROM dispatches WHERE task_id IS NOT NULL ORDER BY task_id')]
 
 
@@ -275,23 +276,23 @@ def _recent_orphan_card(db, task_id, now, cfg):
                       'LIMIT 1', (task_id, now - cooldown)).fetchone() is not None
 
 
-def _linear_script(rt, helper=None):
+def _tracker_script(rt, helper=None):
     """The deployment's tracker helper (`helper`: its path under the skills root, the folder of the runtime's skill
     folder); None without one, then every ticket state is unknown."""
     return Path(rt.__file__).resolve().parents[2] / helper if helper else None
 
 
-def _linear_ttl(cfg):
+def _tracker_ttl(cfg):
     """P38 (F30): an open / unreadable read is reused by the NEXT sweep (the supervisor sweeps every max(300 s,
     interval)) instead of re-running the subprocess; ×1.5 absorbs loop jitter, so never by the one after."""
-    return 1.5 * max(SWEEP_LINEAR_TTL, cfg['sweep_interval_minutes'] * 60.0)
+    return 1.5 * max(SWEEP_TRACKER_TTL, cfg['sweep_interval_minutes'] * 60.0)
 
 
 def _dispatch_count(db, task_id):
     return db.execute('SELECT count(*) FROM dispatches WHERE task_id=? OR task_key=?', (task_id, task_id)).fetchone()[0]
 
 
-def _known_linear(db, task_id, now, ttl):
+def _known_tracker_state(db, task_id, now, ttl):
     """P38 (F30): (known, state) from the task's last persisted read. A Done / Canceled ticket stays known until the
     task is dispatched again (then it is read once more); an open or unreadable read is known for `ttl`."""
     row = db.execute('SELECT * FROM task_linear_reads WHERE task_id=?', (task_id,)).fetchone()
@@ -303,19 +304,14 @@ def _known_linear(db, task_id, now, ttl):
     return now - row['read_at'] < ttl, state
 
 
-def _note_linear(rt, db, task_id, state, now):
+def _note_tracker_state(rt, db, task_id, state, now):
     with rt.transaction(db):
         db.execute('INSERT OR REPLACE INTO task_linear_reads (task_id,state,type,terminal,dispatches,read_at) '
                    'VALUES (?,?,?,?,?,?)', (task_id, (state or {}).get('state'), (state or {}).get('type'),
-                                            int(_is_terminal_linear(state)), _dispatch_count(db, task_id), now))
+                                            int(_is_terminal_ticket(state)), _dispatch_count(db, task_id), now))
 
 
-def _is_terminal_linear(state):
-    if not state:
-        return False
-    if str(state.get('type') or '').lower() in ('completed', 'canceled', 'cancelled'):
-        return True
-    return str(state.get('state') or '').strip().lower() in ('done', 'canceled', 'cancelled', 'completed', 'duplicate')
+_is_terminal_ticket = _trackers.is_terminal  # Done / Canceled: generic workflow categories
 
 
 def _budget_runner(deadline, clock):
@@ -388,9 +384,10 @@ class Lifecycle:
     and wake-ups in the owner's words and time zone, and the owner's clicks."""
 
     def __init__(self, language, *, tz, ticket_task_re, ticket_id_re, owner_key, owner_name, owner_user,
-                 tracker_helper=None):
+                 tracker_helper=None, tracker=None):
         self.language = language
         self.tracker_helper = tracker_helper
+        self.tracker = tracker or _trackers.current()  # N2: the deployment's tracker (`kage.adapters.trackers`)
         self.tz = tz
         self.ticket_task_re = ticket_task_re
         self.ticket_id_re = ticket_id_re
@@ -421,21 +418,22 @@ class Lifecycle:
              }
 
     def msg(self, key, **values):
-        return locale.message(self.language, key, **values)
+        """N2: `{tracker}` is the tracker's name; a key with a `.no_tracker` variant uses it when there is no tracker."""
+        return locale.tracker_message(self.language, key, self.tracker, **values)
 
     def pattern(self, key):
-        return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
+        return locale.pattern(self.language, key, self.tracker).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
 
-    def is_linear_task(self, task_id):
-        """A Linear-ticket task (<TEAM>-N, a team of the org's ticket pattern) — driven by the lifecycle machinery. local-task-… and the plain-named
+    def is_ticket_task(self, task_id):
+        """A ticket task (<TEAM>-N, a team of the org's ticket pattern) — driven by the lifecycle machinery. local-task-… and the plain-named
         long-lived tasks (<owner key>-inbox / <owner key>-oncall, P39) are not."""
         return bool(task_id) and bool(self.ticket_task_re.match(str(task_id)))
 
     def drivable(self, rt, task_id, resident=None):
-        """Swept by the orphan sweep / checked by the run-end guard: a Linear-ticket, non-smoke, non-session task that is
+        """Swept by the orphan sweep / checked by the run-end guard: a ticket, non-smoke, non-session task that is
         not long-lived (P39: explicit, even for a long-lived task named like a ticket). `resident`: a precomputed
         long_lived(rt) for loops."""
-        return (self.is_linear_task(task_id) and not str(task_id or '').startswith('session:')
+        return (self.is_ticket_task(task_id) and not str(task_id or '').startswith('session:')
                 and not rt.registry.is_smoke_task(task_id)
                 and task_id not in (long_lived(rt) if resident is None else resident))
 
@@ -526,8 +524,8 @@ class Lifecycle:
         return {'carded': True, 'orphan_id': oid, 'card': card, 'reason': reason}
 
     def closure_guard(self, rt, db, run, final, now=None, probe=None):
-        """A dispatched `success` run that left its Linear-ticket task an orphan AND merely suggested next steps / handed
-        off → ONE assistant card to the owner. Conservative: non-Linear / local / smoke / non-runtime-managed tasks, a task
+        """A dispatched `success` run that left its ticket task an orphan AND merely suggested next steps / handed
+        off → ONE assistant card to the owner. Conservative: non-ticket / local / smoke / non-runtime-managed tasks, a task
         already in a closure state, and a final that declared completion or made no suggestion are all left alone."""
         now = time.time() if now is None else now
         if not config(rt)['orphan_sweep_enabled']:
@@ -553,38 +551,28 @@ class Lifecycle:
             return 'closed'
         return self.post_orphan_card(rt, db, task_id, task_path, now, reason='run_end')['reason']
 
-    def _linear_state(self, rt, task_id, timeout=LINEAR_TIMEOUT):
-        """Best effort: the Linear workflow state of a <TEAM>-N ticket via the deployment's tracker helper (a script under
-        the skills root that prints `issue get --json`; `tracker_helper`).
+    def _tracker_state(self, rt, task_id, timeout=TRACKER_TIMEOUT):
+        """Best effort: the workflow state of a <TEAM>-N ticket from the tracker, through the deployment's helper (a script
+        under the skills root; `tracker_helper`).
         Returns {'state': name, 'type': category} or None when it cannot be read (then the sweep stays conservative and
         does NOT card). Not cached here: the sweep persists every read (`task_linear_reads`); tests inject their own
         reader or fake the subprocess."""
-        state = None
         try:
             m = self.ticket_id_re.match(str(task_id))
-            script = _linear_script(rt, self.tracker_helper)
-            if m and script is not None and script.is_file():
-                import subprocess
-                out = subprocess.run(['python3', str(script), '--json', 'issue', 'get', m.group(0)],
-                                     capture_output=True, text=True, timeout=timeout, check=False)
-                if out.returncode == 0 and out.stdout.strip():
-                    st = (json.loads(out.stdout).get('state') or {})  # `issue get --json` prints the issue node
-                    if st.get('name'):
-                        state = {'state': st.get('name'), 'type': st.get('type')}
-        except Exception:  # noqa: BLE001 - unreadable Linear = unknown = conservative skip
-            state = None
-        return state
+            return self.tracker.read_state(_tracker_script(rt, self.tracker_helper), m.group(0), timeout) if m else None
+        except Exception:  # noqa: BLE001 - an unreadable ticket = unknown = conservative skip
+            return None
 
     def orphan_sweep(self, rt, db, db_path, cfg, now, probe, linear_state, result, clock=time.monotonic):
         idle = cfg['orphan_idle_hours'] * 3600
-        ttl = _linear_ttl(cfg)
+        ttl = _tracker_ttl(cfg)
         # P38 (F30): a bounded wall-clock per sweep; what does not fit waits for the next one, least recently read first
         # (a deferred task leads the next sweep, so every candidate is reached). The budget covers the liveness probe too:
-        # the sweep's own probe runs inside it, and no Linear read or card starts once it is spent.
-        deadline = clock() + SWEEP_LINEAR_BUDGET
+        # the sweep's own probe runs inside it, and no tracker read or card starts once it is spent.
+        deadline = clock() + SWEEP_TRACKER_BUDGET
         probe = probe or rt.liveness.Probe(ttl=20, runner=_budget_runner(deadline, clock))
-        reader = linear_state or (lambda tid: self._linear_state(
-            rt, tid, timeout=max(LINEAR_MIN_TIMEOUT, min(LINEAR_TIMEOUT, deadline - clock()))))
+        reader = linear_state or (lambda tid: self._tracker_state(
+            rt, tid, timeout=max(TRACKER_MIN_TIMEOUT, min(TRACKER_TIMEOUT, deadline - clock()))))
         read_at = {r[0]: r[1] for r in db.execute('SELECT task_id, read_at FROM task_linear_reads')}
         tasks = sorted(sweep_tasks(db), key=lambda tid: (read_at.get(tid, 0.0), tid))
         resident = long_lived(rt)  # P39: the long-lived set is never swept (one config read per sweep)
@@ -603,8 +591,8 @@ class Lifecycle:
                     continue
                 if _recent_orphan_card(db, task_id, now, cfg):
                     continue
-                known, ls = _known_linear(db, task_id, now, ttl)
-                if known and _is_terminal_linear(ls):
+                known, ls = _known_tracker_state(db, task_id, now, ttl)
+                if known and _is_terminal_ticket(ls):
                     continue  # P38 (F30): Done / Canceled at the last read, not dispatched since — never re-read each sweep
                 if self.closure_state(rt, db, task_id, str(task_dir), now, probe) != 'orphan':
                     continue
@@ -613,11 +601,11 @@ class Lifecycle:
                     break
                 if not known:
                     ls = reader(task_id)
-                    _note_linear(rt, db, task_id, ls, now)
+                    _note_tracker_state(rt, db, task_id, ls, now)
                 if ls is None:  # cannot confirm the ticket is still open: do not nag
                     result['skipped_unknown_linear'].append(task_id)
                     continue
-                if _is_terminal_linear(ls):
+                if _is_terminal_ticket(ls):
                     continue
                 try:
                     posted = self.post_orphan_card(rt, db, task_id, str(task_dir), now, 'sweep', linear_state=ls)
@@ -845,7 +833,7 @@ class Lifecycle:
                 rt._meta_error(db, 'deadline_lapse_error', exc)
 
     def sweep(self, rt, db, db_path, now=None, probe=None, linear_state=None, clock=None):
-        """Supervisor step (every tasks.sweep_interval_minutes): orphan sweep (Linear-aware) + deadline watchdog.
+        """Supervisor step (every tasks.sweep_interval_minutes): orphan sweep (tracker-aware) + deadline watchdog.
         `deferred`: orphan candidates left for the next sweep because this one's budget ran out (`clock` = the wall clock
         that budget is measured on; tests inject one)."""
         now = time.time() if now is None else now
@@ -919,3 +907,13 @@ class Lifecycle:
                                  kind='deadline_card_result')
             done.append({'deadline_id': row['id'], 'task_id': row['task_id'], 'choice': choice})
         return done
+
+
+# N2a: the pre-N2 names, kept for deployments assembled before N2 (they import them by name); N2b removes them. The
+# names of stored tables / columns / result keys (`task_linear_reads`, `linear_state`, `skipped_unknown_linear`) move
+# in N2b with a migration.
+SWEEP_LINEAR_TTL, SWEEP_LINEAR_BUDGET = SWEEP_TRACKER_TTL, SWEEP_TRACKER_BUDGET
+LINEAR_TIMEOUT, LINEAR_MIN_TIMEOUT = TRACKER_TIMEOUT, TRACKER_MIN_TIMEOUT
+_linear_script, _linear_ttl, _known_linear = _tracker_script, _tracker_ttl, _known_tracker_state
+_note_linear, _is_terminal_linear = _note_tracker_state, _is_terminal_ticket
+Lifecycle.is_linear_task, Lifecycle._linear_state = Lifecycle.is_ticket_task, Lifecycle._tracker_state

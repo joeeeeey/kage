@@ -8,10 +8,11 @@ import json
 from typing import Any
 
 BOT_SCOPES = ('chat:write', 'im:write', 'im:history', 'im:read', 'groups:history', 'groups:read', 'channels:history',
-              'channels:read', 'reactions:read', 'reactions:write', 'users:read', 'users:read.email')
+              'channels:read', 'reactions:read', 'reactions:write', 'users:read', 'users:read.email',
+              'app_mentions:read')  # 0.77.0: @mentions of the bot (`app_mention`) for a bot-identity intake
 USER_SCOPES = ('chat:write', 'reactions:write', 'search:read', 'im:history', 'mpim:history', 'channels:history',
                'groups:history', 'users:read')
-BOT_EVENTS = ('message.im', 'message.groups')
+BOT_EVENTS = ('message.im', 'message.groups', 'app_mention')
 STEPS = (
     'api.slack.com/apps → Create New App → From a manifest → choose the workspace → paste this JSON',
     'Install to Workspace (if the workspace needs admin approval, Slack asks an admin first)',

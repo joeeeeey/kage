@@ -288,10 +288,12 @@ class CardReplies:
         self.key, self.owner_user = owner_key, owner_user
 
     def owner_typed(self, rt, db, channel, m, card_ts):
-        """The owner's own hand-typed reply in this card's thread; never agents' posts with the owner's token, other
-        apps or bots."""
+        """The owner's own hand-typed reply in this card's thread (0.77.0: or an owner-like approver's, see
+        kage.core.authority.owner_like_users); never agents' posts with the owner's token, other apps or bots."""
         ts = str(m.get('ts') or '')
-        if m.get('user') != self.owner_user or m.get('thread_ts') != card_ts or not TS_RE.fullmatch(ts) or \
+        user = m.get('user')
+        if not user or (user != self.owner_user and user not in _control.owner_like(rt)) or \
+                m.get('thread_ts') != card_ts or not TS_RE.fullmatch(ts) or \
                 float(ts) <= float(card_ts):
             return False
         ledger = db.execute('SELECT 1 FROM agent_sends WHERE channel=? AND ts=?', (channel, ts)).fetchone() is not None

@@ -50,6 +50,16 @@ class CardRepliesTest(unittest.TestCase):
                     {'author_kind': 'human', 'trust': 'mira', 'authority': 'none'}):
             self.assertFalse(REPLIES.owner_typed(runtime(env), db, CHANNEL, reply(), ROOT), env)
 
+    def test_an_owner_like_approvers_reply_is_the_owners(self):
+        # 0.77.0: a bot-only deployment's approvers with `intake.owner_like: approvers` (kage.core.authority)
+        db, rt = store(), runtime()
+        self.assertFalse(REPLIES.owner_typed(rt, db, CHANNEL, reply(user=DEPUTY), ROOT))
+        self.assertEqual(THREADS.receiver_config(rt, db)['users'], [OWNER])
+        rt.envelopes.ENVELOPES = types.SimpleNamespace(owner_like=lambda: frozenset({DEPUTY}))
+        self.assertTrue(REPLIES.owner_typed(rt, db, CHANNEL, reply(user=DEPUTY), ROOT))
+        self.assertFalse(REPLIES.owner_typed(rt, db, CHANNEL, reply(user=OTHER), ROOT))
+        self.assertEqual(THREADS.receiver_config(rt, db)['users'], sorted({OWNER, DEPUTY}))
+
     def test_claims_and_poll_ladder(self):
         db = store()
         self.assertFalse(card_replies.claimed(db, CHANNEL, '1.0', now=1000.0))

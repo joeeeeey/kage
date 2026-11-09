@@ -52,6 +52,16 @@ class LoopTest(unittest.TestCase):
             limited.read_api('conversations.history', 't', {})
         self.assertIn('conversations.history', limited.rate_limits)
 
+    def test_a_bot_only_deployment_calls_with_the_bot_token(self):
+        def config(identity):
+            return types.SimpleNamespace(load=lambda: ({'intake': {'identity': identity}}, None))
+        bot_only = core(worker_config=config('bot'))
+        self.assertEqual(bot_only.api_identity(), 'bot-token')  # 0.77.0: no user token there
+        self.assertEqual(set(bot_only.identity_cache), {True})
+        self.assertEqual(core(worker_config=config('user')).api_identity(), 'user-token')
+        broken = types.SimpleNamespace(load=lambda: (_ for _ in ()).throw(ValueError('bad config')))
+        self.assertEqual(core(worker_config=broken).api_identity(), 'user-token')
+
     def test_identity_is_checked_against_the_owner_and_cached(self):
         c = core()
         self.assertEqual(c.api_identity(), 'user-token')

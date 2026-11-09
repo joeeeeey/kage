@@ -33,6 +33,17 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual((e['authority'], e['rule']), ('none', 'mira_non_message'))
         self.assertEqual(self.classify(user=OWNER, subtype='thread_broadcast')['authority'], 'mira_intent')
 
+    def test_an_owner_like_approver_carries_the_owners_intent_and_says_so(self):
+        # 0.77.0: in a bot-identity deployment with intake.owner_like approvers, kage.app wires this to the approvers
+        self.assertEqual(self.classify(user=OLA)['trust'], 'colleague')
+        self.env.owner_like = lambda: frozenset({OLA})
+        e = self.classify(user=OLA)
+        self.assertEqual((e['trust'], e['authority'], e['rule']), ('mira', 'mira_intent', 'owner_like_approver'))
+        e = self.classify(user=OLA, subtype='message_changed')
+        self.assertEqual((e['authority'], e['rule']), ('none', 'owner_like_approver_non_message'))
+        self.assertEqual(self.classify(user=OWNER)['rule'], 'mira_hand_typed')  # the owner is unchanged
+        self.assertEqual(self.classify(user=DEPUTY)['trust'], 'colleague')     # everyone else too
+
     def test_our_agents_are_agents_even_with_the_owner_token(self):
         meta = {'event_type': 'mira_kage_sent', 'event_payload': {'kind': 'reply', 'provider': 'claude',
                                                                    'session': 's1', 'task_cwd': '/w/t', 'hops': '2'}}

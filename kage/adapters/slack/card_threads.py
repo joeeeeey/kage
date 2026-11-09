@@ -24,6 +24,8 @@ import json
 import re
 import time
 
+from kage.core import control as _control
+
 TS_RE = re.compile(r'\d+\.\d+')
 USER_RE = re.compile(r'U[A-Z0-9]{2,}')
 CHANNEL_RE = re.compile(r'[CG][A-Z0-9]{2,}')
@@ -121,7 +123,7 @@ def card_task(rt, db, channel, root):
 
 def task_closed(rt, db, task_id, config=None):
     """A task that can no longer take a reply: no workspace, archived, a terminal closure marker in status.md, or a
-    terminal Linear state read since its last dispatch. The long-lived intake tasks are never closed, nor is a task that
+    terminal tracker state read since its last dispatch. The long-lived intake tasks are never closed, nor is a task that
     is working again (a running run, unhandled work handed to it, a dispatch newer than its closure marker)."""
     if config is None:
         try:
@@ -384,11 +386,18 @@ class CardThreads:
                 users += [u for u in ooo.get('delegates') or [] if USER_RE.fullmatch(str(u))]
         except Exception:  # noqa: BLE001
             pass
+        users += list(_control.owner_like(rt))  # 0.77.0: owner-like approvers of a bot-only deployment
         out = {'ok': True, 'enabled': bool(cfg.get('realtime_replies') and cfg['task_thread'] and channels),
                'channels': channels, 'users': sorted(set(users)), 'ttl_seconds': CONFIG_TTL}
         control = getattr(getattr(rt, 'LOOP_CORE', None), 'control', None)
         if control is not None and channels and _control_present(db) and control.card_channel_on(rt)[0]:
             out['control'] = True  # Phase 2 C2: also forward the owner's new top-level messages (`control-push`)
+        try:
+            intake = rt.worker_config.load()[0]['intake']
+        except Exception:  # noqa: BLE001 - no intake config: nothing to forward
+            intake = {}
+        if intake.get('enabled') and intake.get('identity') == 'bot':
+            out['intake_push'] = True  # 0.77.0: forward @mentions of the bot and its DMs (`intake-push`)
         return out
 
     def push(self, rt, db, channel, ts, root, user, now=None):

@@ -16,6 +16,8 @@ import re
 import string
 import types
 
+from kage.adapters import trackers as _trackers
+
 HERE = Path(__file__).resolve().parent
 HAN_RE = re.compile('[\u3400-\u4dbf\u4e00-\u9fff]')
 
@@ -58,12 +60,13 @@ def catalog(language):
                                    'words': types.MappingProxyType({k: tuple(v) for k, v in raw.get('words', {}).items()})})
 
 
-def pattern(language, key):
-    """The regex source for `key`."""
+def pattern(language, key, tracker=None):
+    """The regex source for `key`; `<tracker>` is the tracker's word (N2: `tracker`, else the process's tracker)."""
     try:
-        return catalog(language)['patterns'][key]
+        source = catalog(language)['patterns'][key]
     except KeyError:
         raise LocaleError(f'{language}: no pattern {key!r}') from None
+    return source.replace('<tracker>', (tracker or _trackers.current()).pattern_word)
 
 
 def words(language, key):
@@ -94,12 +97,29 @@ def override(language, messages):
     _OVERRIDES[language] = dict(messages)
 
 
-def message(language, key, **values):
-    """The text for `key` (the deployment's override if it has one), formatted with `values`."""
+def has(language, key):
+    """Whether there is a text for `key` (the deployment's override or the catalog's)."""
+    return key in _OVERRIDES.get(language, {}) or key in catalog(language)['messages']
+
+
+def tracker_message(language, key, tracker, **values):
+    """N2: the text for `key` as the deployment's tracker (`kage.adapters.trackers`) names it: `{tracker}` is its name and
+    `{ticket_flag}` the CLI flag that asks for a ticket; without a tracker, the key's `.no_tracker` variant when there is
+    one. `message` uses the process's tracker (`trackers.current()`)."""
+    if not tracker.tickets and has(language, key + '.no_tracker'):
+        key += '.no_tracker'
     template = _OVERRIDES.get(language, {}).get(key)
     if template is None:
         try:
             template = catalog(language)['messages'][key]
         except KeyError:
             raise LocaleError(f'{language}: no message {key!r}') from None
+    if '{tracker}' in template or '{ticket_flag}' in template:
+        values = {'tracker': tracker.display, 'ticket_flag': tracker.ticket_flag, **values}
     return template.format(**values) if values else template
+
+
+def message(language, key, **values):
+    """The text for `key` (the deployment's override if it has one), formatted with `values` (N2: `{tracker}` from the
+    process's tracker, see `tracker_message`)."""
+    return tracker_message(language, key, _trackers.current(), **values)

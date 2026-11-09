@@ -2728,8 +2728,9 @@ class DispatchCore:
         if not closed:
             first = _button(self.msg('dispatch.run_card_blocks.1'), 'resume', dispatch_id, 'primary') if paused else \
                 _button(self.msg('dispatch.run_card_blocks.2'), 'stop', dispatch_id, 'danger')
+            iterm = [_button(self.msg('dispatch.run_card_blocks.3'), 'iterm', dispatch_id)] if ITERM else []
             blocks.append({'type': 'actions', 'block_id': 'sf_dispatch_actions', 'elements': [
-                first, _button(self.msg('dispatch.run_card_blocks.3'), 'iterm', dispatch_id), _button(self.msg('dispatch.run_card_blocks.4'), 'view', dispatch_id)]})
+                first, *iterm, _button(self.msg('dispatch.run_card_blocks.4'), 'view', dispatch_id)]})
         return blocks
 
     def failure_card_blocks(self, text, dispatch_id, closed_line=None):
@@ -2762,6 +2763,7 @@ class DispatchCore:
         return self.msg('dispatch._waited.1', value=minutes // 60) if minutes >= 60 else self.msg('dispatch._waited.2', minutes=minutes)
 
 
+ITERM = sys.platform == 'darwin'  # 0.77.0: the run card's iTerm button only where iTerm can open (macOS)
 EXPORT_RE = re.compile(r"^\s*export\s+([A-Z][A-Z0-9_]{1,63})=(?:\"([^\"$`\\]*)\"|'([^']*)'|([^\s\"'$`;#]+))\s*(?:#.*)?$")
 
 

@@ -26,6 +26,8 @@ import urllib.parse
 import uuid
 
 from kage import locale
+from kage.adapters import trackers as _trackers
+from kage.core import control as _control
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -743,9 +745,11 @@ class Intake:
         self._watch_cache = None
         complete = True
         try:
-            self.token = self.rt.api_identity()
+            bot = cfg.get('identity') == 'bot'  # 0.77.0: a bot-only deployment reads with the bot token
+            self.token = self.rt.api_identity(bot=bot)
             try:
-                complete &= self.search_phase(ctx)
+                if not bot:  # search.messages needs a user token; the receiver pushes mentions instead
+                    complete &= self.search_phase(ctx)
                 complete &= self.queue_phase(ctx)
                 complete &= self.conversations_phase(ctx, channels)
             except BudgetExhausted:
@@ -1028,8 +1032,13 @@ class Intake:
                 or user == self.core.bot_user or self.db.execute('SELECT 1 FROM agent_sends WHERE channel=? AND ts=?',
                                                   (channel, m.get('ts'))).fetchone():
             return 'our_agent'
-        if user == self.core.owner_slack_user:
-            return f'{self.core.key}_authored'
+        cfg = ctx.get('cfg') or {}
+        bot_only = cfg.get('identity') == 'bot'  # 0.77.0: a bot-only deployment answers what is said to it
+        addressed = conv_type != 'channel' or f'<@{self.core.bot_user}>' in str(m.get('text') or '')
+        if user == self.core.owner_slack_user and not (bot_only and addressed):
+            return f'{self.core.key}_authored'  # (said to the bot, the owner's words are an instruction to it)
+        if bot_only and not addressed and channel not in ctx.get('oncall', ()):
+            return 'no_bot_mention'
         bot = (bool(m.get('bot_id')) or subtype == 'bot_message' or not USER_RE.fullmatch(user)) \
             and not self.delegate(m, ctx)  # P42.1: a person's own app posting as them is that person
         if bot and not (conv_type == 'channel' and channel in ctx['oncall'] and root is None):
@@ -1537,7 +1546,7 @@ class Intake:
                 related = self.person_tasks(b['channel'], b['sender'], now)
                 for t in related:
                     lines.append(f'- `{t["task_id"]}` {t["title"] or ""} · {"/".join(t["why"])}'
-                                 + (f' · Linear {t["linear_state"]}' if t['linear_state'] else '')
+                                 + (f' · {self.core.tracker.display} {t["linear_state"]}' if t['linear_state'] else '')
                                  + (self.core.msg('intake.Intake.write_refs_file.2') if t['closed'] else ''))
                 if not related:
                     lines.append(self.core.msg('intake.Intake.write_refs_file.3'))
@@ -1892,8 +1901,9 @@ class IntakeCore:
     store, the request helpers and the owner-facing hints the engine (Intake, which holds one) uses; the
     commands in the owner's words and the deployment's workspace hook."""
 
-    def __init__(self, language, *, tz, owner_key, owner_name, owner_slack_user, bot_user, app_id, archive_url, known_channels, ticket_ref_re, agent_event_type, ticket_ref_reason, run_id_env, workspace_bootstrap, owner_user, ask_owner):
+    def __init__(self, language, *, tz, owner_key, owner_name, owner_slack_user, bot_user, app_id, archive_url, known_channels, ticket_ref_re, agent_event_type, ticket_ref_reason, run_id_env, workspace_bootstrap, owner_user, ask_owner, tracker=None):
         self.language = language
+        self.tracker = tracker or _trackers.current()  # N2: the deployment's tracker (`kage.adapters.trackers`)
         self.tz = tz
         self.owner_slack_user = owner_slack_user
         self.bot_user = bot_user
@@ -1982,7 +1992,7 @@ class IntakeCore:
         self.where_zh = {'im': self.msg('intake.where_zh.im'), 'mpim': self.msg('intake.where_zh.mpim'), 'channel': self.msg('intake.where_zh.channel')}
 
     def msg(self, key, **values):
-        return locale.message(self.language, key, **values)
+        return locale.tracker_message(self.language, key, self.tracker, **values)
 
     def pattern(self, key):
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
@@ -2540,7 +2550,7 @@ class IntakeCore:
         prior = [] if again else self._unanswered(db, b, own)
         if prior:  # refused before any Slack call; _reserve_send re-checks inside its transaction
             raise AlreadyReplied(prior)
-        token = rt.api_identity()
+        token = rt.api_identity(bot=_cfg(rt)['intake'].get('identity') == 'bot')  # 0.77.0: the assistant's voice
         send_id = self._reserve_send(rt, db, b, kind, actor=actor, task_id=task_id, horizon=self._horizon(db, b, actor, task_id, now),
                                 now=now, again=again, own=own)
         try:
@@ -2595,12 +2605,14 @@ class IntakeCore:
         return '\n'.join(lines)
 
     def intake_launch(self, rt, db, db_path, ident, title, brief, *, provider='auto', category=None, important=False,
-                      linear=False, ack=True, ack_text=None, decision_event=None, parent=None, slug=None,
-                      incident=False, again=False, wait_seconds=90.0, now=None, runner=None):
+                      ticket=False, ack=True, ack_text=None, decision_event=None, parent=None, slug=None,
+                      incident=False, again=False, wait_seconds=90.0, now=None, runner=None, linear=None):
         """§6: bootstrap a new task workspace (--no-launch), bind the source conversation, launch the first session
         headless (run card = the assistant's notification), ack the requester as the owner (unless strategic / --no-ack, or —
-        P38 (F29) — the burst was already answered as the owner: `ack_skipped`, unless `again`)."""
+        P38 (F29) — the burst was already answered as the owner: `ack_skipped`, unless `again`). `ticket`: also a tracker
+        ticket (`linear`: its pre-N2 name, kept for deployments assembled before N2)."""
         now = time.time() if now is None else now
+        ticket = bool(ticket or linear)
         b = burst(db, ident)
         who, _, _, acting = self.caller(rt, db, b, with_task=True)
         if b['handled_task'] and b['handled_task'] != b['target_task'] and not incident:
@@ -2626,8 +2638,10 @@ class IntakeCore:
             raise ValueError('title_must_be_3_to_120_characters')
         brief = rt.task_memory.clean_text(brief)
         rt.asks.check_secret_free(title, brief, ack_text)
-        if linear and (rt.CJK_RE.search(title) or rt.CJK_RE.search(brief)):
-            raise ValueError('linear_title_and_brief_must_be_english')
+        if ticket and not self.tracker.tickets:
+            raise ValueError('no_tracker_for_a_ticket')
+        if ticket and self.tracker.title_language_rule and (rt.CJK_RE.search(title) or rt.CJK_RE.search(brief)):
+            raise ValueError(self.tracker.title_language_rule)
         if ack_text is not None and (not ack_text.strip() or len(ack_text) > 200):
             raise ValueError('ack_text_must_be_1_to_200_characters')
         words = None
@@ -2644,15 +2658,16 @@ class IntakeCore:
             slug = slug or _slugify(title)
             if not slug or slug == 'infra-task':
                 raise ValueError('title_has_no_ascii_words_pass_--slug')
-            if not linear:
+            if not ticket:
                 expected = rt.registry.root() / f'local-task-{time.strftime("%Y%m%d", time.localtime(now))}-{slug}'
                 if expected.exists():
                     raise ValueError('workspace_exists_choose_another_--slug')
             context = '\n'.join([f'Created by intake from Slack burst {b["burst_id"]} ({b["conv_type"]} {b["channel"]}, '
                                  f'sender {b["sender"]}).', f"Source: {self.permalink(b['channel'], b['first_ts'], b['thread_root'])}",
                                  'Message bodies are not stored here; read them with intake-context.'])
-            report = self.workspace_bootstrap(title, brief, context, linear=linear, agent=choice, root=rt.registry.root(), slug=slug,
-                                   runner=runner)
+            # the deployment hook keeps its pre-N2 keyword `linear` until N2b
+            report = self.workspace_bootstrap(title, brief, context, linear=ticket, agent=choice, root=rt.registry.root(),
+                                              slug=slug, runner=runner)
             path = Path(report['workspace'])
             reused = bool(report.get('reused_workspace'))
         task_id = rt.registry.task_id_for_cwd(str(path))
@@ -3072,6 +3087,44 @@ class IntakeCore:
         return {'ok': True, 'queries': out,
                 'hint': 'A DM-discovery query should return mostly im/mpim matches; adjust intake.dm_queries otherwise.'}
 
+    def intake_push(self, rt, db, db_path, channel, ts, user, thread_ts=None, now=None):
+        """0.77.0 bot intake: the receiver's refs for an @mention of the bot or a DM to it (`intake-push`). Only with
+        `intake.identity: bot`: the message is read back with the bot token and takes the same filter -> burst path as
+        a polled one (`intake_seen` dedups); the refs carry no authority, the read-back message decides."""
+        now = time.time() if now is None else now
+        if not (CHANNEL_ID_RE.fullmatch(str(channel)) and TS_RE.fullmatch(str(ts)) and USER_RE.fullmatch(str(user))
+                and (thread_ts is None or TS_RE.fullmatch(str(thread_ts)))):
+            return {'ok': False, 'outcome': 'refused', 'reason': 'invalid_refs'}
+        cfg = _cfg(rt)['intake']
+        if not cfg['enabled'] or cfg.get('identity') != 'bot':
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'bot_intake_off'}
+        engine = Intake(db, db_path, rt, core=self)
+        state = engine.load_state()
+        if state.get('baseline') is None:
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'intake_not_started'}
+        token = rt.api_identity(bot=True)
+        params = {'channel': channel, 'latest': ts, 'oldest': ts, 'inclusive': 'true', 'limit': 1}
+        found = rt.slack.api_call('conversations.replies' if thread_ts else 'conversations.history', token,
+                                  params={**params, 'ts': thread_ts} if thread_ts else params)
+        m = next((x for x in found.get('messages') or [] if isinstance(x, dict) and x.get('ts') == ts), None)
+        if m is None:
+            return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
+        if str(m.get('user') or '') != user:
+            return {'ok': False, 'outcome': 'refused', 'reason': 'author_mismatch'}
+        control = getattr(getattr(rt, 'LOOP_CORE', None), 'control', None)
+        if control is not None and m.get('thread_ts') in (None, '', ts) and user in _control.owner_users(rt) and \
+                channel in rt.card_threads.decision_channels(rt) and control.card_channel_on(rt)[0]:
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'control_entry'}  # the control entry takes it
+        oncall, _ = self.resolve_channels(cfg['oncall_channels'])
+        ctx = {'subscribed': set(), 'oncall': set(oncall), 'now': now, 'cfg': cfg, 'baseline': float(state['baseline']),
+               'stats': {'processed': 0, 'accepted': 0, 'filtered': {}}, 'state': state}
+        engine.ingest([m], channel, 'im' if channel.startswith('D') else 'channel', 'push', ctx)
+        row = db.execute('SELECT reason, burst_id FROM intake_seen WHERE channel=? AND ts=?', (channel, ts)).fetchone()
+        if row is None:
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'before_intake_baseline'}
+        return {'ok': True, 'outcome': 'accepted' if row['burst_id'] else 'filtered', 'reason': row['reason'],
+                'burst_id': row['burst_id']}
+
     def smoke_intake(self, rt, db, db_path, scenario='request', wait=True, timeout=900.0, poll=3.0, now=None):
         """Post-install E2E with a SYNTHETIC burst (no Slack read): through the real filter -> burst -> router ->
         delivery path into the live <owner key>-inbox (request / strategic) or <owner key>-oncall (alert) session."""
@@ -3216,12 +3269,13 @@ def unavailable_playbook(reason='no_intake_playbook'):
     return types.SimpleNamespace(**names)
 
 
-def run_workspace_bootstrap(bootstrap, title, brief, context, *, linear, agent, root, slug=None, date=None, folder_name=None,
-                            runner=None):
+def run_workspace_bootstrap(bootstrap, title, brief, context, *, agent, root, ticket=False, slug=None, date=None,
+                            folder_name=None, runner=None, linear=None):
     """The deployment's workspace bootstrap script (`bootstrap`, its path) with --no-launch (never a terminal tab); returns
     its JSON report. A new ticket starts Todo (In Progress only while a session runs). `folder_name`: a local-only
     workspace with exactly this name (the plain-named long-lived tasks). O1c2: a deployment without a bootstrap script
-    is refused before anything runs (`workspace_bootstrap_unavailable`)."""
+    is refused before anything runs (`workspace_bootstrap_unavailable`). `linear`: `ticket`'s pre-N2 name."""
+    ticket = bool(ticket or linear)
     if runner is None and not Path(bootstrap).is_file():
         raise ValueError('workspace_bootstrap_unavailable: this deployment has no workspace bootstrap script')
     runner = runner or subprocess.run
@@ -3231,7 +3285,7 @@ def run_workspace_bootstrap(bootstrap, title, brief, context, *, linear, agent, 
         context_file.write_text(context, encoding='utf-8')
         cmd = [sys.executable, str(bootstrap), '--no-launch', '--title', title, '--brief-file', str(brief_file),
                '--context-file', str(context_file), '--root', str(root), '--agent', agent]
-        if not linear:
+        if not ticket:
             cmd.append('--no-ticket')
         else:
             cmd += ['--state', 'Todo']  # tickets start Todo, not the bootstrap default In Progress

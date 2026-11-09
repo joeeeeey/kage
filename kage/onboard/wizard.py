@@ -127,6 +127,8 @@ def _token(io, store, name, label, admit):
             return admit(value)
         except tokens.TokenRefused as exc:
             io.say(f'  refused: {exc.code}; nothing was stored')
+            if exc.code in tokens.HINTS:
+                io.say('  ' + tokens.HINTS[exc.code])
     raise WizardError(f'token_refused: {name}')
 
 

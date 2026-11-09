@@ -62,6 +62,9 @@ class TokenChecksTest(unittest.TestCase):
             (tokens.USER, USER, {('auth.test', USER): ({'ok': True, 'team_id': TEAM, 'user_id': 'U0000BOT',
                                                         'bot_id': 'B0000TEST'}, {})}, 'user_token_is_the_bot'),
             (tokens.USER, BOT, {}, 'not_a_slack_user_token'),
+            (tokens.APP, 'xoxe.' + APP, {}, 'rotating_token_not_supported'),  # F9: rotating tokens, said plainly
+            (tokens.BOT, 'xoxe.' + BOT, {}, 'rotating_token_not_supported'),
+            (tokens.APP, 'xoxe-1-' + 'TESTREFRESH', {}, 'rotating_token_not_supported'),
         ]
         for name, token, over, code in cases:
             store = secrets.MemoryStore('mira')

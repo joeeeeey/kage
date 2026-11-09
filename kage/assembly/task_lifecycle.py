@@ -13,17 +13,17 @@ import uuid
 kage_bridge = _app.bridge
 SHANGHAI = kage_bridge.deployment().owner.tz()
 _TICKET_FLAGS = '(?i)' if kage_bridge.deployment().org.ticket_ref_ignorecase else ''
-LINEAR_TASK_RE = re.compile(_TICKET_FLAGS + '^' + kage_bridge.deployment().org.ticket_pattern() + '(?:$|-)')
+TICKET_TASK_RE = re.compile(_TICKET_FLAGS + '^' + kage_bridge.deployment().org.ticket_pattern() + '(?:$|-)')
 TICKET_ID_RE = re.compile(_TICKET_FLAGS + kage_bridge.deployment().org.ticket_pattern())
 _k = kage_bridge.module('lifecycle', 'kage.core.lifecycle')
 _owner = kage_bridge.deployment().owner
-LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TASK_RE, ticket_id_re=TICKET_ID_RE, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), tracker_helper=_app.value('task_lifecycle.tracker_helper'))
+LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=TICKET_TASK_RE, ticket_id_re=TICKET_ID_RE, owner_key=_owner.key, owner_name=_owner.short_name, owner_user=lambda rt: getattr(rt, _app.key_name('OWNER')), tracker_helper=_app.value('task_lifecycle.tracker_helper'), tracker=_k._trackers.for_name(kage_bridge.deployment().org.tracker))
 (ORPHAN_OPTIONS, DEADLINE_OPTIONS, ID_RE) = (LIFECYCLE.orphan_options, LIFECYCLE.deadline_options, _k.ID_RE)
 (TERMINAL_RE, HANDOFF_RE, COMPLETION_RE) = (LIFECYCLE.terminal_re, LIFECYCLE.handoff_re, LIFECYCLE.completion_re)
-(SWEEP_LINEAR_TTL, SWEEP_LINEAR_BUDGET) = (_k.SWEEP_LINEAR_TTL, _k.SWEEP_LINEAR_BUDGET)
-(LINEAR_TIMEOUT, LINEAR_MIN_TIMEOUT) = (_k.LINEAR_TIMEOUT, _k.LINEAR_MIN_TIMEOUT)
+(SWEEP_TRACKER_TTL, SWEEP_TRACKER_BUDGET) = (_k.SWEEP_TRACKER_TTL, _k.SWEEP_TRACKER_BUDGET)
+(TRACKER_TIMEOUT, TRACKER_MIN_TIMEOUT) = (_k.TRACKER_TIMEOUT, _k.TRACKER_MIN_TIMEOUT)
 (LIFECYCLE_SINCE_KEY, BACKFILL_KEY, initialize) = (_k.LIFECYCLE_SINCE_KEY, _k.BACKFILL_KEY, _k.initialize)
-(_db_path, config, is_linear_task, long_lived) = (_k._db_path, _k.config, LIFECYCLE.is_linear_task, _k.long_lived)
+(_db_path, config, is_ticket_task, long_lived) = (_k._db_path, _k.config, LIFECYCLE.is_ticket_task, _k.long_lived)
 (drivable, runtime_managed, runtime_managed_tasks) = (LIFECYCLE.drivable, _k.runtime_managed, _k.runtime_managed_tasks)
 (_lifecycle_since, sweep_tasks, last_action_at) = (_k._lifecycle_since, _k.sweep_tasks, _k.last_action_at)
 (_status_text, _task_watches, _running, _scheduled) = (_k._status_text, _k._task_watches, _k._running, _k._scheduled)
@@ -32,9 +32,9 @@ LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TAS
 (_when, _until, _NEXT_HEADING_RE) = (LIFECYCLE._when, LIFECYCLE._until, LIFECYCLE._next_heading_re)
 (_BULLET_RE, _next_hint, _trim) = (_k._BULLET_RE, LIFECYCLE._next_hint, LIFECYCLE._trim)
 (_recent_orphan_card, post_orphan_card) = (_k._recent_orphan_card, LIFECYCLE.post_orphan_card)
-(closure_guard, _linear_script, _linear_state) = (LIFECYCLE.closure_guard, _k._linear_script, LIFECYCLE._linear_state)
-(_linear_ttl, _dispatch_count, _known_linear) = (_k._linear_ttl, _k._dispatch_count, _k._known_linear)
-(_note_linear, _is_terminal_linear, _budget_runner) = (_k._note_linear, _k._is_terminal_linear, _k._budget_runner)
+(closure_guard, _tracker_script, _tracker_state) = (LIFECYCLE.closure_guard, _k._tracker_script, LIFECYCLE._tracker_state)
+(_tracker_ttl, _dispatch_count, _known_tracker_state) = (_k._tracker_ttl, _k._dispatch_count, _k._known_tracker_state)
+(_note_tracker_state, _is_terminal_ticket, _budget_runner) = (_k._note_tracker_state, _k._is_terminal_ticket, _k._budget_runner)
 (orphan_sweep, DUE_RE, WAKE_MIN_AHEAD) = (LIFECYCLE.orphan_sweep, _k.DUE_RE, _k.WAKE_MIN_AHEAD)
 (parse_due, deadline_register) = (LIFECYCLE.parse_due, LIFECYCLE.deadline_register)
 (deadline_list, deadline_cancel) = (LIFECYCLE.deadline_list, _k.deadline_cancel)
@@ -46,6 +46,11 @@ LIFECYCLE = _k.Lifecycle(_owner.language, tz=SHANGHAI, ticket_task_re=LINEAR_TAS
 (CONTINUE_PROMPT, CLOSE_PROMPT) = (LIFECYCLE.continue_prompt, LIFECYCLE.close_prompt)
 (DEADLINE_PROMPT, DEADLINE_REPLY) = (LIFECYCLE.deadline_prompt, LIFECYCLE.deadline_reply)
 (DEADLINE_DISPOSITION, settle) = (_k.DEADLINE_DISPOSITION, LIFECYCLE.settle)
+
+# N2a: the pre-N2 names, for consumers written before N2 (the deployment skill's tests); N2b removes them.
+(SWEEP_LINEAR_TTL, SWEEP_LINEAR_BUDGET, LINEAR_TIMEOUT, LINEAR_MIN_TIMEOUT) = (SWEEP_TRACKER_TTL, SWEEP_TRACKER_BUDGET, TRACKER_TIMEOUT, TRACKER_MIN_TIMEOUT)
+(LINEAR_TASK_RE, is_linear_task, _linear_script, _linear_state) = (TICKET_TASK_RE, is_ticket_task, _tracker_script, _tracker_state)
+(_linear_ttl, _known_linear, _note_linear, _is_terminal_linear) = (_tracker_ttl, _known_tracker_state, _note_tracker_state, _is_terminal_ticket)
 
 _OWNER_KEYED = ('_open_card_to_owner',)  # exported under the deployment's names by kage.app
 _ALIASES = {}  # generic name -> the deployment's name for it

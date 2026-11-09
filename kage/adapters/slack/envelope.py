@@ -64,7 +64,8 @@ class SlackEnvelopes:
         trust, rule = self.person_trust(user, m, delegates, people)
         if trust == self.core.owner_trust:
             hand_typed = m.get('subtype') in HAND_TYPED_SUBTYPES
+            why = (self.core.rule_hand_typed if hand_typed else self.core.rule_non_message) if rule == trust else \
+                rule + ('' if hand_typed else '_non_message')  # 0.77.0: an owner-like approver says so
             return core.envelope('slack_message', 'human', trust,
-                                 self.core.owner_intent if hand_typed else 'none',
-                                 self.core.rule_hand_typed if hand_typed else self.core.rule_non_message, thread_root)
+                                 self.core.owner_intent if hand_typed else 'none', why, thread_root)
         return core.envelope('slack_message', 'human', trust, 'none', rule, thread_root)

@@ -13,7 +13,7 @@ class ManifestTest(unittest.TestCase):
         self.assertEqual(m['display_information']['name'], "Mira's kage")
         self.assertEqual(sorted(m['oauth_config']['scopes']), ['bot'])
         self.assertIn('chat:write', m['oauth_config']['scopes']['bot'])
-        self.assertEqual(m['settings']['event_subscriptions']['bot_events'], ['message.im', 'message.groups'])
+        self.assertEqual(m['settings']['event_subscriptions']['bot_events'], ['message.im', 'message.groups', 'app_mention'])
         self.assertTrue(m['settings']['socket_mode_enabled'] and m['settings']['interactivity']['is_enabled'])
         self.assertFalse(m['settings']['org_deploy_enabled'])
         self.assertEqual(m['features']['app_home'], {'home_tab_enabled': False, 'messages_tab_enabled': True,

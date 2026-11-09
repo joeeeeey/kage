@@ -204,5 +204,23 @@ class DestinationsTest(unittest.TestCase):
         self.assertEqual((refused['verdict'], self.stored(PUBLIC)['verdict'], 'local' in refused), ('error', 'error', False))
         self.assertEqual(rt.notes, [])
 
+class OwnerLikeTest(unittest.TestCase):
+    def test_only_a_bot_identity_with_owner_like_approvers_counts_them(self):
+        from kage.core import authority
+        intake = {'identity': 'bot', 'owner_like': 'approvers'}
+        wc = types.SimpleNamespace(load=lambda: ({'intake': intake}, None))
+        buttons = types.SimpleNamespace(load_config=lambda: {'approvers': ['U0000TEST03', 'U0000TEST04']})
+        cache = {}
+        self.assertEqual(authority.owner_like_users(wc, buttons, cache), frozenset({'U0000TEST03', 'U0000TEST04'}))
+        for change in ({'identity': 'user'}, {'owner_like': 'owner'}):
+            cache.clear()
+            intake.update(change)
+            self.assertEqual(authority.owner_like_users(wc, buttons, cache), frozenset())
+            intake.update(identity='bot', owner_like='approvers')
+        cache.clear()
+        broken = types.SimpleNamespace(load=lambda: (_ for _ in ()).throw(ValueError('bad config')))
+        self.assertEqual(authority.owner_like_users(broken, buttons, cache), frozenset())  # fails closed
+
+
 if __name__ == '__main__':
     unittest.main()

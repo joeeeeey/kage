@@ -266,6 +266,9 @@ class LoopCore:
         return w
 
     def api_identity(self, bot=False):
+        """The Slack token for a call: the owner's user token, or the bot's (`bot`). 0.77.0: a bot-only deployment
+        (`intake.identity: bot`) has no user token; every call then uses the bot token."""
+        bot = bot or self.bot_only()
         cached = self.identity_cache.get(bot)
         if cached and time.time() - cached[0] < 300:
             return cached[1]
@@ -277,6 +280,17 @@ class LoopCore:
             raise RuntimeError('expected_human_user_token')
         self.identity_cache[bot] = (time.time(), token)
         return token
+
+    def bot_only(self):
+        cached = getattr(self, '_bot_only', None)
+        if cached and time.time() - cached[0] < 30:
+            return cached[1]
+        try:
+            value = self.rt.worker_config.load()[0]['intake'].get('identity') == 'bot'
+        except Exception:  # noqa: BLE001 - no worker config (yet): the owner's token, as before
+            value = False
+        self._bot_only = (time.time(), value)
+        return value
 
     def pages(self, token, endpoint, params):
         cursor = None
@@ -1159,7 +1173,7 @@ class LoopCore:
                 else:
                     _meta_clear(db, 'ask_sweep_error')  # B1: a stale error does not outlive the next good sweep
             if time.time() >= next_task_sweep:
-                # P34 no-orphan sweep (may read Linear) + deadline watchdog: off the 10 s settle cadence.
+                # P34 no-orphan sweep (may read the tracker) + deadline watchdog: off the 10 s settle cadence.
                 try:
                     interval = self.rt.worker_config.load()[0]['tasks']['sweep_interval_minutes']
                 except Exception:  # noqa: BLE001 - a malformed config just uses the default cadence

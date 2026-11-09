@@ -140,6 +140,68 @@ class EngineTest(unittest.TestCase):
         self.assertEqual(verdict({'bot_id': 'B1', 'ts': '1.5'}), 'bot_outside_oncall')
         self.assertEqual(verdict({'bot_id': 'B1', 'ts': '1.6'}, 'C0000ONC001', 'channel'), 'accept')
 
+    def test_a_bot_only_deployment_answers_what_is_said_to_it(self):
+        # 0.77.0: with intake.identity bot, a channel message must mention the bot (DMs and on-call alerts as before)
+        self.db.execute('CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, data TEXT)')
+        ctx = {'oncall': {'C0000ONC001'}, 'cfg': {'identity': 'bot'}}
+        verdict = lambda m, ch='C0000OPS001', conv='channel': self.engine.verdict(m, ch, conv, None, ctx)  # noqa: E731
+        self.assertEqual(verdict({'user': 'U0000ADA001', 'ts': '2.1', 'text': 'the deploy is stuck'}), 'no_bot_mention')
+        self.assertEqual(verdict({'user': 'U0000ADA001', 'ts': '2.2', 'text': f'<@{BOT}> the deploy is stuck'}), 'accept')
+        self.assertEqual(verdict({'user': 'U0000ADA001', 'ts': '2.3', 'text': 'hi'}, 'D0000DM0001', 'im'), 'accept')
+        self.assertEqual(verdict({'bot_id': 'B1', 'ts': '2.4'}, 'C0000ONC001'), 'accept')
+        # the owner's words said to the bot are an instruction to it; elsewhere they stay the owner's own
+        self.assertEqual(verdict({'user': OWNER, 'ts': '2.6', 'text': f'<@{BOT}> ship it'}), 'accept')
+        self.assertEqual(verdict({'user': OWNER, 'ts': '2.7', 'text': 'ship it'}, 'D0000DM0001', 'im'), 'accept')
+        self.assertEqual(verdict({'user': OWNER, 'ts': '2.8', 'text': 'ship it'}), 'owner_authored')
+        self.assertEqual(verdict({'user': OWNER, 'ts': '2.9', 'text': 'ship it'}, 'C0000ONC001'), 'owner_authored')
+        ctx['cfg'] = {}
+        self.assertEqual(verdict({'user': OWNER, 'ts': '2.10', 'text': f'<@{BOT}> ship it'}), 'owner_authored')
+        self.assertEqual(verdict({'user': 'U0000ADA001', 'ts': '2.5', 'text': 'the deploy is stuck'}), 'accept')
+
+    def test_intake_push_reads_back_with_the_bot_token(self):
+        self.db.execute('CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        cfg = {'intake': {'enabled': True, 'identity': 'bot', 'oncall_channels': []}}
+        reads, idents = [], []
+        message = {'ts': '1700000001.000200', 'user': 'U0000ADA001', 'text': f'<@{BOT}> help'}
+
+        def api_call(method, token, params=None):
+            reads.append((method, token, params.get('ts')))
+            return {'messages': [message]}
+
+        def api_identity(bot=False):
+            idents.append(bot)
+            return 'bot-token' if bot else 'user-token'
+        rt = types.SimpleNamespace(worker_config=types.SimpleNamespace(load=lambda: (cfg, None)), api_identity=api_identity,
+                                   slack=types.SimpleNamespace(api_call=api_call))
+        push = lambda **kw: self.core.intake_push(rt, self.db, ':memory:', **{  # noqa: E731
+            'channel': 'C0000OPS001', 'ts': '1700000001.000200', 'user': 'U0000ADA001', **kw})
+        self.assertEqual(push(channel='bad')['reason'], 'invalid_refs')
+        cfg['intake']['identity'] = 'user'
+        self.assertEqual(push()['reason'], 'bot_intake_off')
+        cfg['intake']['identity'] = 'bot'
+        self.assertEqual(push()['reason'], 'intake_not_started')  # no baseline yet: the first poll sets it
+        self.db.execute("INSERT INTO runtime_meta VALUES (?, ?)", (I.STATE_KEY, json.dumps({'baseline': 1.0})))
+        seen = []
+        with unittest.mock.patch.object(I.Intake, 'ingest', lambda engine, ms, ch, conv, source, ctx: seen.append(
+                (ms[0]['ts'], ch, conv, source, ctx['baseline']))):
+            out = push(thread_ts='1700000000.000100')
+        self.assertEqual(seen, [('1700000001.000200', 'C0000OPS001', 'channel', 'push', 1.0)])
+        self.assertEqual(reads[-1], ('conversations.replies', 'bot-token', '1700000000.000100'))
+        self.assertEqual(idents[-1], True)
+        self.assertEqual(out['reason'], 'before_intake_baseline')  # the patched ingest wrote nothing
+        rt.LOOP_CORE = types.SimpleNamespace(control=types.SimpleNamespace(card_channel_on=lambda rt_: (True, {})))
+        rt.card_threads = types.SimpleNamespace(decision_channels=lambda rt_: ['C0000OPS001'])
+        rt.OWNER = 'U0000ADA001'  # the owner's top-level message in the card channel: the control entry takes it
+        self.assertEqual(push()['reason'], 'control_entry')
+        message['thread_ts'] = '1700000000.000100'  # in a thread: intake's, as before
+        with unittest.mock.patch.object(I.Intake, 'ingest', lambda *a: None):
+            self.assertEqual(push(thread_ts='1700000000.000100')['reason'], 'before_intake_baseline')
+        del rt.OWNER, message['thread_ts']
+        message['user'] = 'U0000OTHER1'
+        self.assertEqual(push()['reason'], 'author_mismatch')
+        message['ts'] = '1.0'
+        self.assertEqual(push()['reason'], 'message_not_found')
+
     def test_requests_and_budget(self):
         self.assertEqual(I.binding_key('im', None, '1.5', 'U1'), '1.5')
         self.assertEqual(I.binding_key('im', '1.2', '1.5', 'U1'), '1.2')

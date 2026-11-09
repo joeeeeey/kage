@@ -22,6 +22,12 @@ from kage.ports.secrets import SLACK_APP, SLACK_BOT, SLACK_USER
 BOT, APP, USER = SLACK_BOT, SLACK_APP, SLACK_USER  # names in the secrets store
 PREFIX = {BOT: 'xoxb-', APP: 'xapp-', USER: 'xoxp-'}
 GUARD_ENV = 'KAGE_NO_REAL_SLACK'
+ROTATING_PREFIX = 'xoxe'  # a rotating (expiring) token or its refresh token: xoxe.xoxb-…, xoxe.xapp-…, xoxe-…
+HINTS = {  # what the owner can do about a refusal (the wizard prints it under the code)
+    'rotating_token_not_supported': 'Slack gave a rotating token (it starts with xoxe). Kage stores long-lived tokens '
+                                    'only, and Slack cannot turn token rotation off once it is on: create the app '
+                                    'again from the manifest above (token rotation off) and paste its tokens.',
+}
 
 
 class TokenRefused(ValueError):
@@ -48,6 +54,8 @@ def slack_call(method, token, params=None, *, guard_env=GUARD_ENV, timeout=20):
 
 
 def _shape(name, token):
+    if isinstance(token, str) and token.startswith(ROTATING_PREFIX):
+        raise TokenRefused('rotating_token_not_supported')  # F9 (0.77.0): a clear refusal, not "not a … token"
     if not isinstance(token, str) or not token.startswith(PREFIX[name]) or len(token) > 2048 or any(
             c.isspace() for c in token):
         raise TokenRefused(f'not_a_{name.replace("-", "_")}')

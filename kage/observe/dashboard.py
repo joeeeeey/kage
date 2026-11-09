@@ -331,6 +331,7 @@ def _settings_changes(payload):
 
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
+    public_origins = ()  # 0.77.0: https origins a proxy (e.g. a tunnel behind an access gate) serves this console at
 
     def __init__(self, address, db_path, web=_OWNER_DEFAULT, enrich_profiles=False, design_html=None, *, core):
         self.core = core
@@ -408,10 +409,19 @@ class Handler(BaseHTTPRequestHandler):
         # No request URLs, headers, local paths or metadata in service logs.
         pass
 
-    def valid_host(self):
-        host = self.headers.get('Host', '')
+    def loopback_host(self):
         port = self.server.server_port
-        return host in (f'127.0.0.1:{port}', f'localhost:{port}')
+        return self.headers.get('Host', '') in (f'127.0.0.1:{port}', f'localhost:{port}')
+
+    def valid_host(self):
+        public = getattr(self.server, 'public_origins', ())
+        return self.loopback_host() or self.headers.get('Host', '') in {urlsplit(o).netloc for o in public}
+
+    def same_origin(self):
+        """A write's Origin: this loopback address, or one of the public origins (the proxy may pass its own Host)."""
+        origin = self.headers.get('Origin')
+        return (self.loopback_host() and origin == f"http://{self.headers.get('Host')}") or \
+            origin in getattr(self.server, 'public_origins', ())
 
     def respond(self, status, payload, content_type='application/json; charset=utf-8', csp=PAGE_CSP):
         data = json.dumps(payload, ensure_ascii=False).encode() if not isinstance(payload, bytes) else payload
@@ -596,7 +606,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.valid_host():
             return self.respond(403, {'error': 'invalid_host'})
-        if self.headers.get('Origin') != f"http://{self.headers.get('Host')}":
+        if not self.same_origin():
             return self.respond(403, {'error': 'same_origin_required'})
         if urlsplit(self.path).path == '/api/settings':
             return self.post_settings()

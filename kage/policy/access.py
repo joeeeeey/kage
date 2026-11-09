@@ -35,6 +35,7 @@ import time
 import uuid
 
 from kage import locale
+from kage.adapters import trackers as _trackers
 
 CATEGORIES = ('access',)
 
@@ -813,8 +814,9 @@ class AccessPolicy:
     """The access-policy engine bound to one owner and one org pack: schemas, facts, the never-auto classifier,
     checks, evaluation, cards, typed approvals, the rules directory, backtests, weekly proposals and the smoke."""
 
-    def __init__(self, language, *, tz, example_spec, owner_key, owner_name, owner_user, ask_owner, worker_slug, rules_dir_env, smoke_dir_prefix, run_id_env, pack):
+    def __init__(self, language, *, tz, example_spec, owner_key, owner_name, owner_user, ask_owner, worker_slug, rules_dir_env, smoke_dir_prefix, run_id_env, pack, tracker=None):
         self.language = language
+        self.tracker = tracker or _trackers.current()  # N2: the deployment's tracker (`kage.adapters.trackers`)
         self.script = 'chinese' if locale.chinese(language) else 'in_the_owner_language'  # O1d: the gates' error words
         self.tz = tz
         self.example_spec = example_spec
@@ -849,7 +851,7 @@ class AccessPolicy:
                      'source': {'type': 'object', 'additionalProperties': False, 'properties': {
                          'event_id': _str(24, '^[0-9a-f]{24}$'), 'burst_id': _str(16, '^in[0-9a-f]{14}$'),
                          'channel': _str(20, '^[CDG][A-Z0-9]{2,}$'), 'ts': _str(20, r'^\d+\.\d+$'),
-                         'linear': _str(20, r'^[A-Z]{2,8}-\d{1,6}$')}},
+                         'linear': _str(20, r'^[A-Z]{2,8}-\d{1,6}$')}},  # the ticket id; N2b renames it with the skill's schema
                      'scope': {'type': 'object', 'additionalProperties': False, 'properties': {
                          'roles': _list(_str(200), 30), 'resources': _list(_str(300), 100),
                          'resource_level': _enum(RESOURCE_LEVELS), 'environment': _enum(ENVIRONMENTS), 'level': _enum(ROLE_CLASSES),
@@ -1029,7 +1031,7 @@ class AccessPolicy:
         self.addenda_heading = self.msg('access.addenda_heading.1', owner=self.name)
 
     def msg(self, key, **values):
-        return locale.message(self.language, key, **values)
+        return locale.tracker_message(self.language, key, self.tracker, **values)
 
     def pattern(self, key):
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
@@ -1916,7 +1918,8 @@ class AccessPolicy:
                'matched_rules': json.loads(row['matched_rules']), 'plan_hash': row['plan_hash'],
                'plan': json.loads(row['plan']), 'approval': approval, 'executable': executable(row, approval),
                'result': row['result'], 'next': self.status_next.get(approval['status'], '') +
-               (f' Audit / Linear: {approval["audit"]}' if approval.get('audit') else '')}
+               (f' Audit{" / " + self.tracker.display if self.tracker.display else ""}: {approval["audit"]}'
+                if approval.get('audit') else '')}
         if raw_plan is not None:
             out['plan_matches'] = plan_hash(self.normalize_plan(raw_plan)) == row['plan_hash']
             if not out['plan_matches']:
@@ -2527,7 +2530,7 @@ class AccessPolicy:
         interaction_block = rt.intake.interaction_policy_block(cli)  # P3.3: reconcile-before-acting + two-plane emoji
         new = _replace_block(new, interaction_block, rt.intake.INTERACTION_BEGIN, rt.intake.INTERACTION_END,
                              after=rt.intake.CARDS_END)
-        lifecycle_block = rt.intake.lifecycle_policy_block(cli)  # P34: closure contract + Linear discipline + handoff
+        lifecycle_block = rt.intake.lifecycle_policy_block(cli)  # P34: closure contract + ticket discipline + handoff
         new = _replace_block(new, lifecycle_block, rt.intake.LIFECYCLE_BEGIN, rt.intake.LIFECYCLE_END,
                              after=rt.intake.INTERACTION_END)
         feedback_block = rt.intake.feedback_policy_block(cli)  # P35: capture, distill, promote->propose, the owner-gated adoption

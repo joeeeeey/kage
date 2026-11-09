@@ -51,6 +51,8 @@
     "max_api_calls_per_cycle": 20,
     "delegate_bot_names": [],
     "inbox_task": "owner-inbox",
+    "identity": "user",
+    "owner_like": "owner",
     "oncall_task": "owner-oncall",
     "inbox_provider": "claude",
     "inbox_model": "claude-sonnet-5-5",

@@ -109,6 +109,7 @@ def build(assembly):
         def __init__(self, address, db_path, enrich_profiles=False, design_html=None):
             super().__init__(address, db_path, shell, enrich_profiles, design_html, core=core)
             self.web = pages
+            self.public_origins = d.instance.public_origins
 
     return core, Server
 

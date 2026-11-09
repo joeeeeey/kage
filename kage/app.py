@@ -38,6 +38,7 @@ import types
 
 import kage
 from kage import locale
+from kage.adapters import trackers as _trackers
 from kage import profile
 from kage import defaults
 
@@ -167,10 +168,25 @@ class App:
             locale.override(self.deployment.owner.language, self.messages)
         except locale.LocaleError as exc:
             raise AssemblyError(f'assembly_messages_refused: {exc}') from None
+        _trackers.use(_trackers.for_name(self.deployment.org.tracker))  # N2: `{tracker}` in text, the ticket logic
         namespace = into if into is not None else types.ModuleType('kage_runtime').__dict__
         namespace.update({'__file__': str(self.program), '_app': self})
         self._run('hub', namespace)
+        envelopes = getattr(namespace.get('envelopes'), 'ENVELOPES', None)
+        if envelopes is not None and namespace.get('worker_config') is not None and namespace.get('buttons') is not None:
+            from kage.core import authority as _authority  # 0.77.0: approvers as the owner in a bot-identity deployment
+            envelopes.owner_like = lambda: _authority.owner_like_users(namespace['worker_config'], namespace['buttons'])
+        if self.deployment.instance.public_origins:  # 0.77.0: links in cards point at the console's public address
+            self._console_url(namespace, self.deployment.instance.public_origins[0])
         return namespace
+
+    @staticmethod
+    def _console_url(namespace, url):
+        from kage.core import blockers as _blockers
+        namespace['DASHBOARD_URL'] = _blockers.DASHBOARD_URL = url
+        for name in ('FOLLOWUP_CORE', 'COMMANDS_CORE', 'CLI_CORE'):
+            if hasattr(namespace.get(name), 'dashboard_url'):
+                namespace[name].dashboard_url = url
 
     def _unit(self, name, directory=UNIT_DIR):
         module = types.ModuleType(f'kage_assembled_{name}')

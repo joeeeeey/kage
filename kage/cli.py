@@ -136,7 +136,7 @@ class CliCore:
                                  followup=args.followup)
         if args.command == 'control-relay':
             return control.relay(rt, db, db_path, args.message, args.task, note=args.note)
-        return control.launch(rt, db, db_path, args.message, args.title, linear=args.linear)
+        return control.launch(rt, db, db_path, args.message, args.title, ticket=args.ticket)
 
     def pattern(self, key):
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
@@ -472,7 +472,10 @@ class CliCore:
         il.add_argument('--provider', choices=['auto', *self.rt.claude.PROVIDERS], default='auto')
         il.add_argument('--category', help='infra / debug / dev -> Codex, docs / design / ui -> Claude (routing.categories)')
         il.add_argument('--important', action='store_true')
-        il.add_argument('--linear', action='store_true', help=f'Also create a {self.issue_tracker} issue (English title and brief)')
+        il.add_argument('--ticket', dest='ticket', action='store_true',
+                        help=f'Also create a {self.issue_tracker} issue (English title and brief)' if self.issue_tracker != 'none'
+                        else 'Also create a tracker ticket (this deployment has no tracker: refused)')
+        il.add_argument('--linear', dest='ticket', action='store_true', help=argparse.SUPPRESS)  # N2: the pre-N2 name
         il.add_argument('--no-ack', action='store_true', help=self.msg('cli.main.2'))
         il.add_argument('--ack-text', help=self.msg('cli.main.3'))
         il.add_argument('--again', action='store_true',
@@ -516,6 +519,12 @@ class CliCore:
         boot.add_argument('--no-launch', action='store_true', help='Do not start a first session for a task without one')
         boot.add_argument('--rewrite-policy', action='store_true', help='Rewrite goal.md from the current policy text')
         boot.add_argument('--wait-seconds', type=float, default=90.0)
+        ipush = sub.add_parser('intake-push', help='Receiver only: an @mention of the bot or a DM to it (refs only; read '
+                                                   'back with the bot token here; bot-identity intake only)')
+        ipush.add_argument('--channel', required=True)
+        ipush.add_argument('--ts', required=True)
+        ipush.add_argument('--user', required=True)
+        ipush.add_argument('--thread-ts')
         smoke_i = sub.add_parser('smoke-intake', help='TEST: synthetic burst through the live intake pipeline (no Slack read)')
         smoke_i.add_argument('--scenario', choices=['request', 'strategic', 'alert'], default='request')
         smoke_i.add_argument('--no-wait', action='store_true')
@@ -779,7 +788,8 @@ class CliCore:
         crel.add_argument('--task', required=True, help='Target task id or workspace directory')
         crel.add_argument('--note', help='One line of your own (no authority): why this task')
         clau.add_argument('--title', required=True)
-        clau.add_argument('--linear', action='store_true', help='Create a tracker ticket for the new task')
+        clau.add_argument('--ticket', dest='ticket', action='store_true', help='Create a tracker ticket for the new task')
+        clau.add_argument('--linear', dest='ticket', action='store_true', help=argparse.SUPPRESS)  # N2: the pre-N2 name
         sub.add_parser('control-status', help='The control entry: switch, task, messages by state')
         cpush = sub.add_parser('control-push', help=f"Receiver only: {self.name}'s new top-level message in the card "
                                                     'channel (refs only; read back and verified here)')
@@ -1107,10 +1117,14 @@ class CliCore:
             result = self.rt.intake.triage_record_cli(self.rt, db, args.burst, intent=args.intent, clarity=args.clarity, disposition=args.disposition, target_task=args.target_task, confidence=args.confidence, basis=args.basis, **{f'needs_{self.key}': getattr(args, f'needs_{self.key}')}, note=args.note)
         elif args.command == 'triage-correct':
             result = self.rt.intake.triage_correct(self.rt, db, args.record, args.disposition, args.note)
+        elif args.command == 'intake-push':  # 0.77.0: through INTAKE_CORE (the unit's names stay the deployment's)
+            result = (self.rt._fail('agent_session_cannot_push_intake') if self.rt._agent_session() else
+                      self.rt.intake.INTAKE_CORE.intake_push(self.rt, db, db_path, args.channel, args.ts, args.user,
+                                                             thread_ts=args.thread_ts))
         elif args.command == 'intake-launch':
             result = self.rt.intake.intake_launch(self.rt, db, db_path, args.from_burst, args.title,
                                           Path(args.brief_file).read_text(encoding='utf-8'), provider=args.provider,
-                                          category=args.category, important=args.important, linear=args.linear,
+                                          category=args.category, important=args.important, ticket=args.ticket,
                                           ack=not args.no_ack, ack_text=args.ack_text, decision_event=args.decision_event,
                                           parent=args.parent, slug=args.slug, again=args.again,
                                           wait_seconds=args.wait_seconds)

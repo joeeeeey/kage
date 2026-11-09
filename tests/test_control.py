@@ -493,6 +493,18 @@ class ControlTest(unittest.TestCase):
         self.assertEqual(self.c.settle(self.rt, self.db, now=self.T + 60)[0]['state'], 'refused')
         self.assertEqual(self.db.execute('SELECT count(*) FROM control_relays').fetchone()[0], 0)
 
+    def test_an_owner_like_approvers_click_runs_it(self):
+        """0.77.0: in a bot-only deployment with `intake.owner_like: approvers` an approver's click is the owner's."""
+        write_config(self.tmp, enabled=True, relays_per_hour=10)
+        self.bootstrap_control()
+        for name in ('a-task', 'b-task'):
+            self.rt.add_task(name, session=TARGET_SESSION)
+        m = self.submit('Pause.')
+        self.pump_and_hold()
+        self.rt.envelopes.ENVELOPES.owner_like = lambda: frozenset({'U0000APPR01'})
+        self.assertEqual(self.propose_and_confirm(m, 'a-task', actor='U0000APPR01')[1][0]['state'], 'confirmed')
+        self.assertEqual(self.propose_and_confirm(m, 'b-task', actor='U0000OTHER1')[1][0]['state'], 'refused')
+
     def test_no_console_address_means_no_link_on_the_card(self):
         self.bootstrap_control()
         self.rt.add_task('a-task', session=TARGET_SESSION)

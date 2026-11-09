@@ -214,7 +214,7 @@ class GenerateTest(Base):
         a.bridge.pack('mira.playbook')
         with mock.patch.dict(os.environ, {'HOME': str(self.home)}):
             units = {name: a.leaf(name) for name in ('intake', 'task_lifecycle')}
-        for rx in (units['intake'].TASK_REF_RE, units['task_lifecycle'].LINEAR_TASK_RE,
+        for rx in (units['intake'].TASK_REF_RE, units['task_lifecycle'].TICKET_TASK_RE,
                    units['task_lifecycle'].TICKET_ID_RE):
             self.assertFalse(any(rx.search(text) for text in ('', 'PM-1', 'OPS-12', 'pm-1-task', 'none', '(?!)')), rx)
         self.assertEqual(stat.S_IMODE(init.state_dir('mira', self.home).stat().st_mode), 0o700)
@@ -426,10 +426,12 @@ class WizardTest(Base):
                 slack.dms.append({'type': 'message', 'user': OWNER, 'team': TEAM, 'text': m.group(0),
                                   'ts': f'{time.time() + 1:.6f}'})
 
-        io = ScriptIO(self.REPLIES, ['xoxb-wrong', BOT_TOKEN, APP_TOKEN], on_say)
+        io = ScriptIO(self.REPLIES, ['xoxb-wrong', BOT_TOKEN, 'xoxe.xapp-1-TESTROTATING', APP_TOKEN], on_say)
         a, path = wizard.run(io, home=self.home, call=slack, sleep=lambda s: None)
         self.assertEqual((a['owner']['key'], a['slack']['voice']), ('mira', 'assistant'))
         self.assertTrue(any('refused: slack_auth.test_refused_invalid_auth' in line for line in io.out))
+        self.assertTrue(any('refused: rotating_token_not_supported' in line for line in io.out))  # F9
+        self.assertTrue(any('token rotation off' in line for line in io.out))
         store = secrets.for_owner('mira', home=self.home)
         self.assertEqual((store.get(tokens.BOT), store.get(tokens.APP)), (BOT_TOKEN, APP_TOKEN))
         state = init.state_dir('mira', self.home)

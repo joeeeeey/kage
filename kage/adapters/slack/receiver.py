@@ -213,6 +213,55 @@ def control_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dic
     return refs, ""
 
 
+INTAKE_CHANNEL_RE = re.compile(r"[CGD][A-Z0-9]{1,63}")
+
+
+def is_intake_event(payload: Any) -> bool:
+    """0.77.0 bot intake: an `app_mention` (anywhere the bot is), or a `message` in a DM with the bot."""
+    if not (isinstance(payload, dict) and payload.get("type") == "event_callback" and isinstance(payload.get("event"), dict)):
+        return False
+    event = payload["event"]
+    if event.get("type") == "app_mention":
+        return True
+    # a DM message to the bot; a reply in a DM thread stays a card reply (cards may live in the owner's DM)
+    return event.get("type") == "message" and event.get("channel_type") == "im" and \
+        event.get("thread_ts") in (None, "", event.get("ts"))
+
+
+def intake_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dict[str, str] | None, str]:
+    """0.77.0 bot intake: the receiver-side filter for a message to the bot (an @mention, or a DM): (refs, "") for a
+    plain human message in this workspace, else (None, drop code). Ids only; the runtime reads the message back
+    (`intake-push`) and its intake decides what it is."""
+    if not is_intake_event(payload):
+        return None, "not_intake_event"
+    event = payload["event"]
+    if str(payload.get("team_id") or "") != expected_team_id:
+        return None, "unexpected_team"
+    for key in ("subtype", "bot_id", "app_id"):
+        if event.get(key) not in (None, ""):
+            return None, "has_" + key
+    refs = {key: event.get(key) for key in ("channel", "ts", "user")}
+    if not isinstance(refs["channel"], str) or not INTAKE_CHANNEL_RE.fullmatch(refs["channel"]):
+        return None, "bad_channel"
+    if not isinstance(refs["ts"], str) or not SLACK_TS_RE.fullmatch(refs["ts"]):
+        return None, "bad_ts"
+    if not isinstance(refs["user"], str) or not CARD_REPLY_USER_RE.fullmatch(refs["user"]):
+        return None, "bad_user"
+    thread_ts = event.get("thread_ts")
+    if thread_ts not in (None, "", refs["ts"]):
+        if not isinstance(thread_ts, str) or not SLACK_TS_RE.fullmatch(thread_ts):
+            return None, "bad_thread_ts"
+        refs["thread_ts"] = thread_ts
+    return refs, ""
+
+
+def intake_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:
+    # Refs only: the runtime reads the message itself. Never the text.
+    command = followup_base_command(python=python, script=script, db=db) + [
+        "intake-push", "--channel", refs["channel"], "--ts", refs["ts"], "--user", refs["user"]]
+    return command + ["--thread-ts", refs["thread_ts"]] if refs.get("thread_ts") else command
+
+
 def control_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:
     # Refs only: the runtime reads the message itself. Never the text.
     return followup_base_command(python=python, script=script, db=db) + [
@@ -257,6 +306,7 @@ def parse_card_reply_config(result: Any) -> dict[str, Any] | None:
         "ttl_seconds": card_reply_ttl(result.get("ttl_seconds")),
         "error": False,
         "control": result.get("control") is True,  # Phase 2 C2: forward the owner's new top-level messages too
+        "intake_push": result.get("intake_push") is True,  # 0.77.0: forward @mentions of the bot and its DMs
     }
 
 

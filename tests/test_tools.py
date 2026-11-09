@@ -43,6 +43,15 @@ class LeakScanTest(unittest.TestCase):
         denied = {leak_scan.digest('northwind')}
         self.assertEqual(len(self.findings('NORTHWIND_TOKEN_FILE and northwind-infra', denied)), 2)
 
+    def test_a_full_name_is_two_adjacent_words(self):
+        # N2: a colleague's full name is denied as "first last" (however the two words are joined); either word
+        # alone, or the two apart, passes
+        denied = {leak_scan.digest('quillon varga')}
+        found = self.findings('reply to Quillon Varga in English; QUILLON  VARGA wrote', denied)
+        self.assertEqual([(r, h[1:]) for r, h in found], [('denylist', '…(13 chars)')] * 2)
+        self.assertEqual(self.findings('Quillon wrote to Varga', denied), [])
+        self.assertEqual(len(self.findings('quillon-varga', denied)), 1)  # joined, still the name
+
     def test_compound_project_names(self):
         # K15d: a project name is a compound of ordinary words; it is found however it is joined, its parts alone pass
         denied = {leak_scan.digest('north-wind')}

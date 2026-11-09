@@ -120,6 +120,21 @@ class AppTest(unittest.TestCase):
 
 
 
+class ConsoleUrlTest(unittest.TestCase):
+    def test_a_public_console_origin_is_the_link_in_cards(self):
+        # 0.77.0: instance.json console.public_origins[0] replaces the loopback console address in links
+        from kage.core import blockers
+        import types
+        cores = {name: types.SimpleNamespace(dashboard_url='http://127.0.0.1:8776')
+                 for name in ('FOLLOWUP_CORE', 'COMMANDS_CORE', 'CLI_CORE')}
+        namespace = {'DASHBOARD_URL': 'http://127.0.0.1:8776', **cores, 'OTHER': object()}
+        with mock.patch.object(blockers, 'DASHBOARD_URL', blockers.DASHBOARD_URL):
+            app.App._console_url(namespace, 'https://console.example.com')
+            self.assertEqual(blockers.DASHBOARD_URL, 'https://console.example.com')
+        self.assertEqual(namespace['DASHBOARD_URL'], 'https://console.example.com')
+        self.assertEqual({c.dashboard_url for c in cores.values()}, {'https://console.example.com'})
+
+
 class UnitsTest(unittest.TestCase):
     """The generated units (kage/assembly/): the package lists exactly its unit files; every unit compiles; every leaf
     a unit asks for is a unit or a declared transitional module (K15c: only the deployment's own programs); no unit
