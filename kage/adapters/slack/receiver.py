@@ -8,6 +8,7 @@ from the owner's catalog (`receiver.*`). Diagnostics hold ids and enumerated cod
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import math
 import os
@@ -38,6 +39,7 @@ DISPATCH_EPHEMERAL_LIMIT = 3000
 STALE_REASONS = {"proposal_superseded", "proposal_already_confirmed", "proposal_already_rejected", "already_decided"}
 AGENT_ENV_KEYS = ("CODEX_THREAD_ID", "CLAUDE_CODE_SESSION_ID", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
 SAFE_CODE_RE = re.compile(r"[a-z0-9_:]{1,64}")
+SAFE_ERROR_RE = re.compile(r"[A-Za-z0-9_:]{1,64}")  # 0.78.4: an error type, e.g. TimeoutExpired
 SAFE_ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 # P39: the owner's typed replies in card threads arrive as Events API `message` events (bot event `message.groups`,
 # the private decision / OOO channels) and are forwarded to the runtime as refs only (channel / ts / thread_ts / user),
@@ -262,18 +264,25 @@ def intake_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user:
     return refs, ""
 
 
-def receipt_refs(payload: Any, *, expected_team_id: str, own_bot_user: str | None) -> tuple[str, str] | None:
-    """0.78.3 (F12): (channel, ts) of a message to the bot that gets 👀 at once, in the receiver itself: a plain
-    human @mention / DM (no subtype, no bot_id / app_id: decided from the payload alone, no API call), never the bot's
-    own. A post through an app waits for the runtime's person check (`intake-push` reacts after it)."""
-    refs, _ = intake_refs(payload, expected_team_id=expected_team_id, own_bot_user=own_bot_user) \
-        if is_intake_event(payload) else (None, "")
+def receipt_refs(payload: Any, *, expected_team_id: str, own_bot_user: str | None, own_app_id: str | None = None,
+                 delegate_names: Any = ()) -> tuple[str, str, str | None] | None:
+    """0.78.3 (F12): (channel, ts, person) of a message to the bot that gets 👀 at once, in the receiver itself; never
+    the bot's own. A plain human @mention / DM (no bot_id / app_id / bot_profile): person None, decided from the payload
+    alone. 0.78.4 (F15): a post through an app whose name intake allows (`intake.delegate_bot_names`, as P42.1): person =
+    its `user`, reacted to only when users.info says a person (the receipt thread, cached)."""
+    refs, _ = intake_refs(payload, expected_team_id=expected_team_id, own_bot_user=own_bot_user,
+                          own_app_id=own_app_id) if is_intake_event(payload) else (None, "")
     if refs is None or not own_bot_user:
         return None
     event = payload["event"]
-    if any(event.get(key) not in (None, "") for key in ("bot_id", "app_id", "bot_profile")):
+    if not any(event.get(key) not in (None, "") for key in ("bot_id", "app_id", "bot_profile")):
+        return refs["channel"], refs["ts"], None
+    profile = event.get("bot_profile") if isinstance(event.get("bot_profile"), dict) else {}
+    name = str(profile.get("name") or event.get("username") or "").lower()
+    names = [str(n).lower() for n in delegate_names or () if isinstance(n, str)]
+    if not name or not any(fnmatch.fnmatchcase(name, n) for n in names):
         return None
-    return refs["channel"], refs["ts"]
+    return refs["channel"], refs["ts"], refs["user"]
 
 
 def intake_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:
@@ -329,6 +338,8 @@ def parse_card_reply_config(result: Any) -> dict[str, Any] | None:
         "control": result.get("control") is True,  # Phase 2 C2: forward the owner's new top-level messages too
         "intake_push": result.get("intake_push") is True,  # 0.77.0: forward @mentions of the bot and its DMs
         "intake_ack": result.get("intake_ack") is True,  # 0.78.3: 👀 in the receiver itself (intake.ack_on_receipt)
+        "delegate_bot_names": tuple(str(n) for n in (result.get("delegate_bot_names") or [])[:20]
+                                    if isinstance(n, str) and len(n) <= 80),  # 0.78.4: app posts by a person
     }
 
 
@@ -369,13 +380,31 @@ def run_followup_json(
         return {"ok": False, "reason": prefix + "_timeout"}
     except OSError:
         return {"ok": False, "reason": prefix + "_unavailable"}
-    if completed.returncode != 0:
-        return {"ok": False, "reason": prefix + "_failed", "returncode": completed.returncode}
+    if completed.returncode != 0:  # 0.78.4 (F16): which failure, as a code (the CLI's error type), never its text
+        return {"ok": False, "reason": prefix + "_failed", "returncode": completed.returncode,
+                "error": failure_code(getattr(completed, "stderr", ""))}
     try:
         result = json.loads(completed.stdout)
     except ValueError:
         return {"ok": False, "reason": prefix + "_invalid_output"}
     return result if isinstance(result, dict) else {"ok": False, "reason": prefix + "_invalid_output"}
+
+
+def failure_code(stderr: Any) -> str:
+    """A failed CLI run's cause as a code: the `error` of its JSON line (`{"error", "detail"}`), else the exception type
+    of a traceback's last line, else "unknown". Never the detail text."""
+    lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
+    for line in reversed(lines):
+        try:
+            data = json.loads(line)
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and isinstance(data.get("error"), str):
+            return _safe(data["error"], SAFE_ERROR_RE) or "unknown"
+        match = re.match(r"([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception|Exit|Interrupt|Expired))\b", line)
+        if match:
+            return _safe(match.group(1).rsplit(".", 1)[-1], SAFE_ERROR_RE) or "unknown"
+    return "unknown"
 
 
 def run_decide(

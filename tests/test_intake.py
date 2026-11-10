@@ -255,6 +255,9 @@ class EngineTest(unittest.TestCase):
             self.assertNotIn('receipt', push())
         message['ts'] = '1.0'
         self.assertEqual(push()['reason'], 'message_not_found')
+        rt.slack.api_call = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('Slack API error: ratelimited'))
+        self.assertEqual({k: push()[k] for k in ('reason', 'error')},  # 0.78.4 (F16): a coded result, not a crash
+                         {'reason': 'slack_read_failed', 'error': 'ratelimited'})
 
     def test_requests_and_budget(self):
         self.assertEqual(I.binding_key('im', None, '1.5', 'U1'), '1.5')

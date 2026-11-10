@@ -189,6 +189,19 @@ class IntakePushTest(unittest.TestCase):
         self.assertTrue(r.parse_card_reply_config({**base, 'intake_push': True})['intake_push'])
         self.assertEqual((r.parse_card_reply_config(base)['intake_ack'],
                           r.parse_card_reply_config({**base, 'intake_ack': True})['intake_ack']), (False, True))
+        self.assertEqual(r.parse_card_reply_config({**base, 'delegate_bot_names': ['*', 3, 'x' * 81]})['delegate_bot_names'],
+                         ('*',))
+
+    def test_a_failed_command_says_why_as_a_code(self):
+        # 0.78.4 (F16): the error type, never the text
+        self.assertEqual(r.failure_code('{"error": "ValueError", "detail": "the secret words"}'), 'ValueError')
+        self.assertEqual(r.failure_code('Traceback (most recent call last):\n  ...\nRuntimeError: Slack API error: x'),
+                         'RuntimeError')
+        self.assertEqual(r.failure_code('subprocess.TimeoutExpired: Command timed out'), 'TimeoutExpired')
+        self.assertEqual(r.failure_code(''), 'unknown')
+        failed = types.SimpleNamespace(returncode=1, stdout='', stderr='{"error": "OperationalError", "detail": "x"}')
+        out = r.run_followup_json(['x'], runner=lambda *a, **kw: failed, script=Path('/x/scripts/kage.py'), prefix='intake_push')
+        self.assertEqual(out, {'ok': False, 'reason': 'intake_push_failed', 'returncode': 1, 'error': 'OperationalError'})
 
     def test_a_post_through_an_app_passes_unless_it_is_ours(self):
         # 0.78.3 (F14): a person's own user token through an API client carries bot_id / app_id; the runtime decides
@@ -205,13 +218,21 @@ class IntakePushTest(unittest.TestCase):
     def test_which_messages_get_the_receivers_receipt(self):
         # 0.78.3 (F12): decided from the payload alone; never the bot's own message, never a post through an app
         kw = {'expected_team_id': TEAM, 'own_bot_user': 'U0000TEST09'}
-        self.assertEqual(r.receipt_refs(self.event(), **kw), ('C0000TEST01', '1700000001.000200'))
+        self.assertEqual(r.receipt_refs(self.event(), **kw), ('C0000TEST01', '1700000001.000200', None))
         dm = self.event(type='message', channel='D0000TEST01', channel_type='im')
-        self.assertEqual(r.receipt_refs(dm, **kw), ('D0000TEST01', '1700000001.000200'))
+        self.assertEqual(r.receipt_refs(dm, **kw), ('D0000TEST01', '1700000001.000200', None))
         for event in ({'bot_id': 'B0000TEST05'}, {'app_id': 'A0000TEST05'}, {'bot_profile': {'name': 'x'}},
                       {'user': 'U0000TEST09'}, {'subtype': 'bot_message'}, {'type': 'message', 'channel_type': 'channel'}):
             self.assertIsNone(r.receipt_refs(self.event(**event), **kw), event)
         self.assertIsNone(r.receipt_refs(self.event(), expected_team_id=TEAM, own_bot_user=None))  # unknown bot: none
+        # 0.78.4 (F15): a post through an app intake allows -> the person check (its user) in the receipt thread
+        app = {'bot_id': 'B0000TEST05', 'app_id': 'A0000TEST05', 'bot_profile': {'app_id': 'A0000TEST05', 'name': 'API-Client'}}
+        self.assertEqual(r.receipt_refs(self.event(**app), delegate_names=['*'], **kw),
+                         ('C0000TEST01', '1700000001.000200', OWNER))
+        self.assertEqual(r.receipt_refs(self.event(**app), delegate_names=['api-*'], **kw)[2], OWNER)  # any case
+        self.assertIsNone(r.receipt_refs(self.event(**app), delegate_names=['coder-*'], **kw))
+        self.assertIsNone(r.receipt_refs(self.event(**app), **kw))  # [] = off
+        self.assertIsNone(r.receipt_refs(self.event(**app), delegate_names=['*'], own_app_id='A0000TEST05', **kw))
         self.assertIsNone(r.receipt_refs(self.event(), expected_team_id='T0000TEST02', own_bot_user='U0000TEST09'))
 
 

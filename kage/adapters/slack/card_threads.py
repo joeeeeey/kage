@@ -399,6 +399,7 @@ class CardThreads:
         if intake.get('enabled') and intake.get('identity') == 'bot':
             out['intake_push'] = True  # 0.77.0: forward @mentions of the bot and its DMs (`intake-push`)
             out['intake_ack'] = intake.get('ack_on_receipt', True) is True  # 0.78.3: the receiver's own 👀
+            out['delegate_bot_names'] = list(intake.get('delegate_bot_names') or [])  # 0.78.4: app posts by a person
         return out
 
     def push(self, rt, db, channel, ts, root, user, now=None):

@@ -164,6 +164,8 @@ class SocketModeRunner:
     ns: Any = None
     own_bot_user: str | None = None  # 0.78.3: the bot's own user id / app id (never a receipt or intake for those)
     own_app_id: str | None = None
+    gate_file: Path | None = None  # 0.78.4 (F16): the last good receipt gate, so a restart reacts at once too
+    PERSON_TTL = 600.0  # 0.78.4 (F15): a users.info verdict is reused this long
 
     def handle_interactive(self, payload: dict[str, Any]) -> bool:
         """An interactive payload that is not a card button: the deployment's own (default: ignored). True = `--once`
@@ -235,6 +237,7 @@ class SocketModeRunner:
         else:
             self._log({"event": "card_reply_config", "enabled": config["enabled"], "channels": len(config["channels"]),
                        "users": len(config["users"]), "ttl_seconds": config["ttl_seconds"]})
+            self._save_gate(config)
         self._card_reply_cache = (now + config["ttl_seconds"], config)
         return config
 
@@ -301,8 +304,14 @@ class SocketModeRunner:
                 self._log(record)
                 return record
             script, db, _ = self._followup_target()
-            result = self._followup_json(self.ns.intake_push_command(refs, python=sys.executable, script=script, db=db),
-                                         "intake_push")
+            command = self.ns.intake_push_command(refs, python=sys.executable, script=script, db=db)
+            result, attempts = self._followup_json(command, "intake_push"), 1
+            if str(result.get("reason") or "").endswith(("_failed", "_timeout", "_invalid_output", "_unavailable")):
+                time.sleep(1.0)  # 0.78.4 (F16): a command that did not run through gets one more try
+                self._log({"event": "intake_push_retry", "reason": self.ns._safe(result.get("reason"), self.ns.SAFE_CODE_RE),
+                           "returncode": result.get("returncode"),
+                           "error": self.ns._safe(result.get("error"), getattr(self.ns, "SAFE_ERROR_RE", self.ns.SAFE_CODE_RE))})
+                result, attempts = self._followup_json(command, "intake_push"), 2
             record = {
                 "event": "intake_pushed",
                 "channel_id": self.ns._safe(refs["channel"]),
@@ -310,7 +319,11 @@ class SocketModeRunner:
                 "ok": bool(result.get("ok")),
                 "outcome": self.ns._safe(result.get("outcome"), self.ns.SAFE_CODE_RE),
                 "reason": self.ns._safe(result.get("reason"), self.ns.SAFE_CODE_RE),
+                "attempts": attempts,
             }
+            if not result.get("ok"):  # 0.78.4 (F16): the cause, as codes
+                record.update(returncode=result.get("returncode"), error=self.ns._safe(
+                    result.get("error"), getattr(self.ns, "SAFE_ERROR_RE", self.ns.SAFE_CODE_RE)))
             self._log(record)
             return record
         except Exception as exc:  # noqa: BLE001 - one bad event never stops the dispatch thread
@@ -418,25 +431,57 @@ class SocketModeRunner:
                     self._inbox.put(envelope)
         return "stop"
 
+    def _save_gate(self, config: dict[str, Any]) -> None:
+        """0.78.4 (F16): the receipt gate of the last good `card-reply-config`, for the first messages after a restart
+        (best effort, 0600, no secret: two flags and the allowed app name patterns)."""
+        if self.gate_file is None:
+            return
+        try:
+            data = {"intake_ack": bool(config.get("intake_ack")), "delegate_bot_names": list(config.get("delegate_bot_names") or ())}
+            tmp = Path(str(self.gate_file) + ".tmp")
+            tmp.write_text(json.dumps(data), encoding="utf-8")
+            tmp.chmod(0o600)
+            tmp.replace(self.gate_file)
+        except Exception:  # noqa: BLE001 - only the restart's first receipts depend on it
+            pass
+
+    def _receipt_gate(self) -> dict[str, Any] | None:
+        """The receipt gate: the cached `card-reply-config` when it is a good one, else the last good one on disk."""
+        cached = getattr(self, "_card_reply_cache", None)
+        if cached and not cached[1].get("error"):
+            return cached[1]
+        fallback = getattr(self, "_gate_fallback", None)
+        if fallback is None and self.gate_file is not None:
+            try:
+                fallback = json.loads(Path(self.gate_file).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                fallback = {}
+            self._gate_fallback = fallback
+        return fallback if isinstance(fallback, dict) else None
+
     def _receipt_now(self, envelope: dict[str, Any]) -> None:
-        """0.78.3 (F12): a plain human @mention / DM to the bot gets 👀 within a second or two, independent of the
-        dispatch thread (which waits on runtime commands): queued here, after the ack, for the receipt thread. Only while
-        the cached gate (`card-reply-config` intake_ack) says so; never fetched here; each message once. Never raises."""
+        """0.78.3 (F12): a message to the bot gets 👀 within a second or two, independent of the dispatch thread
+        (which waits on runtime commands): queued here, after the ack, for the receipt thread. Only while the gate
+        (`card-reply-config` intake_ack, else the last good one on disk) says so; never fetched here; each message once.
+        0.78.4 (F15): a post through an allowed app is queued with its user for the receipt thread's person check.
+        Never raises."""
         try:
             queue_ = getattr(self, "_receipts", None)
-            cached = getattr(self, "_card_reply_cache", None)
             refs_of = getattr(self.ns, "receipt_refs", None)
-            if queue_ is None or refs_of is None or not cached or not cached[1].get("intake_ack") \
+            gate = self._receipt_gate() if queue_ is not None else None
+            if queue_ is None or refs_of is None or not gate or not gate.get("intake_ack") \
                     or envelope.get("type") != "events_api":
                 return
             refs = refs_of(envelope.get("payload") or {}, expected_team_id=self.args.expected_team_id,
-                           own_bot_user=self.own_bot_user)
+                           own_bot_user=self.own_bot_user, own_app_id=self.own_app_id,
+                           delegate_names=gate.get("delegate_bot_names") or ())
             if refs is None:
                 return
+            key = refs[:2]
             with self._receipt_lock:
-                if refs in self._receipted:
+                if key in self._receipted:
                     return
-                self._receipted[refs] = True
+                self._receipted[key] = True
                 while len(self._receipted) > self.ns.ENVELOPE_SEEN_MAX:
                     self._receipted.popitem(last=False)
             queue_.put((refs, time.monotonic()))
@@ -447,17 +492,36 @@ class SocketModeRunner:
         """The receipt thread: reactions.add `eyes` with the bot token for each queued message; codes only in the log."""
         while not self._stop.is_set():
             try:
-                (channel, ts), queued = self._receipts.get(timeout=self.ns.STOP_CHECK_SECONDS)
+                (channel, ts, person), queued = self._receipts.get(timeout=self.ns.STOP_CHECK_SECONDS)
             except queue.Empty:
                 continue
             outcome = "added"
             try:
-                self.bot_client.call("reactions.add", json_body={"channel": channel, "timestamp": ts, "name": "eyes"})
+                if person and not self._is_person(person):
+                    outcome = "not_a_person"
+                else:
+                    self.bot_client.call("reactions.add", json_body={"channel": channel, "timestamp": ts, "name": "eyes"})
             except Exception as exc:  # noqa: BLE001
                 outcome = "already" if "already_reacted" in str(exc) else "failed:" + self.ns.transport_error_code(exc)
             self._log({"event": "receipt", "channel_id": self.ns._safe(channel), "message_ts": self.ns._safe(ts),
                        "outcome": self.ns._safe(outcome, self.ns.SAFE_CODE_RE),
                        "ms": int((time.monotonic() - queued) * 1000)})
+
+    def _is_person(self, user: str) -> bool:
+        """0.78.4 (F15): users.info (bot token) says a person: not a bot, not deleted, not Slackbot; reused PERSON_TTL s.
+        An error counts as not a person (no reaction; the runtime's own check still runs)."""
+        cache = self.__dict__.setdefault("_persons", {})
+        hit = cache.get(user)
+        if hit and time.monotonic() - hit[0] < self.PERSON_TTL:
+            return hit[1]
+        try:
+            data, _ = self.bot_client.call("users.info", params={"user": user})
+            info = data.get("user") or {}
+            verdict = info.get("is_bot") is False and not info.get("deleted") and user != "USLACKBOT"
+        except Exception:  # noqa: BLE001
+            verdict = False
+        cache[user] = (time.monotonic(), verdict)
+        return verdict
 
     def _connection_loop(self, slot: int, connect: Callable[..., Any], liveness_interval: float,
                          pong_timeout: float) -> None:

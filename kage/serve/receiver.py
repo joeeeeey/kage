@@ -104,6 +104,8 @@ class Receiver(_sm.SocketModeRunner):
         transport = transport or assembly.leaf('slack_transport')
         self.app_client, self.bot_client = Client(transport, app_token), Client(transport, bot_token)
         self.own_bot_user, self.own_app_id = owner.assistant_slack_bot_user, owner.assistant_slack_app or None
+        self.gate_file = Path.home() / assembly.value('hub.DEFAULT_DB')  # 0.78.4: next to the state database
+        self.gate_file = self.gate_file.parent / 'receiver-gate.json'
 
     def preflight(self):
         owner = self.assembly.deployment.owner

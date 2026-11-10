@@ -161,6 +161,92 @@ class SocketModeTest(unittest.TestCase):
         r._receipt_now(mention('e4'))
         self.assertTrue(r._receipts.empty())
 
+    def receipt_runner(self, tmp=None):
+        from kage.adapters.slack import receiver as R
+        r = Runner(namespace(receipt_refs=R.receipt_refs, _safe=R._safe, SAFE_CODE_RE=R.SAFE_CODE_RE))
+        r._stop, r._inbox, r._seen = threading.Event(), queue.Queue(), OrderedDict()
+        r._receipts, r._receipt_lock, r._receipted = queue.Queue(), threading.Lock(), OrderedDict()
+        r.own_bot_user, r.own_app_id = 'U0000TEST09', 'A0000TEST01'
+        r.calls = []
+
+        def call(method, params=None, json_body=None):
+            r.calls.append((method, params, json_body))
+            if method == 'users.info':
+                return {'user': {'id': params['user'], 'is_bot': params['user'] == 'U0000APBOT1', 'deleted': False}}, {}
+            return {'ok': True}, {}
+        r.bot_client = mock.Mock()
+        r.bot_client.call.side_effect = call
+        return r
+
+    @staticmethod
+    def app_mention(envelope_id, user, ts):
+        return {'type': 'events_api', 'envelope_id': envelope_id, 'payload': {
+            'type': 'event_callback', 'team_id': 'T0000TEST01',
+            'event': {'type': 'app_mention', 'channel': 'C0000TEST01', 'ts': ts, 'user': user, 'bot_id': 'B0000TEST05',
+                      'app_id': 'A0000TEST05', 'bot_profile': {'app_id': 'A0000TEST05', 'name': 'api-client'}}}}
+
+    def drain(self, r):
+        r._stop.clear()
+        thread = threading.Thread(target=r._receipt_loop, daemon=True)
+        thread.start()
+        deadline = time.monotonic() + 2.0
+        while not r._receipts.empty() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        time.sleep(0.05)
+        r._stop.set()
+        thread.join(1.0)
+
+    def test_an_api_post_by_a_person_gets_the_receipt_after_a_cached_check(self):
+        # 0.78.4 (F15): users.info once per user (cached), in the receipt thread; a bot user's post gets none
+        r = self.receipt_runner()
+        r._card_reply_cache = (float('inf'), {'intake_ack': True, 'delegate_bot_names': ('*',)})
+        r._receipt_now(self.app_mention('e1', 'U0000TEST01', '1700000001.000200'))
+        r._receipt_now(self.app_mention('e2', 'U0000TEST01', '1700000002.000300'))
+        r._receipt_now(self.app_mention('e3', 'U0000APBOT1', '1700000003.000400'))
+        self.drain(r)
+        self.assertEqual([c[0] for c in r.calls], ['users.info', 'reactions.add', 'reactions.add', 'users.info'])
+        self.assertEqual([rec['outcome'] for rec in r.logged if rec.get('event') == 'receipt'],
+                         ['added', 'added', 'not_a_person'])
+        r._card_reply_cache = (float('inf'), {'intake_ack': True, 'delegate_bot_names': ()})  # apps not allowed: none
+        r._receipt_now(self.app_mention('e4', 'U0000TEST01', '1700000004.000500'))
+        self.assertTrue(r._receipts.empty())
+
+    def test_a_failed_push_is_tried_once_more_and_its_cause_logged(self):
+        # 0.78.4 (F16): the first push after a restart failed with no cause in the log
+        from kage.adapters.slack import receiver as R
+        ns = namespace(**{name: getattr(R, name) for name in ('is_intake_event', 'intake_refs', 'intake_push_command',
+                                                              'run_followup_json', '_safe', 'SAFE_CODE_RE',
+                                                              'SAFE_ERROR_RE')})
+        r = Runner(ns)
+        r._card_reply_cache = (float('inf'), {'intake_push': True})
+        answers = [types.SimpleNamespace(returncode=1, stdout='', stderr='{"error": "OperationalError", "detail": "x"}'),
+                   types.SimpleNamespace(returncode=0, stdout='{"ok": true, "outcome": "accepted"}', stderr='')]
+        r.followup_runner = lambda *a, **kw: answers.pop(0)
+        payload = {'type': 'event_callback', 'team_id': 'T0000TEST01', 'event': {
+            'type': 'app_mention', 'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': 'U0000TEST01'}}
+        with mock.patch.object(S.time, 'sleep'):
+            record = r.process_intake(payload)
+        self.assertEqual((record['ok'], record['outcome'], record['attempts']), (True, 'accepted', 2))
+        retry = next(rec for rec in r.logged if rec.get('event') == 'intake_push_retry')
+        self.assertEqual((retry['reason'], retry['returncode'], retry['error']), ('intake_push_failed', 1, 'OperationalError'))
+
+    def test_after_a_restart_the_last_good_gate_is_used(self):
+        # 0.78.4 (F16): no good cached gate yet (cold, or the first fetch failed): the gate saved on disk
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            r = self.receipt_runner()
+            r.gate_file = Path(tmp) / 'receiver-gate.json'
+            r._save_gate({'intake_ack': True, 'delegate_bot_names': ('*',)})
+            self.assertEqual(json.loads(r.gate_file.read_text()), {'intake_ack': True, 'delegate_bot_names': ['*']})
+            fresh = self.receipt_runner()
+            fresh.gate_file = r.gate_file
+            fresh._card_reply_cache = (float('inf'), {'intake_ack': False, 'error': True})  # the first fetch failed
+            fresh._receipt_now({'type': 'events_api', 'envelope_id': 'e1', 'payload': {
+                'type': 'event_callback', 'team_id': 'T0000TEST01',
+                'event': {'type': 'app_mention', 'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': 'U0000TEST01'}}})
+            self.assertEqual(fresh._receipts.get_nowait()[0], ('C0000TEST01', '1700000001.000200', None))
+
     def test_run_imports_websockets_only_when_it_runs_and_honours_once(self):
         self.assertNotIn('websockets', sys.modules.get(S.__name__).__dict__)
         r = Runner(namespace(), once=True)

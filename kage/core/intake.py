@@ -3107,10 +3107,13 @@ class IntakeCore:
         state = engine.load_state()
         if state.get('baseline') is None:
             return {'ok': True, 'outcome': 'skipped', 'reason': 'intake_not_started'}
-        token = rt.api_identity(bot=True)
         params = {'channel': channel, 'latest': ts, 'oldest': ts, 'inclusive': 'true', 'limit': 1}
-        found = rt.slack.api_call('conversations.replies' if thread_ts else 'conversations.history', token,
-                                  params={**params, 'ts': thread_ts} if thread_ts else params)
+        try:
+            token = rt.api_identity(bot=True)
+            found = rt.slack.api_call('conversations.replies' if thread_ts else 'conversations.history', token,
+                                      params={**params, 'ts': thread_ts} if thread_ts else params)
+        except Exception as exc:  # noqa: BLE001 - 0.78.4 (F16): a failed read is a result with its code, not a crash
+            return {'ok': False, 'outcome': 'refused', 'reason': 'slack_read_failed', 'error': _slack_code(exc)}
         m = next((x for x in found.get('messages') or [] if isinstance(x, dict) and x.get('ts') == ts), None)
         if m is None:
             return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
