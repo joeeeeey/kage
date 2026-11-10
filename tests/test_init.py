@@ -325,6 +325,38 @@ class RerunTest(Base):
         self.assertEqual(actions['kage.lock'], 'same')
         self.assertEqual(pack.read_bytes(), data)
 
+    def test_a_rerun_keeps_what_the_deployment_added(self):
+        # F11 (0.78.1): a re-pin by `init --answers --apply` dropped the console origins, assembly values, an extra pack
+        # and the dashboard port
+        instance = json.loads((self.target / 'deploy/instance.json').read_text())
+        instance['console'] = {'public_origins': ['https://console.example.com']}
+        instance['paths']['extra_notes'] = '~/notes'
+        instance['assembly']['values'] = {'rule_engine._p': 'org.access'}
+        (self.target / 'deploy/instance.json').write_text(json.dumps(instance, indent=2) + '\n')
+        extra = self.target / 'deploy/packs/org/access.py'
+        extra.parent.mkdir(mode=0o700)
+        extra.write_bytes(b'# an organisation access pack\n')
+        lock = json.loads((self.target / 'kage.lock').read_text())
+        lock['packs']['org.access'] = {'path': 'deploy/packs/org/access.py',
+                                       'sha256': hashlib.sha256(extra.read_bytes()).hexdigest()}
+        (self.target / 'kage.lock').write_text(json.dumps(lock, indent=2) + '\n')
+        services = json.loads((self.target / 'services.json').read_text())
+        services['services']['dashboard']['args'][-1] = '8776'
+        (self.target / 'services.json').write_text(json.dumps(services, indent=2) + '\n')
+        raw = raw_answers()
+        raw['owner']['timezone'] = 'Asia/Shanghai'
+        self.assertTrue(self.init(raw, apply=True)['applied'])
+        instance = json.loads((self.target / 'deploy/instance.json').read_text())
+        self.assertEqual(instance['console'], {'public_origins': ['https://console.example.com']})
+        self.assertEqual((instance['paths']['extra_notes'], instance['assembly']['values']),
+                         ('~/notes', {'rule_engine._p': 'org.access'}))
+        self.assertEqual(json.loads((self.target / 'kage.lock').read_text())['packs']['org.access']['path'],
+                         'deploy/packs/org/access.py')
+        self.assertEqual(json.loads((self.target / 'services.json').read_text())['services']['dashboard']['args'][-1],
+                         '8776')
+        self.assertIn('Asia/Shanghai', (self.target / 'deploy/owner.json').read_text())  # init's own files still follow
+        self.assertTrue(extra.is_file())
+
     def test_refusals_leave_the_deployment_as_it_was(self):
         before = {p: p.read_bytes() for p in self.target.rglob('*') if p.is_file()}
         pack = self.target / 'deploy/packs/default/access.py'

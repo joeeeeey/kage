@@ -221,6 +221,52 @@ def files(answers, owner_record, bot_record, pin):
                                    version=pin['version'], program=PROGRAM, language=who['language'])}
 
 
+def _read_json(path):
+    try:
+        return json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+
+
+def keep_local(target, wanted):
+    """F11 (0.78.1): a re-run keeps what the deployment added on top of what init writes: instance.json keys init does
+    not write (e.g. `console`, `assembly.values` / `modules`, extra `paths`), kage.lock packs init does not write and
+    the pin of every pack file it keeps (init never replaces a pack), extra lock switches, and a dashboard port that
+    differs from the default. Everything init writes itself is still regenerated from the answers."""
+    target = Path(target)
+    if not target.is_dir():
+        return wanted
+    old = _read_json(target / 'deploy/instance.json')
+    if isinstance(old, dict):
+        new = json.loads(wanted['deploy/instance.json'])
+        for key, value in old.items():
+            if key not in new:
+                new[key] = value
+        new['paths'] = {**(old.get('paths') or {}), **new['paths']}
+        for key, value in (old.get('assembly') or {}).items():
+            new['assembly'].setdefault(key, value)
+        wanted['deploy/instance.json'] = _json(new)
+    old = _read_json(target / 'kage.lock')
+    if isinstance(old, dict):
+        new = json.loads(wanted['kage.lock'])
+        for name, pin in (old.get('packs') or {}).items():
+            path = isinstance(pin, dict) and pin.get('path')
+            if name not in new['packs'] or (path and (target / path).is_file()):
+                new['packs'][name] = pin
+        for name, value in (old.get('modules') or {}).items():
+            new['modules'].setdefault(name, value)
+        wanted['kage.lock'] = _json(new)
+    old = _read_json(target / 'services.json')
+    if isinstance(old, dict) and 'services.json' in wanted:
+        new = json.loads(wanted['services.json'])
+        args = ((old.get('services') or {}).get('dashboard') or {}).get('args')
+        mine = new['services']['dashboard']['args']
+        if isinstance(args, list) and len(args) == len(mine) and args[:-1] == mine[:-1] and str(args[-1]).isdigit():
+            new['services']['dashboard']['args'] = args
+            wanted['services.json'] = _json(new)
+    return wanted
+
+
 def _is_pack(rel):
     return rel.startswith('deploy/packs/')
 
@@ -443,6 +489,7 @@ def run(answers, *, target=None, apply=False, release=None, home=None):
     wanted['services.json'] = _json(_services.spec(key=key, target=target, state=state_dir(key, home),
                                                    python=sys.executable,
                                                    path=_services.service_path(os.environ.get('PATH', ''))))
+    keep_local(target, wanted)
     steps = plan(target, wanted)
     tree = _effective(target, wanted, steps)
     steps = _actions(target, tree, steps)
