@@ -172,7 +172,7 @@ class IntakePushTest(unittest.TestCase):
         self.assertEqual((refs, why), ({'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': OWNER}, ''))
         refs, _ = r.intake_refs(self.event(thread_ts='1700000000.000100'), expected_team_id=TEAM)
         self.assertEqual(refs['thread_ts'], '1700000000.000100')  # a mention inside a thread
-        for event, code in (({'subtype': 'bot_message'}, 'has_subtype'), ({'bot_id': 'B1'}, 'has_bot_id'),
+        for event, code in (({'subtype': 'bot_message'}, 'has_subtype'),
                             ({'channel': 'X1'}, 'bad_channel'), ({'ts': 'now'}, 'bad_ts'), ({'user': 'W1'}, 'bad_user'),
                             ({'thread_ts': 'later'}, 'bad_thread_ts')):
             self.assertEqual(r.intake_refs(self.event(**event), expected_team_id=TEAM), (None, code))
@@ -187,6 +187,32 @@ class IntakePushTest(unittest.TestCase):
         base = {'ok': True, 'enabled': True, 'channels': [], 'users': []}
         self.assertFalse(r.parse_card_reply_config(base)['intake_push'])
         self.assertTrue(r.parse_card_reply_config({**base, 'intake_push': True})['intake_push'])
+        self.assertEqual((r.parse_card_reply_config(base)['intake_ack'],
+                          r.parse_card_reply_config({**base, 'intake_ack': True})['intake_ack']), (False, True))
+
+    def test_a_post_through_an_app_passes_unless_it_is_ours(self):
+        # 0.78.3 (F14): a person's own user token through an API client carries bot_id / app_id; the runtime decides
+        app = {'bot_id': 'B0000TEST05', 'app_id': 'A0000TEST05', 'bot_profile': {'app_id': 'A0000TEST05', 'name': 'cli'}}
+        refs, why = r.intake_refs(self.event(**app), expected_team_id=TEAM, own_bot_user='U0000TEST09',
+                                  own_app_id='A0000TEST01')
+        self.assertEqual((refs['user'], why), (OWNER, ''))
+        self.assertEqual(r.intake_refs(self.event(user='U0000TEST09'), expected_team_id=TEAM,
+                                       own_bot_user='U0000TEST09'), (None, 'our_bot'))
+        ours = {**app, 'app_id': 'A0000TEST01'}
+        self.assertEqual(r.intake_refs(self.event(**ours), expected_team_id=TEAM, own_app_id='A0000TEST01'),
+                         (None, 'our_app'))
+
+    def test_which_messages_get_the_receivers_receipt(self):
+        # 0.78.3 (F12): decided from the payload alone; never the bot's own message, never a post through an app
+        kw = {'expected_team_id': TEAM, 'own_bot_user': 'U0000TEST09'}
+        self.assertEqual(r.receipt_refs(self.event(), **kw), ('C0000TEST01', '1700000001.000200'))
+        dm = self.event(type='message', channel='D0000TEST01', channel_type='im')
+        self.assertEqual(r.receipt_refs(dm, **kw), ('D0000TEST01', '1700000001.000200'))
+        for event in ({'bot_id': 'B0000TEST05'}, {'app_id': 'A0000TEST05'}, {'bot_profile': {'name': 'x'}},
+                      {'user': 'U0000TEST09'}, {'subtype': 'bot_message'}, {'type': 'message', 'channel_type': 'channel'}):
+            self.assertIsNone(r.receipt_refs(self.event(**event), **kw), event)
+        self.assertIsNone(r.receipt_refs(self.event(), expected_team_id=TEAM, own_bot_user=None))  # unknown bot: none
+        self.assertIsNone(r.receipt_refs(self.event(), expected_team_id='T0000TEST02', own_bot_user='U0000TEST09'))
 
 
 if __name__ == '__main__':

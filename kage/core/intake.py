@@ -2113,11 +2113,15 @@ class IntakeCore:
 
     def delegate_app(self, m, cfg):
         """P42.1: the app name when this may be a person's own app posting AS them (Coder's `coder-<name>` with their user
-        token): bot_id / app_id, a U… / W… `user` (not our bot, not the owner), not our app, the name (bot_profile.name, else
-        username) matching an `intake.delegate_bot_names` fnmatch pattern, any case ([] = off). Else None."""
+        token): bot_id / app_id, a U… / W… `user` (not our bot, not the owner unless the deployment is bot-only), not our
+        app, the name (bot_profile.name, else username) matching an `intake.delegate_bot_names` fnmatch pattern, any case
+        ([] = off; ["*"] = any app). Else None."""
         profile = m.get('bot_profile') if isinstance(m.get('bot_profile'), dict) else {}
         name, user = str(profile.get('name') or m.get('username') or ''), str(m.get('user') or '')
-        if not (m.get('bot_id') or m.get('app_id')) or not USER_RE.fullmatch(user) or user in (self.bot_user, self.owner_slack_user) \
+        # 0.78.3 (F14): with `intake.identity: bot` no agent posts with the owner's token, so the owner's own app posts
+        # (their user token through an API client) are the owner's too
+        owner_excluded = user == self.owner_slack_user and (cfg or {}).get('identity') != 'bot'
+        if not (m.get('bot_id') or m.get('app_id')) or not USER_RE.fullmatch(user) or user == self.bot_user or owner_excluded \
                 or self.app_id in (m.get('app_id'), profile.get('app_id')):
             return None
         names = (cfg or {}).get('delegate_bot_names') or ()

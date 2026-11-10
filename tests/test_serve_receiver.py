@@ -129,7 +129,8 @@ class ServeReceiverTest(Base):
         self.assertIn(('auth.test', 'bot'), transport.calls)
         program = str(self.target / 'scripts/kage.py')
         verbs = [c[3] for c in runner.commands]
-        self.assertEqual(verbs, ['decide', 'card-reply-config', 'card-reply-push', 'control-push'])
+        # 0.78.3: the gate is fetched once at start (the receipt thread needs it warm), then cached
+        self.assertEqual(verbs, ['card-reply-config', 'decide', 'card-reply-push', 'control-push'])
         self.assertTrue(all(c[:3] == [sys.executable, '-I', program] for c in runner.commands))
         events = [rec.get('event') for rec in r.logged]
         self.assertIn('decision_handled', events)

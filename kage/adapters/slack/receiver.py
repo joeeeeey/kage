@@ -228,18 +228,25 @@ def is_intake_event(payload: Any) -> bool:
         event.get("thread_ts") in (None, "", event.get("ts"))
 
 
-def intake_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dict[str, str] | None, str]:
+def intake_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user: str | None = None,
+                own_app_id: str | None = None) -> tuple[dict[str, str] | None, str]:
     """0.77.0 bot intake: the receiver-side filter for a message to the bot (an @mention, or a DM): (refs, "") for a
     plain human message in this workspace, else (None, drop code). Ids only; the runtime reads the message back
-    (`intake-push`) and its intake decides what it is."""
+    (`intake-push`) and its intake decides what it is. 0.78.3 (F14): a post through an app (bot_id / app_id) with a
+    person's `user` (their own user token) passes too unless it is ours; the runtime keeps it only when users.info says
+    a person and the app is allowed (`intake.delegate_bot_names`)."""
     if not is_intake_event(payload):
         return None, "not_intake_event"
     event = payload["event"]
     if str(payload.get("team_id") or "") != expected_team_id:
         return None, "unexpected_team"
-    for key in ("subtype", "bot_id", "app_id"):
-        if event.get(key) not in (None, ""):
-            return None, "has_" + key
+    if event.get("subtype") not in (None, ""):
+        return None, "has_subtype"
+    if own_bot_user and event.get("user") == own_bot_user:
+        return None, "our_bot"
+    profile = event.get("bot_profile") if isinstance(event.get("bot_profile"), dict) else {}
+    if own_app_id and own_app_id in (event.get("app_id"), profile.get("app_id")):
+        return None, "our_app"
     refs = {key: event.get(key) for key in ("channel", "ts", "user")}
     if not isinstance(refs["channel"], str) or not INTAKE_CHANNEL_RE.fullmatch(refs["channel"]):
         return None, "bad_channel"
@@ -253,6 +260,20 @@ def intake_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dict
             return None, "bad_thread_ts"
         refs["thread_ts"] = thread_ts
     return refs, ""
+
+
+def receipt_refs(payload: Any, *, expected_team_id: str, own_bot_user: str | None) -> tuple[str, str] | None:
+    """0.78.3 (F12): (channel, ts) of a message to the bot that gets 👀 at once, in the receiver itself: a plain
+    human @mention / DM (no subtype, no bot_id / app_id: decided from the payload alone, no API call), never the bot's
+    own. A post through an app waits for the runtime's person check (`intake-push` reacts after it)."""
+    refs, _ = intake_refs(payload, expected_team_id=expected_team_id, own_bot_user=own_bot_user) \
+        if is_intake_event(payload) else (None, "")
+    if refs is None or not own_bot_user:
+        return None
+    event = payload["event"]
+    if any(event.get(key) not in (None, "") for key in ("bot_id", "app_id", "bot_profile")):
+        return None
+    return refs["channel"], refs["ts"]
 
 
 def intake_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:
@@ -307,6 +328,7 @@ def parse_card_reply_config(result: Any) -> dict[str, Any] | None:
         "error": False,
         "control": result.get("control") is True,  # Phase 2 C2: forward the owner's new top-level messages too
         "intake_push": result.get("intake_push") is True,  # 0.77.0: forward @mentions of the bot and its DMs
+        "intake_ack": result.get("intake_ack") is True,  # 0.78.3: 👀 in the receiver itself (intake.ack_on_receipt)
     }
 
 

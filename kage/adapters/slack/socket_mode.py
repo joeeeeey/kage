@@ -162,6 +162,8 @@ class SocketModeRunner:
     (the app-level token's client), `ns`, and implements `preflight()` and `handle_interactive(payload)`."""
 
     ns: Any = None
+    own_bot_user: str | None = None  # 0.78.3: the bot's own user id / app id (never a receipt or intake for those)
+    own_app_id: str | None = None
 
     def handle_interactive(self, payload: dict[str, Any]) -> bool:
         """An interactive payload that is not a card button: the deployment's own (default: ignored). True = `--once`
@@ -290,7 +292,8 @@ class SocketModeRunner:
         try:
             if not self.card_reply_settings().get("intake_push"):
                 return None
-            refs, code = self.ns.intake_refs(payload, expected_team_id=self.args.expected_team_id)
+            refs, code = self.ns.intake_refs(payload, expected_team_id=self.args.expected_team_id,
+                                             own_bot_user=self.own_bot_user, own_app_id=self.own_app_id)
             if refs is None:
                 event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 record = {"event": "intake_dropped", "reason": code, "channel_id": self.ns._safe(event.get("channel")),
@@ -400,6 +403,7 @@ class SocketModeRunner:
                 envelope_id = str(envelope.get("envelope_id") or "")
                 if envelope_id:
                     websocket.send(json.dumps({"envelope_id": envelope_id}))
+                self._receipt_now(envelope)  # 0.78.3 (F12): 👀 on its own thread, before the dispatch queue
                 kind = envelope.get("type")
                 if kind == "hello":
                     self._log({"event": "receiver_hello", "slot": slot,
@@ -413,6 +417,47 @@ class SocketModeRunner:
                 if kind in ("interactive", "events_api"):
                     self._inbox.put(envelope)
         return "stop"
+
+    def _receipt_now(self, envelope: dict[str, Any]) -> None:
+        """0.78.3 (F12): a plain human @mention / DM to the bot gets 👀 within a second or two, independent of the
+        dispatch thread (which waits on runtime commands): queued here, after the ack, for the receipt thread. Only while
+        the cached gate (`card-reply-config` intake_ack) says so; never fetched here; each message once. Never raises."""
+        try:
+            queue_ = getattr(self, "_receipts", None)
+            cached = getattr(self, "_card_reply_cache", None)
+            refs_of = getattr(self.ns, "receipt_refs", None)
+            if queue_ is None or refs_of is None or not cached or not cached[1].get("intake_ack") \
+                    or envelope.get("type") != "events_api":
+                return
+            refs = refs_of(envelope.get("payload") or {}, expected_team_id=self.args.expected_team_id,
+                           own_bot_user=self.own_bot_user)
+            if refs is None:
+                return
+            with self._receipt_lock:
+                if refs in self._receipted:
+                    return
+                self._receipted[refs] = True
+                while len(self._receipted) > self.ns.ENVELOPE_SEEN_MAX:
+                    self._receipted.popitem(last=False)
+            queue_.put((refs, time.monotonic()))
+        except Exception as exc:  # noqa: BLE001 - a receipt never touches reading or acking
+            self._log({"event": "receipt_error", "error_type": type(exc).__name__}, stderr=True)
+
+    def _receipt_loop(self) -> None:
+        """The receipt thread: reactions.add `eyes` with the bot token for each queued message; codes only in the log."""
+        while not self._stop.is_set():
+            try:
+                (channel, ts), queued = self._receipts.get(timeout=self.ns.STOP_CHECK_SECONDS)
+            except queue.Empty:
+                continue
+            outcome = "added"
+            try:
+                self.bot_client.call("reactions.add", json_body={"channel": channel, "timestamp": ts, "name": "eyes"})
+            except Exception as exc:  # noqa: BLE001
+                outcome = "already" if "already_reacted" in str(exc) else "failed:" + self.ns.transport_error_code(exc)
+            self._log({"event": "receipt", "channel_id": self.ns._safe(channel), "message_ts": self.ns._safe(ts),
+                       "outcome": self.ns._safe(outcome, self.ns.SAFE_CODE_RE),
+                       "ms": int((time.monotonic() - queued) * 1000)})
 
     def _connection_loop(self, slot: int, connect: Callable[..., Any], liveness_interval: float,
                          pong_timeout: float) -> None:
@@ -481,7 +526,14 @@ class SocketModeRunner:
         count = max(1, min(self.ns.MAX_SOCKET_CONNECTIONS, int(getattr(self.args, "socket_connections", 1) or 1)))
         self._stop, self._inbox, self._seen = threading.Event(), queue.Queue(), OrderedDict()
         self._log_lock = threading.Lock()
+        self._receipts, self._receipt_lock, self._receipted = queue.Queue(), threading.Lock(), OrderedDict()
         threads: dict[int, threading.Thread] = {}
+        if getattr(self, "bot_client", None) is not None:  # 0.78.3 (F12): the receipt thread, and its gate warm
+            threading.Thread(target=self._receipt_loop, name="socket-mode-receipts", daemon=True).start()
+            try:
+                self.card_reply_settings()
+            except Exception:  # noqa: BLE001 - a cold gate only means no early receipt until the first message
+                pass
 
         def start(slot: int) -> None:
             thread = threading.Thread(target=self._connection_loop, args=(slot, connect, liveness_interval, pong_timeout),

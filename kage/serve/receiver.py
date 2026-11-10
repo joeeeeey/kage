@@ -103,6 +103,7 @@ class Receiver(_sm.SocketModeRunner):
                                                              (_secrets.SLACK_BOT, bot_token)) if not v))
         transport = transport or assembly.leaf('slack_transport')
         self.app_client, self.bot_client = Client(transport, app_token), Client(transport, bot_token)
+        self.own_bot_user, self.own_app_id = owner.assistant_slack_bot_user, owner.assistant_slack_app or None
 
     def preflight(self):
         owner = self.assembly.deployment.owner

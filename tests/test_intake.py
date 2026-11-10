@@ -75,6 +75,11 @@ class IntakeCoreTest(unittest.TestCase):
         self.assertEqual(c.delegate_app(app, {'delegate_bot_names': ['coder-*']}), 'coder-ada')
         self.assertIsNone(c.delegate_app({**app, 'user': OWNER}, {'delegate_bot_names': ['coder-*']}))
         self.assertIsNone(c.delegate_app({**app, 'app_id': APP}, {'delegate_bot_names': ['coder-*']}))
+        # 0.78.3 (F14): bot-only, the owner's own user token through any allowed app is the owner
+        bot_only = {'delegate_bot_names': ['*'], 'identity': 'bot'}
+        self.assertEqual(c.delegate_app({**app, 'user': OWNER}, bot_only), 'coder-ada')
+        self.assertIsNone(c.delegate_app({**app, 'user': BOT}, bot_only))
+        self.assertIsNone(c.delegate_app({**app, 'user': OWNER}, {**bot_only, 'delegate_bot_names': []}))
 
     def test_the_notes_guard_uses_the_owner_key(self):
         c, rt = core(), runtime(self.people)
@@ -200,6 +205,20 @@ class EngineTest(unittest.TestCase):
         message['user'] = 'U0000OTHER1'
         self.assertEqual(push()['reason'], 'author_mismatch')
         message['user'] = 'U0000ADA001'
+
+    def test_the_owners_api_post_to_the_bot_is_the_owners(self):
+        # 0.78.3 (F14): a user-token post (bot_id / app_id + the owner's user) passes as the owner once users.info says
+        # a person; a bot user's post through an app stays a bot
+        self.db.execute('CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, data TEXT)')
+        cfg = {'identity': 'bot', 'delegate_bot_names': ['*']}
+        post = {'user': OWNER, 'ts': '3.1', 'text': f'<@{BOT}> ship it', 'bot_id': 'B0000TEST05', 'app_id': 'A0000TEST05',
+                'bot_profile': {'name': 'api-client', 'app_id': 'A0000TEST05'}}
+        ctx = {'oncall': set(), 'cfg': cfg, 'state': {'app_people': {OWNER: True, 'U0000APBOT1': False}}}
+        self.assertEqual(self.engine.verdict(post, 'C0000OPS001', 'channel', None, ctx), 'accept')
+        self.assertEqual(self.engine.verdict({**post, 'user': 'U0000APBOT1'}, 'C0000OPS001', 'channel', None, ctx),
+                         'bot_outside_oncall')
+        self.assertEqual(self.engine.verdict({**post, 'text': 'ship it'}, 'C0000OPS001', 'channel', None, ctx),
+                         'owner_authored')  # not said to the bot
 
     def test_an_accepted_push_gets_the_bots_receipt_at_once(self):
         # 0.78.2 (F12): 👀 right after intake accepts the message, before the burst settles; config-gated

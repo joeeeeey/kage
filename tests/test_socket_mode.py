@@ -121,6 +121,46 @@ class SocketModeTest(unittest.TestCase):
         self.assertEqual(S.transport_error_code(RuntimeError('Slack API error for auth.test: invalid_auth')),
                          'slack:invalid_auth')
 
+    def test_a_mention_gets_the_receipt_at_once_while_the_dispatch_waits(self):
+        # 0.78.3 (F12: 👀 within 3 s, every time): the receipt goes out from its own thread right after the ack,
+        # whatever the dispatch thread is doing (here it never runs); once per message; never on the bot's own post
+        from kage.adapters.slack import receiver as R
+        r = Runner(namespace(receipt_refs=R.receipt_refs, _safe=R._safe, SAFE_CODE_RE=R.SAFE_CODE_RE))
+        r._stop, r._inbox, r._seen = threading.Event(), queue.Queue(), OrderedDict()
+        r._receipts, r._receipt_lock, r._receipted = queue.Queue(), threading.Lock(), OrderedDict()
+        r.own_bot_user, r._card_reply_cache = 'U0000TEST09', (float('inf'), {'intake_ack': True})
+        calls = []
+        r.bot_client = mock.Mock()
+        r.bot_client.call.side_effect = lambda method, json_body=None: calls.append((time.monotonic(), method, json_body))
+
+        def mention(envelope_id, user='U0000TEST01', ts='1700000001.000200'):
+            return {'type': 'events_api', 'envelope_id': envelope_id, 'payload': {
+                'type': 'event_callback', 'team_id': 'T0000TEST01',
+                'event': {'type': 'app_mention', 'channel': 'C0000TEST01', 'ts': ts, 'user': user}}}
+        sock = Socket(mention('e1'), mention('e2'), mention('e3', user='U0000TEST09', ts='1700000002.000300'),
+                      {'type': 'disconnect', 'reason': 'refresh_requested'})
+        thread = threading.Thread(target=r._receipt_loop, daemon=True)
+        thread.start()
+        started = time.monotonic()
+        self.assertEqual(r._socket_session(0, lambda url, **kw: sock, 10.0, 5.0, lambda: None), 'disconnect')
+        deadline = time.monotonic() + 2.0
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.005)
+        time.sleep(0.05)
+        r._stop.set()
+        thread.join(1.0)
+        self.assertEqual(sock.sent, ['e1', 'e2', 'e3'])  # every envelope acked first
+        self.assertEqual([(m, b) for _, m, b in calls], [('reactions.add', {'channel': 'C0000TEST01',
+                                                                          'timestamp': '1700000001.000200',
+                                                                          'name': 'eyes'})])
+        self.assertLess(calls[0][0] - started, 1.0)  # the end-to-end bound the pod measures is 3 s
+        self.assertEqual(r._inbox.qsize(), 3)  # the dispatch thread still gets every envelope
+        self.assertEqual(r.logged[-1]['outcome'], 'added')
+        r._receipted.clear()
+        r._card_reply_cache = (float('inf'), {'intake_ack': False})  # the gate off: no receipt
+        r._receipt_now(mention('e4'))
+        self.assertTrue(r._receipts.empty())
+
     def test_run_imports_websockets_only_when_it_runs_and_honours_once(self):
         self.assertNotIn('websockets', sys.modules.get(S.__name__).__dict__)
         r = Runner(namespace(), once=True)
