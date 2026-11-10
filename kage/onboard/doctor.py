@@ -18,6 +18,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import time
 from typing import Any, Callable
 import urllib.request
@@ -70,6 +71,16 @@ class Probe:
         if out.returncode != 0:
             return None
         return 'running' if re.search(r'^\s*state = running\s*$', out.stdout, re.M) else 'loaded'
+
+    def module_version(self, python: str, module: str) -> str | None:
+        """`module.__version__` as the interpreter `python` imports it (the services' own: user site included), or
+        None when it does not import."""
+        try:
+            out = self.runner([python, '-c', f'import sys, {module}; sys.stdout.write(str({module}.__version__))'],
+                              capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return (out.stdout.strip()[:40] or None) if out.returncode == 0 else None
 
     def version(self, binary: str) -> str | None:
         path = self.which(binary)
@@ -240,7 +251,7 @@ def deployment_root(profile_dir: Path | None, owner_key: str, environ) -> Path |
     return next((c for c in candidates if (c / 'services.json').is_file()), None)
 
 
-def service_checks(root: Path | None, probe: Probe) -> list[dict[str, Any]]:
+def service_checks(root: Path | None, probe: Probe, heartbeat: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     if root is None:
         return [check('services.running', True, None, 'no deployment repository found (services.json)')]
     path = root / 'services.json'
@@ -248,12 +259,33 @@ def service_checks(root: Path | None, probe: Probe) -> list[dict[str, Any]]:
         services = json.loads(path.read_text(encoding='utf-8')).get('services') or {}
     except (OSError, ValueError):
         return [check('services.running', True, None, f'services.json unreadable in {root}')]
+    receiver = receiver_checks(services.get('receiver'), probe)
+    if not probe.which('launchctl'):  # 0.77.1 (F10b): no launchd here; the deployment's own supervisor runs them
+        ok = heartbeat.get('ok') if heartbeat else None
+        return [check('services.running', True, ok, 'no launchd: the followup service judged by the supervisor '
+                      f"heartbeat ({heartbeat.get('detail') if heartbeat else 'not read'})",
+                      "start the services under the deployment's supervisor (scripts/kage.py run, serve receiver, "
+                      'serve dashboard)')] + receiver
     states = {name: probe.launchd_state(spec.get('label', '')) for name, spec in services.items()}
     down = [name for name, state in states.items() if state != 'running']
     return [check('services.running', True, not down, f'{len(states) - len(down)} / {len(states)} running' +
                   (f'; not running: {", ".join(sorted(down))}' if down else ''),
                   'load the launchd jobs (`services start` for a deployment `kage init` wrote; else the deployment\'s own '
-                  'service tool)')]
+                  'service tool)')] + receiver
+
+
+def receiver_checks(spec: dict[str, Any] | None, probe: Probe) -> list[dict[str, Any]]:
+    """0.77.1 (F10c): the Socket Mode receiver needs the `websockets` package (>= 11) in the interpreter it runs with."""
+    if not spec:
+        return []
+    python = spec.get('python') or sys.executable
+    found = probe.module_version(python, 'websockets')
+    try:
+        ok = found is not None and int(found.split('.')[0]) >= 11
+    except ValueError:
+        ok = False
+    return [check('receiver.websockets', True, ok, f'websockets {found} for {python}' if found else
+                  f'websockets does not import for {python}', f'{python} -m pip install --user "websockets>=11"')]
 
 
 def provider_checks(providers: list[str], probe: Probe) -> list[dict[str, Any]]:
@@ -323,8 +355,10 @@ def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | 
         voice: str | None = None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
     scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
-    checks = (slack_checks(owner, probe, tokens, offline, voice) + state_checks(db_path, db) + runtime_checks(db, health, probe)
-              + service_checks(root, probe) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
+    runtime = runtime_checks(db, health, probe)
+    heartbeat = next((c for c in runtime if c['id'] == 'runtime.heartbeat'), None)
+    checks = (slack_checks(owner, probe, tokens, offline, voice) + state_checks(db_path, db) + runtime
+              + service_checks(root, probe, heartbeat) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
               + secret_checks(scan) + port_checks(secret_store) + identity_checks(owner, Path(db_path).parent))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
     warnings = [c['id'] for c in checks if not c['required'] and c['ok'] is False]

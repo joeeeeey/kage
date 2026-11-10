@@ -44,6 +44,29 @@ class CliCore:
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
 
+    def doctor_report(self, db_path, offline):
+        """O1a doctor's report; read-only like cache-report: never creates or migrates a database; two auth.test reads
+        at most."""
+        from kage.onboard import doctor
+        db = None
+        if db_path.is_file():
+            db = sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=10)
+            db.row_factory = sqlite3.Row
+        try:
+            try:
+                health = self.rt.health_report(db) if db is not None else None
+            except Exception:  # noqa: BLE001 - the runtime checks are then reported as skipped
+                health = None
+            tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
+            store = getattr(getattr(self.rt.slack, 'TRANSPORT', None), 'secret_store', None)
+            return doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
+                              db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
+                              offline=offline, secret_store=store,
+                              voice=doctor.voice(getattr(self.deployment.owner, 'key', 'owner'), store))
+        finally:
+            if db is not None:
+                db.close()
+
     def onboard_command(self, args, db_path):
         """O3a: `onboard intro add|list`, `onboard extract`, `onboard items`, from the owner's own terminal only. The
         introduction stays in the private directory; the store gets only the runs and their candidates."""
@@ -694,9 +717,12 @@ class CliCore:
         doc.add_argument('--json', action='store_true', help='The report as JSON')
         mode_p = sub.add_parser('mode', help=f'O2: the instance mode (installed / observe / active / paused) and the actions '
                                              f'observe-only mode recorded instead of doing them; changes from {self.name}\'s '
-                                             'own terminal only (observe -> active is the start card\'s button)')
+                                             'own terminal only (observe -> active is the start card\'s button; '
+                                             'installed -> observe once doctor\'s required checks pass)')
         mode_p.add_argument('change', nargs='?', choices=('show', 'observe', 'pause', 'resume'), default='show')
         mode_p.add_argument('--reason', default='')
+        mode_p.add_argument('--offline', action='store_true', help="installed -> observe: the doctor without its two "
+                                                                     "Slack reads (as `services start --offline`)")
         man = sub.add_parser('manifest', help='Onboarding: print the Slack app manifest for this deployment (paste it at '
                                               'api.slack.com/apps) and the steps after it; reads nothing, posts nothing')
         man.add_argument('--as-owner', action='store_true', help='Add the user-token scopes (speak as the owner, read the '
@@ -889,26 +915,8 @@ class CliCore:
             print(manifest.render(args.name or self.assistant, as_owner=args.as_owner))
             return
         if args.command == 'doctor':
-            # O1a, read-only like cache-report: never creates or migrates a database; two auth.test reads at most.
             from kage.onboard import doctor
-            db = None
-            if db_path.is_file():
-                db = sqlite3.connect(db_path.as_uri() + '?mode=ro', uri=True, timeout=10)
-                db.row_factory = sqlite3.Row
-            try:
-                try:
-                    health = self.rt.health_report(db) if db is not None else None
-                except Exception:  # noqa: BLE001 - the runtime checks are then reported as skipped
-                    health = None
-                tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
-                store = getattr(getattr(self.rt.slack, 'TRANSPORT', None), 'secret_store', None)
-                report = doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
-                                    db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
-                                    offline=args.offline, secret_store=store,
-                                    voice=doctor.voice(getattr(self.deployment.owner, 'key', 'owner'), store))
-            finally:
-                if db is not None:
-                    db.close()
+            report = self.doctor_report(db_path, args.offline)
             print(json.dumps(report, ensure_ascii=False, indent=2) if args.json else doctor.text(report))
             sys.exit(0 if report['ok'] else 1)
         if args.command == 'mode':  # O2a
@@ -924,7 +932,15 @@ class CliCore:
                     if args.change == 'resume' and _mode.read(db) != 'paused':
                         print(json.dumps({'error': 'ValueError', 'detail': 'resume_is_only_from_paused'}), file=sys.stderr)
                         sys.exit(1)
-                    _mode.write(db, new, 'owner', args.reason or 'owner terminal')
+                    if new == 'observe' and _mode.read(db) == 'installed':
+                        # 0.77.1 (F10a): out of `installed` without launchd (`services start`): the same gate, the
+                        # doctor's required checks, from the owner's terminal
+                        failed = self.doctor_report(db_path, args.offline)['failed']
+                        if failed:
+                            raise ValueError('doctor_required_checks_fail: ' + ', '.join(failed))
+                        _mode.write(db, new, 'owner_doctor', args.reason or 'the required doctor checks pass')
+                    else:
+                        _mode.write(db, new, 'owner', args.reason or 'owner terminal')
                 print(json.dumps(_mode.overview(db), ensure_ascii=False, indent=2))
             except ValueError as exc:
                 print(json.dumps({'error': 'ValueError', 'detail': str(exc)}), file=sys.stderr)

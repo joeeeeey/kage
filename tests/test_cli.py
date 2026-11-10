@@ -56,6 +56,34 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(c.rt.handback.call_args.args[2], 'task-a')
 
+    def test_mode_observe_leaves_installed_only_when_the_doctor_passes(self):
+        # 0.77.1 (F10a): the way out of `installed` without launchd (`services start`)
+        import os
+        import sqlite3
+        import tempfile
+        from kage.core import mode
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {}, clear=False) as env:
+            for name in mode.AGENT_ENV:
+                env.pop(name, None)
+            path = Path(tmp) / 'state.sqlite'
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                mode.write(db, 'installed', 'init', 'test')
+            c = core()
+            c.doctor_report = mock.Mock(return_value={'failed': ['services.running']})
+            self.assertEqual(run(c, ['--db', str(path), 'mode', 'observe', '--offline'])[0], 1)
+            self.assertEqual(c.doctor_report.call_args.args[1], True)
+            c.doctor_report = mock.Mock(return_value={'failed': []})
+            code, out = run(c, ['--db', str(path), 'mode', 'observe'])
+            self.assertEqual(code, 0)
+            with contextlib.closing(sqlite3.connect(path)) as db:
+                self.assertEqual(mode.read(db), 'observe')
+                self.assertEqual(db.execute('SELECT actor FROM mode_log ORDER BY at DESC LIMIT 1').fetchone()[0],
+                                 'owner_doctor')
+            with contextlib.closing(sqlite3.connect(':memory:')) as db:
+                mode.write(db, 'installed', 'init')
+                with self.assertRaises(ValueError):  # the owner without the doctor's gate still cannot
+                    mode.write(db, 'observe', 'owner')
+
 
 if __name__ == '__main__':
     unittest.main()

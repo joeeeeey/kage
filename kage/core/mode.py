@@ -36,7 +36,7 @@ MODES = ('installed', 'observe', 'active', 'paused')
 KEY = 'instance.mode'
 ABSENT = 'active'  # a store without the row predates O2
 # (old, new): who may make the change
-TRANSITIONS = {('installed', 'observe'): ('services',), ('observe', 'active'): ('owner_button',),
+TRANSITIONS = {('installed', 'observe'): ('services', 'owner_doctor'), ('observe', 'active'): ('owner_button',),
                ('active', 'paused'): ('owner', 'breaker'), ('paused', 'active'): ('owner',),
                ('active', 'observe'): ('owner',), ('paused', 'observe'): ('owner',), ('observe', 'paused'): ('owner',)}
 SCHEMA = '''
@@ -83,7 +83,8 @@ def read(db, default=ABSENT):
 
 
 def write(db, new, actor, reason='', now=None, expect=None):
-    """Move the mode to `new` as `actor` (a kind from TRANSITIONS: services, owner_button, owner, breaker, init).
+    """Move the mode to `new` as `actor` (a kind from TRANSITIONS: services, owner_doctor, owner_button, owner, breaker,
+    init; `owner_doctor` = the owner's terminal after the doctor's required checks passed, 0.77.1).
     `init` writes the first row of a new deployment. Returns {'old', 'new'}; ValueError when not allowed."""
     if new not in MODES:
         raise ValueError(f'unknown_mode:{new}')

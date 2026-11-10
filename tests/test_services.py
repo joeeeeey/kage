@@ -144,6 +144,10 @@ class ServicesTest(Base):
 
     def program(self, *args):
         env = {k: v for k, v in os.environ.items() if not k.startswith('SLACK_') and k != 'PYTHONPATH'}
+        site = self.tmp / 'site/websockets'  # 0.77.1: the receiver's package for doctor (CI has none)
+        site.mkdir(parents=True, exist_ok=True)
+        (site / '__init__.py').write_text("__version__ = '13.1'\n")
+        env['PYTHONPATH'] = str(site.parent)
         return subprocess.run([sys.executable, str(self.target / 'scripts/kage.py'), *args], capture_output=True,
                               text=True, env=env, timeout=180, stdin=subprocess.DEVNULL, cwd=str(self.tmp))
 

@@ -18,9 +18,14 @@ OWNER = types.SimpleNamespace(slack_workspace='T0000TEST01', slack_user='U0000TE
 
 
 class Probe(D.Probe):
-    def __init__(self, auth=None, states=None, versions=None, tz='Europe/Lisbon', now=1000.0):
-        super().__init__(environ={}, clock=lambda: now)
+    def __init__(self, auth=None, states=None, versions=None, tz='Europe/Lisbon', now=1000.0, launchd=True, modules=None):
+        super().__init__(environ={}, clock=lambda: now,
+                         which=lambda binary: '/bin/launchctl' if binary == 'launchctl' and launchd else None)
         self.auth, self.states, self.versions, self.tz, self.calls = auth or {}, states or {}, versions or {}, tz, []
+        self.modules = {'websockets': '13.1'} if modules is None else modules
+
+    def module_version(self, python, module):
+        return self.modules.get(module)
 
     def auth_test(self, token):
         self.calls.append(token)
@@ -169,6 +174,37 @@ class DoctorTest(unittest.TestCase):
                                                     'state.private'])
         self.assertIn('not running: receiver', self.by_id(report)['services.running']['detail'])
         self.assertIn('chmod 700', self.by_id(report)['state.private']['fix'])
+
+    def test_without_launchd_the_supervisor_heartbeat_judges_the_services(self):
+        # 0.77.1 (F10b): Linux has no launchd; the deployment's own supervisor runs the services
+        report = self.run_doctor(self.healthy_probe(launchd=False, states={}))
+        self.assertTrue(report['ok'], report['failed'])
+        self.assertIn('no launchd', self.by_id(report)['services.running']['detail'])
+        self.db.execute('UPDATE runtime SET heartbeat=1.0')
+        report = self.run_doctor(self.healthy_probe(launchd=False, states={}))
+        self.assertEqual(sorted(report['failed']), ['runtime.heartbeat', 'services.running'])
+        self.assertIn('supervisor', self.by_id(report)['services.running']['fix'])
+
+    def test_the_receiver_needs_websockets(self):
+        # 0.77.1 (F10c): the Socket Mode receiver imports websockets (>= 11) in the services' interpreter
+        self.assertIn('13.1', self.by_id(self.run_doctor(self.healthy_probe()))['receiver.websockets']['detail'])
+        for modules in ({}, {'websockets': '10.4'}):
+            report = self.run_doctor(self.healthy_probe(modules=modules))
+            self.assertEqual(report['failed'], ['receiver.websockets'], modules)
+            self.assertIn('pip install --user', self.by_id(report)['receiver.websockets']['fix'])
+        (Path(self.tmp.name) / 'services.json').write_text(json.dumps({'services': {'followup': {'label': 'test.followup'}}}))
+        self.assertNotIn('receiver.websockets', self.by_id(self.run_doctor(self.healthy_probe(modules={}))))
+
+    def test_the_live_probe_reads_a_module_version_through_the_interpreter(self):
+        calls = []
+
+        def runner(argv, **kw):
+            calls.append(argv)
+            return types.SimpleNamespace(returncode=0 if 'websockets' in argv[-1] else 1, stdout='13.1\n')
+        probe = D.Probe(environ={'HOME': '/nonexistent'}, runner=runner)
+        self.assertEqual(probe.module_version('/usr/bin/python3', 'websockets'), '13.1')
+        self.assertEqual(calls[0][:2], ['/usr/bin/python3', '-c'])
+        self.assertIsNone(probe.module_version('/usr/bin/python3', 'nothere'))
 
     def test_a_token_in_the_deployment_fails_without_printing_it(self):
         secret = 'xoxb-' + '1234567890-abcdefghij'

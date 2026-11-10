@@ -571,10 +571,12 @@ class AcceptanceTest(Base):
             from tests.test_services import FAKE_LAUNCHCTL  # O1c5e: never the machine's launchd
             (bin_dir / 'launchctl').write_text(FAKE_LAUNCHCTL)
             os.chmod(bin_dir / 'launchctl', 0o755)
+            (self.tmp / 'site/websockets').mkdir(parents=True)  # 0.77.1: the receiver's package, for doctor (CI has none)
+            (self.tmp / 'site/websockets/__init__.py').write_text("__version__ = '13.1'\n")
         env.update({'FAKE_LAUNCHCTL_STATE': str(self.tmp / 'launchd.json'), 'FAKE_LAUNCHCTL_LOG': str(self.tmp / 'launchd.log')})
         env.update({'HOME': str(self.home), 'KAGE_NO_REAL_SLACK': '1', 'KAGE_NO_AUTOSTART': '1', 'KAGE_SECRETS_BACKEND': 'file',
                     'KAGE_VERSIONS_DIR': str(self.release.parent), 'PYTHONDONTWRITEBYTECODE': '1',
-                    'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}',
+                    'PATH': f'{bin_dir}{os.pathsep}{os.environ.get("PATH", "")}', 'PYTHONPATH': str(self.tmp / 'site'),
                     **({'CLAUDE_CODE_SESSION_ID': session} if session else {})})
         return subprocess.run([sys.executable, str(self.target / 'scripts/kage.py'), *args], capture_output=True,
                               text=True, env=env, timeout=120, stdin=subprocess.DEVNULL, cwd=str(self.tmp))
@@ -601,6 +603,10 @@ class AcceptanceTest(Base):
         self.assertIn('ok    secrets.port: file store: slack-bot-token present, slack-app-token present', text)
         self.assertIn('doctor: failed: services.running', text, text[-3000:])  # O1c5e: init loads no service
         self.assertIn('`services start`', text)
+        self.assertIn('ok    receiver.websockets: websockets 13.1', text)
+        refused = self.program('mode', 'observe', '--offline')  # 0.77.1: the way out without launchd, same gate
+        self.assertEqual((refused.returncode, json.loads(refused.stderr)['detail']),
+                         (1, 'doctor_required_checks_fail: services.running'))
         started = self.program('services', 'start', '--offline')
         self.assertEqual(started.returncode, 0, started.stderr[-2000:])
         self.assertEqual(set(json.loads(started.stdout)['jobs'].values()), {'running'})
