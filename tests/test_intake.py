@@ -199,6 +199,41 @@ class EngineTest(unittest.TestCase):
         del rt.OWNER, message['thread_ts']
         message['user'] = 'U0000OTHER1'
         self.assertEqual(push()['reason'], 'author_mismatch')
+        message['user'] = 'U0000ADA001'
+
+    def test_an_accepted_push_gets_the_bots_receipt_at_once(self):
+        # 0.78.2 (F12): 👀 right after intake accepts the message, before the burst settles; config-gated
+        self.db.execute('CREATE TABLE IF NOT EXISTS runtime_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        self.db.execute('CREATE TABLE IF NOT EXISTS watches (id TEXT PRIMARY KEY, data TEXT)')
+        self.db.execute("INSERT INTO runtime_meta VALUES (?, ?)", (I.STATE_KEY, json.dumps({'baseline': 1.0})))
+        cfg = {'intake': {'enabled': True, 'identity': 'bot', 'oncall_channels': [], 'burst_seconds': 30}}
+        message = {'ts': '1700000001.000200', 'user': 'U0000ADA001', 'text': f'<@{BOT}> help'}
+        calls = []
+
+        def api_call(method, token, params=None, json_body=None):
+            calls.append((method, token, json_body))
+            if method == 'reactions.add' and len(calls) > 3:
+                raise RuntimeError('Slack API error: already_reacted')
+            return {'messages': [message]}
+        rt = types.SimpleNamespace(worker_config=types.SimpleNamespace(load=lambda: (cfg, None)),
+                                   api_identity=lambda bot=False: 'bot-token' if bot else 'user-token',
+                                   slack=types.SimpleNamespace(api_call=api_call))
+
+        def accept(engine, ms, ch, conv, source, ctx):
+            self.db.execute("INSERT OR REPLACE INTO intake_seen (channel,ts,source,conv_type,user,sender_kind,digest,"
+                            "reason,burst_id,seen_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                            (ch, ms[0]['ts'], source, conv, ms[0]['user'], 'human', 'd', 'accept', 'in00000000000002', 1.0))
+        push = lambda: self.core.intake_push(rt, self.db, ':memory:', channel='C0000OPS001',  # noqa: E731
+                                             ts='1700000001.000200', user='U0000ADA001')
+        with unittest.mock.patch.object(I.Intake, 'ingest', accept):
+            out = push()
+        self.assertEqual((out['outcome'], out['receipt']), ('accepted', 'added'))
+        self.assertEqual(calls[-1], ('reactions.add', 'bot-token',
+                                     {'channel': 'C0000OPS001', 'timestamp': '1700000001.000200', 'name': 'eyes'}))
+        with unittest.mock.patch.object(I.Intake, 'ingest', accept):
+            self.assertEqual(push()['receipt'], 'already')  # idempotent
+            cfg['intake']['ack_on_receipt'] = False
+            self.assertNotIn('receipt', push())
         message['ts'] = '1.0'
         self.assertEqual(push()['reason'], 'message_not_found')
 

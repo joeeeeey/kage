@@ -53,6 +53,7 @@
     "inbox_task": "owner-inbox",
     "identity": "user",
     "owner_like": "owner",
+    "ack_on_receipt": true,
     "oncall_task": "owner-oncall",
     "inbox_provider": "claude",
     "inbox_model": "claude-sonnet-5-5",

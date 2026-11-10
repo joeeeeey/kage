@@ -29,6 +29,7 @@ from kage import locale
 from kage.adapters import trackers as _trackers
 from kage.core import control as _control
 
+ACK_EMOJI = 'eyes'  # 0.78.2: the bot's immediate receipt on an accepted message (kage.core.loop SEEN_EMOJI)
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
 
@@ -3122,8 +3123,23 @@ class IntakeCore:
         row = db.execute('SELECT reason, burst_id FROM intake_seen WHERE channel=? AND ts=?', (channel, ts)).fetchone()
         if row is None:
             return {'ok': True, 'outcome': 'skipped', 'reason': 'before_intake_baseline'}
-        return {'ok': True, 'outcome': 'accepted' if row['burst_id'] else 'filtered', 'reason': row['reason'],
-                'burst_id': row['burst_id']}
+        out = {'ok': True, 'outcome': 'accepted' if row['burst_id'] else 'filtered', 'reason': row['reason'],
+               'burst_id': row['burst_id']}
+        if row['burst_id'] and cfg.get('ack_on_receipt', True):
+            out['receipt'] = self.ack_receipt(rt, token, channel, ts)
+        return out
+
+    @staticmethod
+    def ack_receipt(rt, token, channel, ts):
+        """0.78.2 (F12): a message the bot accepted gets 👀 at once, as the bot (the run's own receipts and ✅ follow
+        later). Best effort and idempotent: never raises, `already_reacted` counts as done."""
+        try:
+            rt.slack.api_call('reactions.add', token, json_body={'channel': channel, 'timestamp': ts, 'name': ACK_EMOJI})
+            return 'added'
+        except Exception as exc:  # noqa: BLE001 - a receipt never blocks intake
+            if 'already_reacted' in str(exc):
+                return 'already'
+            return 'failed:' + (rt.safe_error(exc) if hasattr(rt, 'safe_error') else type(exc).__name__)
 
     def smoke_intake(self, rt, db, db_path, scenario='request', wait=True, timeout=900.0, poll=3.0, now=None):
         """Post-install E2E with a SYNTHETIC burst (no Slack read): through the real filter -> burst -> router ->

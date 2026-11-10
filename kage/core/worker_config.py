@@ -599,7 +599,7 @@ class WorkerConfig:
                 _fail(f'intake_{key}', 'missing')
         for key, value in spec.items():
             field = f'intake_{key}'
-            if key in ('enabled', 'mention_search', 'dm_request_routing'):
+            if key in ('enabled', 'mention_search', 'dm_request_routing', 'ack_on_receipt'):
                 _bool(value, field)
             elif key == 'dm_conversation_minutes':  # P39: 0 = no conversation window
                 _int(value, field, 0, 240)
