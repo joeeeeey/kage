@@ -66,6 +66,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from kage import locale
 from kage.core import control as _control
+from kage.core import system_status as _system
 from kage.core import mode as _mode
 from kage.onboard import apply as _apply
 from kage.onboard import extract as _extract
@@ -170,6 +171,7 @@ CONTROL_BODY_LIMIT = 8192  # Phase 2 C1: one control POST (a message of at most 
 CORRECT_BODY_LIMIT = 2048  # O2f: one correction (a note of at most 300 characters)
 DECIDE_BODY_LIMIT = 8192   # O3b: one decision on a candidate (an edited value of a few short fields)
 CONTROL_EDITABLE = ('enabled', 'provider', 'model', 'effort')  # what the /control page may set (control.<key>)
+ACCESS_EMAIL_RE = re.compile(r'[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}')  # 0.78.6: the settings audit actor
 
 
 DESIGN_MAX_BYTES = 16 * 1024 * 1024
@@ -422,6 +424,15 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get('Origin')
         return (self.loopback_host() and origin == f"http://{self.headers.get('Host')}") or \
             origin in getattr(self.server, 'public_origins', ())
+
+    def actor(self):
+        """0.78.6: who a settings write is recorded as — `dashboard`, or `dashboard:<email>` when the request came from
+        a public origin and Cloudflare Access names the signed-in person (Cf-Access-Authenticated-User-Email). For the
+        change log only, never an authorization (the console itself has no per-user roles)."""
+        if self.headers.get('Origin') not in getattr(self.server, 'public_origins', ()):
+            return 'dashboard'
+        email = self.headers.get('Cf-Access-Authenticated-User-Email', '').strip().lower()
+        return f'dashboard:{email}' if ACCESS_EMAIL_RE.fullmatch(email) else 'dashboard'
 
     def respond(self, status, payload, content_type='application/json; charset=utf-8', csp=PAGE_CSP):
         data = json.dumps(payload, ensure_ascii=False).encode() if not isinstance(payload, bytes) else payload
@@ -715,7 +726,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/control/retry':
                 result = core.control_retry(self.server.db_path, payload)
             else:
-                result = core.control_save(payload)
+                result = core.control_save(payload, who=self.actor())
                 self.server.check_page_token(token, consume=True)
                 result['page_token'] = self.server.issue_page_token()
         except ValueError as exc:
@@ -744,7 +755,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeError):
             return self.respond(400, {'error': 'invalid_request_body'})
         try:
-            result = self.server.core.save_settings(payload)
+            result = self.server.core.save_settings(payload, who=self.actor())
         except ValueError as exc:
             code = str(exc) if re.fullmatch(r'[a-z0-9_]{1,120}', str(exc)) else 'invalid_settings'
             return self.respond(409 if code == 'worker_config_changed_since_loaded_reload' else 400, {'error': code})
@@ -797,6 +808,8 @@ class DashboardCore:
         self.process_alive = process_alive
         self.key, self.name = owner_key, owner_name
         self._cache_memo = {}
+        self._system_lock = threading.Lock()
+        self._system_memo = (0.0, None, None)  # 0.78.6: (monotonic time, overview, CPU sample) — one probe per 10 s
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1643,6 +1656,7 @@ class DashboardCore:
         except (ValueError, OSError) as exc:
             config = self.worker_config.DEFAULTS
             result['config_error'] = str(exc)[:200]
+        result['system'] = self.system_overview(path, config)  # 0.78.6 (F18): before any table check (live numbers)
         result['config'] = {key: config['dispatch'][key] for key in (
             'provider_health', 'long_lived_fresh', 'long_lived_tasks', 'max_session_context_mb', 'stranded_revive',
             'stuck_claim_minutes', 'provider_wait_hours', 'probe_enabled', 'probe_min_seconds', 'probe_max_seconds')}
@@ -1664,6 +1678,45 @@ class DashboardCore:
             result['stuck_claims'] = self.stuck_claims.overview(db, self.claude_delivery, config['dispatch']['stuck_claim_minutes'],
                                                            now)
         return result
+
+    def system_overview(self, path, config=None):
+        """0.78.6 (F18): the host's disk / memory / CPU / processes (kage.core.system_status.overview), the stored
+        directory sizes and alert levels. Probed at most once per 10 s for all pages together; read-only."""
+        with self._system_lock:
+            at, memo, sample = self._system_memo
+            if memo is not None and time.monotonic() - at < 10:
+                return memo
+            if config is None:
+                config = self._control_config()[0] or {}
+            try:
+                db = read_db(path) if Path(path).is_file() else None
+            except sqlite3.Error:
+                db = None
+            try:
+                pid = None
+                if db is not None and 'runtime' in _tables(db):
+                    row = db.execute('SELECT pid FROM runtime WHERE id=1').fetchone()
+                    pid = row[0] if row else None
+                out = _system.overview(db, config, {'home': Path.home(), 'state': Path(path).expanduser().parent},
+                                       supervisor_pid=pid, previous_cpu=sample)
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                return {'error': type(exc).__name__}
+            finally:
+                if db is not None:
+                    db.close()
+            sample = out.pop('cpu_sample', None)
+            self._system_memo = (time.monotonic(), out, sample)
+            return out
+
+    def system_summary(self, path, config=None):
+        """The 总控 page's strip: the worst level, the fullest disk, memory, CPU and the run counts."""
+        ov = self.system_overview(path, config)
+        if 'error' in ov:
+            return ov
+        disks = sorted(ov.get('disks') or [], key=lambda d: -(d.get('pct') or 0))
+        return {'alert': ov['alert'], 'levels': ov['levels'], 'thresholds': ov['thresholds'], 'disk': disks[0] if disks else None,
+                'memory': ov['memory'], 'cpu': {k: ov['cpu'].get(k) for k in ('pct', 'cores_used', 'limit_cores', 'loadavg')},
+                'processes': ov['processes'], 'enabled': ov['enabled']}
 
     def gap_detail(self, path, gap_id, now=None):
         """/gaps/<id>: one blocker with its `tried` / `unblock` text (agent-written, secret-checked), card refs and
@@ -1724,10 +1777,11 @@ class DashboardCore:
         result.update(ok=True, config=config, source=source, digest=self.worker_config.digest(config))
         return result
 
-    def save_settings(self, payload, now=None):
-        """Validate + write through worker_config.set_many (actor "dashboard"); raises ValueError codes."""
+    def save_settings(self, payload, now=None, who='dashboard'):
+        """Validate + write through worker_config.set_many (actor "dashboard", 0.78.6: or "dashboard:<email>" through
+        Cloudflare Access); raises ValueError codes."""
         changes, digest, dry_run = _settings_changes(payload)
-        return self.worker_config.set_many(changes, 'dashboard', now=now, dry_run=dry_run, expect_digest=digest)
+        return self.worker_config.set_many(changes, who, now=now, dry_run=dry_run, expect_digest=digest)
 
     # ---- Phase 2 C1: the control entry (kage.core.control) -------------------------------------------------------------
     def _control(self):
@@ -1750,7 +1804,8 @@ class DashboardCore:
             if db is not None:
                 db.close()
         out.update(config_error=error, digest=self.worker_config.digest(config) if config else None,
-                   enums={'providers': list(self.worker_config.PROVIDERS), 'efforts': list(self.worker_config.EFFORTS)})
+                   enums={'providers': list(self.worker_config.PROVIDERS), 'efforts': list(self.worker_config.EFFORTS)},
+                   system=self.system_summary(path, config))
         slack = (out.get('conversation') or {}).get('slack')
         if slack:  # C2: where the conversation lives (its Slack text is never stored here)
             slack['link'] = slack_link(slack['channel'], slack['root'])
@@ -1785,7 +1840,7 @@ class DashboardCore:
         with contextlib.closing(self._control_db(path)) as db:
             return {'ok': True, 'message': self._control().retry(db, config, payload['message'], now=now)}
 
-    def control_save(self, payload, now=None):
+    def control_save(self, payload, now=None, who='dashboard'):
         """POST /api/control/settings {changes: {enabled?, provider?, model?, effort?}, digest}: control.* through
         worker_config.set_many (actor "dashboard"), like the settings page."""
         changes, digest = payload.get('changes'), payload.get('digest')
@@ -1793,7 +1848,7 @@ class DashboardCore:
                 set(changes) - set(CONTROL_EDITABLE) or not isinstance(digest, str) or \
                 not re.fullmatch(r'[0-9a-f]{16}', digest):
             raise ValueError('invalid_request_body')
-        result = self.worker_config.set_many([(f'control.{k}', v) for k, v in sorted(changes.items())], 'dashboard',
+        result = self.worker_config.set_many([(f'control.{k}', v) for k, v in sorted(changes.items())], who,
                                              now=now, expect_digest=digest)
         config, _ = self._control_config()
         return {**result, 'digest': self.worker_config.digest(config) if config else None}

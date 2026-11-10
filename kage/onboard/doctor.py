@@ -23,6 +23,8 @@ import time
 from typing import Any, Callable
 import urllib.request
 
+from kage.core import system_status
+from kage.core.worker_config import SYSTEM_DEFAULTS
 from kage.onboard import identity
 from kage.onboard.tokens import TokenRefused
 from kage.ports.secrets import SLACK_APP, SLACK_BOT, SLACK_USER, SecretError
@@ -77,6 +79,10 @@ class Probe:
         if self.which('lsof'):
             return 'lsof'
         return '/proc' if os.path.isdir('/proc/self/fd') else None
+
+    def disks(self, paths: dict[str, Path]) -> list[dict[str, Any]]:
+        """0.78.6: the filesystems holding `paths` (kage.core.system_status.disks)."""
+        return system_status.disks(paths)
 
     def module_version(self, python: str, module: str) -> str | None:
         """`module.__version__` as the interpreter `python` imports it (the services' own: user site included), or
@@ -308,6 +314,21 @@ def provider_checks(providers: list[str], probe: Probe) -> list[dict[str, Any]]:
     return out
 
 
+def system_checks(db_path: Path, probe: Probe, spec: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """0.78.6 (F18): the fullest filesystem holding the home directory or the state database against
+    `system.disk_warn_pct`. Not required: a full disk is reported, it does not fail the installation."""
+    spec = {**SYSTEM_DEFAULTS, **(spec or {})}
+    home = Path(probe.environ.get('HOME') or Path.home())
+    found = [d for d in probe.disks({'home': home, 'state': Path(db_path).parent}) if d.get('pct') is not None]
+    if not found:
+        return [check('system.disk', False, None, 'no filesystem readable')]
+    full = max(found, key=lambda d: d['pct'])
+    return [check('system.disk', False, full['pct'] < spec['disk_warn_pct'],
+                  f"{full['mount']} {full['pct']:g}% used, {system_status.human_bytes(full['free'])} free "
+                  f"(warning at {spec['disk_warn_pct']}%)",
+                  'free disk space: the console health page lists the largest directories')]
+
+
 def clock_checks(owner, probe: Probe) -> list[dict[str, Any]]:
     system = probe.system_timezone()
     same = system == owner.timezone if system and owner.timezone else None
@@ -364,13 +385,14 @@ def port_checks(store) -> list[dict[str, Any]]:
 
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
         profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None,
-        voice: str | None = None) -> dict[str, Any]:
+        voice: str | None = None, system: dict[str, Any] | None = None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
     scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
     runtime = runtime_checks(db, health, probe)
     heartbeat = next((c for c in runtime if c['id'] == 'runtime.heartbeat'), None)
     checks = (slack_checks(owner, probe, tokens, offline, voice) + state_checks(db_path, db) + runtime
-              + service_checks(root, probe, heartbeat) + provider_checks(list(providers), probe) + clock_checks(owner, probe)
+              + service_checks(root, probe, heartbeat) + provider_checks(list(providers), probe)
+              + system_checks(db_path, probe, system) + clock_checks(owner, probe)
               + secret_checks(scan) + port_checks(secret_store) + identity_checks(owner, Path(db_path).parent))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
     warnings = [c['id'] for c in checks if not c['required'] and c['ok'] is False]

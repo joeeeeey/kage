@@ -26,6 +26,7 @@ class Probe(D.Probe):
                                                'lsof': '/usr/sbin/lsof' if liveness else None}.get(binary))
         self.auth, self.states, self.versions, self.tz, self.calls = auth or {}, states or {}, versions or {}, tz, []
         self.modules = {'websockets': '13.1'} if modules is None else modules
+        self.disk_pct = 40
 
     def module_version(self, python, module):
         return self.modules.get(module)
@@ -42,6 +43,10 @@ class Probe(D.Probe):
 
     def system_timezone(self):
         return self.tz
+
+    def disks(self, paths):  # 0.78.6: a fixed filesystem, never the machine running the tests
+        return [{'mount': '/home', 'holds': list(paths), 'total': 100, 'used': self.disk_pct, 'free': 100 - self.disk_pct,
+                 'pct': float(self.disk_pct), 'inodes_pct': 1.0}]
 
 
 BOT_OK = ({'ok': True, 'team_id': 'T0000TEST01', 'user_id': 'U0000TEST02', 'bot_id': 'B0000TEST01'},
@@ -83,6 +88,18 @@ class DoctorTest(unittest.TestCase):
 
     def by_id(self, report):
         return {c['id']: c for c in report['checks']}
+
+    def test_a_full_disk_is_a_warning_never_a_failure(self):
+        probe = self.healthy_probe()
+        check = self.by_id(self.run_doctor(probe))['system.disk']
+        self.assertEqual((check['required'], check['ok'], check['detail']),
+                         (False, True, '/home 40% used, 60 B free (warning at 80%)'))
+        probe.disk_pct = 85
+        report = self.run_doctor(probe)
+        self.assertTrue(report['ok'])
+        self.assertIn('system.disk', report['warnings'])
+        self.assertEqual(self.by_id(report)['system.disk']['fix'], 'free disk space: the console health page lists the largest directories')
+        self.assertTrue(self.by_id(self.run_doctor(probe, system={'disk_warn_pct': 90, 'disk_crit_pct': 95}))['system.disk']['ok'])
 
     def test_a_healthy_install_passes_and_reads_slack_twice(self):
         probe = self.healthy_probe()

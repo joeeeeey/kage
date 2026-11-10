@@ -78,10 +78,34 @@ class ServeDashboardTest(Base):
             data = json.loads(body) if isinstance(body, (bytes, str)) else body
             self.assertEqual(status, 200, (path, str(data)[:300]))
             self.assertIsInstance(data, (dict, list), path)
+        # 0.78.6 (F18): the system status on 总控 and the health page (live numbers, no table needed)
+        for path, key in (('/api/control', 'alert'), ('/api/health', 'disks')):
+            status, body = get(server, path)
+            system = (body if isinstance(body, dict) else json.loads(body))['system']
+            self.assertIn(key, system, path)
+        self.assertIn(get(server, '/api/control')[1]['system']['alert'], ('ok', 'warning', 'critical'))
         with self.assertRaises(ValueError):
             server_class(('0.0.0.0', 0), db)
         with sqlite3.connect(db) as conn:  # the console only read the store
             self.assertEqual(conn.execute('SELECT step FROM onboarding_steps').fetchall(), [('init',)])
+
+
+class SettingsActorTest(unittest.TestCase):
+    def actor(self, headers, origins=('https://console.example.com',)):
+        handler = observe.Handler.__new__(observe.Handler)
+        handler.server = mock.Mock(public_origins=origins)
+        handler.headers = headers
+        return handler.actor()
+
+    def test_the_access_user_is_recorded_only_through_a_public_origin(self):
+        # 0.78.6: the change log names who saved a setting through Cloudflare Access (an audit fact, never authority)
+        email = {'Cf-Access-Authenticated-User-Email': 'Ops.Person@Example.com'}
+        self.assertEqual(self.actor({'Origin': 'https://console.example.com', **email}), 'dashboard:ops.person@example.com')
+        self.assertEqual(self.actor({'Origin': 'http://127.0.0.1:8777', **email}), 'dashboard')
+        self.assertEqual(self.actor({'Origin': 'https://console.example.com'}), 'dashboard')
+        self.assertEqual(self.actor({'Origin': 'https://console.example.com',
+                                     'Cf-Access-Authenticated-User-Email': 'x" onload=1'}), 'dashboard')
+        self.assertEqual(self.actor({'Origin': 'https://console.example.com', **email}, origins=()), 'dashboard')
 
 
 class ServeDashboardProgramTest(Base):

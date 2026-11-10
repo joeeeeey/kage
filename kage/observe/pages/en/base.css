@@ -224,6 +224,14 @@ a:hover { color: var(--accent); }
 .site-nav .scope-btn[aria-current="page"]::before, .site-nav .scope-btn[aria-pressed="true"]::before { opacity: 1; }
 .site-nav .scope-btn small { display: none; }
 
+/* 0.78.6 (F18): the health nav item carries the system status level (a dot: amber = warning, red = critical) */
+.site-nav .scope-btn[data-nav="health"] { position: relative; }
+.site-nav .scope-btn[data-alert]::after {
+  content: ""; position: absolute; top: 5px; left: 21px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--warn); box-shadow: 0 0 0 2px #fff;
+}
+.site-nav .scope-btn[data-alert="critical"]::after { background: var(--bad); }
+
 .scope {
   display: inline-flex; gap: 2px; padding: 3px; max-width: 100%; border-radius: var(--r-md); border: 1px solid var(--line-2);
   background: rgba(255, 255, 255, .9); box-shadow: var(--sh-sm);

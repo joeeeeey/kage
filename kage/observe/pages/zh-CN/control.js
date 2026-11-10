@@ -249,6 +249,67 @@
     body.replaceChildren(form);
   }
 
+  // 0.78.6 (F18): the host's disk / memory / CPU (kage.core.system_status, probed by the console at most every 10 s);
+  // a level over a system.* threshold turns the panel and the health nav item amber / red.
+  const SYS_LEVEL = { ok: '正常', warning: '偏高', critical: '告警' };
+  const fmt = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] === undefined || v[k] === null ? '—' : v[k]));
+  function bytes(n) {
+    if (n === null || n === undefined) return '—';
+    const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let i = 0;
+    while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i += 1; }
+    return (i ? n.toFixed(n >= 100 ? 0 : 1) : String(Math.round(n))) + ' ' + u[i];
+  }
+  function navAlert(level) {
+    const nav = document.querySelector('.site-nav [data-nav="health"]');
+    if (!nav) return;
+    if (level === 'warning' || level === 'critical') {
+      nav.dataset.alert = level;
+      nav.setAttribute('aria-label', nav.textContent.trim() + ' · 系统状态：' + SYS_LEVEL[level]);
+    } else {
+      delete nav.dataset.alert;
+      nav.removeAttribute('aria-label');
+    }
+  }
+  function sysRow(name, pct, detail, level) {
+    const bar = h('i', {});
+    bar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+    return h('span', { class: 'ctl-sys-row', 'data-level': level || 'ok' },
+      h('span', { class: 'ctl-sys-name', text: name }),
+      h('b', { class: 'ctl-sys-pct', text: pct === null || pct === undefined ? '—' : Math.round(pct) + '%' }),
+      h('span', { class: 'ctl-sys-bar', 'aria-hidden': 'true' }, bar),
+      h('small', { class: 'ctl-sys-detail', text: detail }));
+  }
+  function renderSystem(sys) {
+    const box = $('ctl-sys');
+    if (!box) return;
+    if (!sys || sys.error) {
+      box.dataset.level = 'unknown';
+      $('ctl-sys-badge').textContent = '—';
+      $('ctl-sys-rows').replaceChildren();
+      $('ctl-sys-foot').textContent = sys && sys.error ? sys.error : '';
+      navAlert(null);
+      return;
+    }
+    const lv = sys.levels || {};
+    const disk = sys.disk || {};
+    const mem = sys.memory || {};
+    const cpu = sys.cpu || {};
+    const pr = sys.processes || {};
+    box.dataset.level = sys.alert || 'ok';
+    $('ctl-sys-badge').textContent = sys.enabled === false ? '检查已关闭' : (SYS_LEVEL[sys.alert] || sys.alert);
+    const memDetail = fmt('{used} / {limit}', { used: bytes(mem.used), limit: bytes(mem.limit) }) + (mem.limit && !mem.limited ? '（无上限）' : '');
+    const cpuDetail = [cpu.cores_used !== null && cpu.cores_used !== undefined ? fmt('{used} / {limit} 核', { used: cpu.cores_used, limit: cpu.limit_cores }) : null,
+      cpu.loadavg ? fmt('负载 {l}', { l: cpu.loadavg[0] }) : null].filter(Boolean).join(' · ');
+    $('ctl-sys-rows').replaceChildren(
+      sysRow('磁盘', disk.pct, fmt('剩 {free} / 共 {total}', { free: bytes(disk.free), total: bytes(disk.total) }), lv.disk),
+      sysRow('内存', mem.pct, memDetail, lv.memory),
+      sysRow('CPU', cpu.pct, cpuDetail || '—', 'ok'));
+    $('ctl-sys-foot').textContent = [pr.agent_runs !== null && pr.agent_runs !== undefined ? fmt('后台运行 {n}', { n: pr.agent_runs }) : null,
+      pr.kage_children !== null && pr.kage_children !== undefined ? fmt('Kage 子进程 {n}', { n: pr.kage_children }) : null].filter(Boolean).join(' · ');
+    navAlert(sys.alert);
+  }
+
   function render(d) {
     state.data = d;
     const banner = $('ctl-banner');
@@ -265,6 +326,7 @@
     }
     renderConversations(d);
     renderSettings(d);
+    renderSystem(d.system);
     const list = $('ctl-messages');
     const msgs = d.messages || [];
     const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;

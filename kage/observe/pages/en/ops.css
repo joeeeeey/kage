@@ -287,3 +287,19 @@ pre.json { margin-top: var(--sp-2); }
   .ops-table.runs.is-stackable > tbody > tr.run-row[data-state="running"] { box-shadow: inset 3px 0 0 var(--accent); padding-left: 12px; }
   .cat-row { grid-template-columns: minmax(0, 1fr) auto 96px auto; gap: 6px; }
 }
+
+/* 0.78.6 (F18): the health page's system card (meters for disk / memory / CPU) */
+.sys-meters { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: var(--sp-3); margin: var(--sp-3) 0; }
+.sys-meter { display: grid; gap: 6px; padding: 12px 14px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface-2); }
+.sys-meter[data-level="warning"] { border-color: rgba(245, 165, 36, .45); background: #fffaf0; }
+.sys-meter[data-level="critical"] { border-color: rgba(242, 84, 91, .5); background: #fff6f6; }
+.sys-meter-head { display: flex; align-items: baseline; gap: 8px; }
+.sys-meter-head span { font: 600 var(--fs-xs) var(--sans); letter-spacing: .04em; color: var(--ink-3); }
+.sys-meter-head b { margin-left: auto; font: 700 20px/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+.sys-meter[data-level="warning"] .sys-meter-head b { color: var(--warn-d); }
+.sys-meter[data-level="critical"] .sys-meter-head b { color: var(--bad-d); }
+.sys-meter-bar { height: 7px; border-radius: var(--r-pill); background: rgba(15, 27, 51, .07); overflow: hidden; }
+.sys-meter-bar > i { display: block; height: 100%; border-radius: inherit; background: var(--ok); }
+.sys-meter[data-level="warning"] .sys-meter-bar > i { background: var(--warn); }
+.sys-meter[data-level="critical"] .sys-meter-bar > i { background: var(--bad); }
+.sys-meter small { font-size: var(--fs-xs); color: var(--ink-3); }

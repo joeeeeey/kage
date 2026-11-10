@@ -83,7 +83,7 @@ RETIRED_KEYS = {'blockers': ('guard_enabled',)}  # the P3.1 run-end guard
 
 # Phase 2 C1: sections the config may carry that are validated when present and never filled in from the defaults
 # (a config without one reads and prints exactly as before); readers merge their own defaults (`control_settings`).
-SPARSE_SECTIONS = ('control',)
+SPARSE_SECTIONS = ('control', 'system')
 
 
 # The control entry (kage.core.control): off unless the config turns it on. `task` None = `<owner key>-control`;
@@ -97,6 +97,33 @@ CONTROL_DEFAULTS = {'enabled': False, 'task': None, 'provider': 'claude', 'model
 CONTROL_RANGES = {'retention_days': (1, 365), 'answer_timeout_minutes': (2, 240), 'messages_per_hour': (1, 600),
                   'relays_per_hour': (1, 200), 'launches_per_day': (0, 100), 'history_turns': (0, 40),
                   'channel_poll_seconds': (15, 3600)}
+
+
+# 0.78.6 (F18): the system status monitor (kage.core.system_status), a sparse section like `control`: disk and memory
+# lines in percent (warn < crit), the check / directory-size cadences, extra directories whose size the console lists.
+SYSTEM_DEFAULTS = {'enabled': True, 'check_minutes': 5, 'consumers_minutes': 60, 'disk_warn_pct': 80, 'disk_crit_pct': 90,
+                   'memory_warn_pct': 85, 'memory_crit_pct': 95, 'watch_paths': []}
+SYSTEM_RANGES = {'check_minutes': (1, 1440), 'consumers_minutes': (5, 1440), 'disk_warn_pct': (1, 99),
+                 'disk_crit_pct': (2, 100), 'memory_warn_pct': (1, 99), 'memory_crit_pct': (2, 100)}
+WATCH_PATH_RE = re.compile(r'(~/|/)[^\x00-\x1f\x7f]{0,299}')
+
+
+def _validate_system(spec):
+    _keys(spec, SYSTEM_DEFAULTS, 'system')
+    for key, value in spec.items():
+        field = f'system_{key}'
+        if key == 'enabled':
+            _bool(value, field)
+        elif key == 'watch_paths':
+            if not isinstance(value, list) or len(value) > 20 or len(set(value)) != len(value) or any(
+                    not isinstance(p, str) or not WATCH_PATH_RE.fullmatch(p) or '..' in p.split('/') for p in value):
+                _fail(field, 'must_list_up_to_20_absolute_or_home_paths')
+        else:
+            _int(value, field, *SYSTEM_RANGES[key])
+    merged = {**SYSTEM_DEFAULTS, **spec}
+    for metric in ('disk', 'memory'):
+        if merged[f'{metric}_warn_pct'] >= merged[f'{metric}_crit_pct']:
+            _fail(f'system_{metric}_warn_pct', f'must_be_below_{metric}_crit_pct')
 
 
 def control_settings(config, owner_key):
@@ -130,7 +157,7 @@ def _validate_control(spec):
 
 
 def _open_sparse(config, key):
-    """Before a `control.*` key is set on a config without that section: an empty section to set it in."""
+    """Before a `control.*` / `system.*` key is set on a config without that section: an empty section to set it in."""
     head = str(key).split('.', 1)[0]
     if head in SPARSE_SECTIONS and head not in config:
         config[head] = {}
@@ -440,6 +467,8 @@ class WorkerConfig:
             self._validate_section(raw['feedback_learning'], 'feedback_learning')
         if 'control' in raw:
             _validate_control(raw['control'])
+        if 'system' in raw:
+            _validate_system(raw['system'])
         providers = raw['providers']
         _keys(providers, PROVIDERS, 'providers')
         for name in PROVIDERS:

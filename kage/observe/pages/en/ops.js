@@ -1549,7 +1549,88 @@
     const cards = h('section', { class: 'ops-card', id: 'health-card-destination' });
     const cache = h('section', { class: 'ops-card', id: 'health-cache' });
     const wait = h('section', { class: 'ops-card', id: 'health-provider-wait' });
-    clear(main).append(head, status, cards, providers, wait, cache, switches, stranded, stuck);
+    const sys = h('section', { class: 'ops-card', id: 'health-system' });  // 0.78.6 (F18)
+    clear(main).append(head, status, sys, cards, providers, wait, cache, switches, stranded, stuck);
+
+    // 0.78.6 (F18): the host's disk / memory / CPU / processes (kage.core.system_status), the stored directory sizes and
+    // the threshold crossings. Sizes and counts only.
+    const SYS_LEVEL = { ok: ['Normal', 'good'], warning: ['High', 'warn'], critical: ['Critical', 'bad'] };
+    const SYS_EVENT = {"warning": "over the warning line", "critical": "over the critical line", "ok": "back to normal", "notice_warning": "notified: high", "notice_critical": "notified: critical", "notice_recovered": "notified: recovered"};
+    const SYS_METRIC = {"disk": "Disk", "memory": "Memory"};
+    const SYS_HOLDS = {"home": "home", "state": "state database"};
+    const sfmt = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] === undefined || v[k] === null ? '—' : v[k]));
+    function bytes(n) {
+      if (n === null || n === undefined) return '—';
+      const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+      let i = 0;
+      while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i += 1; }
+      return (i ? n.toFixed(n >= 100 ? 0 : 1) : String(Math.round(n))) + ' ' + u[i];
+    }
+    const pctText = (p) => (p === null || p === undefined ? '—' : `${Math.round(p)}%`);
+    function meter(name, pct, level, ...lines) {
+      const bar = h('i', {});
+      bar.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+      return h('div', { class: 'sys-meter', 'data-level': level || 'ok' },
+        h('div', { class: 'sys-meter-head' }, h('span', {}, name), h('b', {}, pctText(pct))),
+        h('div', { class: 'sys-meter-bar', 'aria-hidden': 'true' }, bar),
+        lines.filter(Boolean).map((t) => h('small', {}, t)));
+    }
+    function navAlert(level) {
+      const nav = document.querySelector('.site-nav [data-nav="health"]');
+      if (!nav) return;
+      if (level === 'warning' || level === 'critical') nav.dataset.alert = level; else delete nav.dataset.alert;
+    }
+    function renderSystem(d) {
+      const s = d.system;
+      if (!s || s.error) { fill(sys, h('h3', {}, 'System'), h('p', { class: 'note' }, s && s.error ? s.error : '—')); navAlert(null); return; }
+      const lv = s.levels || {};
+      const th = s.thresholds || {};
+      const disks = s.disks || [];
+      const full = disks.slice().sort((a, b) => (b.pct || 0) - (a.pct || 0))[0] || {};
+      const mem = s.memory || {};
+      const cpu = s.cpu || {};
+      const pr = s.processes || {};
+      const [label, tone] = SYS_LEVEL[s.alert] || [s.alert, null];
+      const errs = Object.entries(s.stored || {}).filter(([, a]) => a.notice_error).map(([m, a]) => `${SYS_METRIC[m] || m}: ${sfmt('The notice was not sent (retried next pass): {e}', { e: a.notice_error })}`);
+      fill(sys, h('h3', {}, 'System ', pill(label, tone)),
+        h('p', { class: 'note' }, sfmt("Disk, memory and CPU of this machine (in a container: the cgroup usage and limits). When disk or memory crosses a system.* warning / critical line, {{owner_name}} gets one notice (one per crossing, and one when it is back 3 points under the warning line). Directory sizes are counted every {m} minutes.", { m: s.consumers_minutes || 60 })),
+        s.enabled === false ? h('div', { class: 'warn-box', role: 'status' }, 'Checks off (system.enabled=false): numbers only, no notices') : null,
+        errs.length ? h('div', { class: 'warn-box', role: 'status' }, errs.map((t) => h('div', {}, t))) : null,
+        h('div', { class: 'sys-meters' },
+          meter('Disk', full.pct, lv.disk, full.mount ? `${full.mount} · ${sfmt('{free} free of {total}', { free: bytes(full.free), total: bytes(full.total) })}` : null,
+            full.inodes_pct !== null && full.inodes_pct !== undefined ? sfmt('inodes {p}%', { p: Math.round(full.inodes_pct) }) : null),
+          meter('Memory', mem.pct, lv.memory, sfmt('{used} of {limit}', { used: bytes(mem.used), limit: bytes(mem.limit) }) + (mem.limit && !mem.limited ? ' (no limit: the whole machine)' : ''),
+            mem.oom_kills ? sfmt('{n} OOM kills', { n: mem.oom_kills }) : null, mem.source ? sfmt('source: {s}', { s: mem.source.replace('cgroup', 'cgroup v') }) : null),
+          meter('CPU', cpu.pct, 'ok', cpu.cores_used !== null && cpu.cores_used !== undefined ? sfmt('{used} of {limit} cores', { used: cpu.cores_used, limit: cpu.limit_cores }) : sfmt('{used} of {limit} cores', { used: '—', limit: cpu.limit_cores }) + ' (usage appears after the second read)',
+            cpu.loadavg ? sfmt('load {a} / {b} / {c}', { a: cpu.loadavg[0], b: cpu.loadavg[1], c: cpu.loadavg[2] }) : null)),
+        disks.length > 1 ? h('table', { class: 'ops-table', id: 'health-system-disks' },
+          h('thead', {}, h('tr', {}, ['Filesystem', 'Holds', 'Used', 'Free', 'Share', 'Inodes'].map((t) => h('th', { scope: 'col' }, t)))),
+          h('tbody', {}, disks.map((x) => h('tr', {}, h('td', { class: 'mono' }, x.mount), h('td', {}, (x.holds || []).map((k) => SYS_HOLDS[k] || k).join(' · ')),
+            h('td', { class: 'num' }, bytes(x.used)), h('td', { class: 'num' }, bytes(x.free)), h('td', { class: 'num' }, pctText(x.pct)),
+            h('td', { class: 'num' }, pctText(x.inodes_pct)))))) : null,
+        h('h3', {}, 'Largest directories ', s.consumers_at ? h('span', { class: 'count' }, sfmt('counted {t}', { t: when(s.consumers_at) })) : null),
+        (s.consumers || []).length ? h('table', { class: 'ops-table', id: 'health-system-dirs' },
+          h('thead', {}, h('tr', {}, ['Directory', 'Size', 'Files'].map((t) => h('th', { scope: 'col' }, t)))),
+          h('tbody', {}, s.consumers.map((c) => h('tr', {}, h('td', { class: 'mono' }, c.path),
+            h('td', { class: 'num' }, bytes(c.bytes) + (c.partial ? ' (time ran out: at least this much)' : '')), h('td', { class: 'num' }, Number(c.files || 0).toLocaleString('en-US')))))) :
+          h('p', { class: 'note' }, 'Not counted yet: shown after the first pass once the supervisor checks.'),
+        h('dl', { class: 'kv' },
+          h('dt', {}, 'Processes'), h('dd', {}, [pr.total !== null && pr.total !== undefined ? pill(sfmt('{n} processes', { n: pr.total }), null) : null,
+            pr.kage_children !== null && pr.kage_children !== undefined ? pill(sfmt('{n} Kage child processes', { n: pr.kage_children }), null) : null,
+            pr.agent_runs !== null && pr.agent_runs !== undefined ? pill(sfmt('{n} background runs', { n: pr.agent_runs }), null) : null,
+            pr.pids_max ? pill(sfmt('pids {a} of {b}', { a: pr.pids_current, b: pr.pids_max }), null) : null].filter(Boolean).map((x, i) => (i ? [' ', x] : x))),
+          h('dt', {}, 'Thresholds'), h('dd', {}, pill(sfmt('disk warning {w}% · critical {c}%', { w: th.disk_warn_pct, c: th.disk_crit_pct }), null), ' ',
+            pill(sfmt('memory warning {w}% · critical {c}%', { w: th.memory_warn_pct, c: th.memory_crit_pct }), null), ' ', pill(sfmt('checked every {m} minutes', { m: s.check_minutes }), null)),
+          h('dt', {}, 'Commands'), h('dd', { class: 'mono' }, 'config set system.disk_warn_pct 85 · config set system.watch_paths \'["~/src"]\' · config set system.enabled false')),
+        h('h3', {}, 'Recent crossings / recoveries ', h('span', { class: 'count' }, (s.events || []).length)),
+        (s.events || []).length ? h('table', { class: 'ops-table', id: 'health-system-events' },
+          h('thead', {}, h('tr', {}, ['Time', 'Item', 'Change', 'Value'].map((t) => h('th', { scope: 'col' }, t)))),
+          h('tbody', {}, s.events.map((e) => h('tr', {}, h('td', { class: 'num' }, when(e.at)), h('td', {}, SYS_METRIC[e.metric] || e.metric),
+            h('td', {}, pill(SYS_EVENT[e.kind] || e.kind, /critical/.test(e.kind) ? 'bad' : /warning/.test(e.kind) ? 'warn' : 'good')),
+            h('td', { class: 'num' }, e.detail && e.detail.value !== undefined ? pctText(e.detail.value) : '—'))))) :
+          h('p', { class: 'note' }, 'No crossings yet.'));
+      navAlert(s.alert);
+    }
 
     function renderStatus(d) {
       const cfg = d.config || {};
@@ -1738,7 +1819,7 @@
     async function load() {
       let data;
       try { data = await api('/api/health'); online(true); } catch (e) { online(false); return; }
-      renderStatus(data); renderCards(data); renderProviders(data); renderWait(data); renderSwitches(data); renderStranded(data); renderStuck(data);
+      renderStatus(data); renderSystem(data); renderCards(data); renderProviders(data); renderWait(data); renderSwitches(data); renderStranded(data); renderStuck(data);
       if (Date.now() - cacheAt >= 60000) {
         cacheAt = Date.now();
         try { renderCache(await api('/api/cache')); } catch (e) { cacheAt = 0; }

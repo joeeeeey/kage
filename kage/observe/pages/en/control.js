@@ -249,6 +249,67 @@
     body.replaceChildren(form);
   }
 
+  // 0.78.6 (F18): the host's disk / memory / CPU (kage.core.system_status, probed by the console at most every 10 s);
+  // a level over a system.* threshold turns the panel and the health nav item amber / red.
+  const SYS_LEVEL = { ok: 'Normal', warning: 'High', critical: 'Critical' };
+  const fmt = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => (v[k] === undefined || v[k] === null ? '—' : v[k]));
+  function bytes(n) {
+    if (n === null || n === undefined) return '—';
+    const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+    let i = 0;
+    while (Math.abs(n) >= 1024 && i < u.length - 1) { n /= 1024; i += 1; }
+    return (i ? n.toFixed(n >= 100 ? 0 : 1) : String(Math.round(n))) + ' ' + u[i];
+  }
+  function navAlert(level) {
+    const nav = document.querySelector('.site-nav [data-nav="health"]');
+    if (!nav) return;
+    if (level === 'warning' || level === 'critical') {
+      nav.dataset.alert = level;
+      nav.setAttribute('aria-label', nav.textContent.trim() + ' · System status: ' + SYS_LEVEL[level]);
+    } else {
+      delete nav.dataset.alert;
+      nav.removeAttribute('aria-label');
+    }
+  }
+  function sysRow(name, pct, detail, level) {
+    const bar = h('i', {});
+    bar.style.width = Math.max(0, Math.min(100, pct || 0)) + '%';
+    return h('span', { class: 'ctl-sys-row', 'data-level': level || 'ok' },
+      h('span', { class: 'ctl-sys-name', text: name }),
+      h('b', { class: 'ctl-sys-pct', text: pct === null || pct === undefined ? '—' : Math.round(pct) + '%' }),
+      h('span', { class: 'ctl-sys-bar', 'aria-hidden': 'true' }, bar),
+      h('small', { class: 'ctl-sys-detail', text: detail }));
+  }
+  function renderSystem(sys) {
+    const box = $('ctl-sys');
+    if (!box) return;
+    if (!sys || sys.error) {
+      box.dataset.level = 'unknown';
+      $('ctl-sys-badge').textContent = '—';
+      $('ctl-sys-rows').replaceChildren();
+      $('ctl-sys-foot').textContent = sys && sys.error ? sys.error : '';
+      navAlert(null);
+      return;
+    }
+    const lv = sys.levels || {};
+    const disk = sys.disk || {};
+    const mem = sys.memory || {};
+    const cpu = sys.cpu || {};
+    const pr = sys.processes || {};
+    box.dataset.level = sys.alert || 'ok';
+    $('ctl-sys-badge').textContent = sys.enabled === false ? 'Checks off' : (SYS_LEVEL[sys.alert] || sys.alert);
+    const memDetail = fmt('{used} of {limit}', { used: bytes(mem.used), limit: bytes(mem.limit) }) + (mem.limit && !mem.limited ? ' (no limit)' : '');
+    const cpuDetail = [cpu.cores_used !== null && cpu.cores_used !== undefined ? fmt('{used} of {limit} cores', { used: cpu.cores_used, limit: cpu.limit_cores }) : null,
+      cpu.loadavg ? fmt('load {l}', { l: cpu.loadavg[0] }) : null].filter(Boolean).join(' · ');
+    $('ctl-sys-rows').replaceChildren(
+      sysRow('Disk', disk.pct, fmt('{free} free of {total}', { free: bytes(disk.free), total: bytes(disk.total) }), lv.disk),
+      sysRow('Memory', mem.pct, memDetail, lv.memory),
+      sysRow('CPU', cpu.pct, cpuDetail || '—', 'ok'));
+    $('ctl-sys-foot').textContent = [pr.agent_runs !== null && pr.agent_runs !== undefined ? fmt('{n} background runs', { n: pr.agent_runs }) : null,
+      pr.kage_children !== null && pr.kage_children !== undefined ? fmt('{n} Kage child processes', { n: pr.kage_children }) : null].filter(Boolean).join(' · ');
+    navAlert(sys.alert);
+  }
+
   function render(d) {
     state.data = d;
     const banner = $('ctl-banner');
@@ -265,6 +326,7 @@
     }
     renderConversations(d);
     renderSettings(d);
+    renderSystem(d.system);
     const list = $('ctl-messages');
     const msgs = d.messages || [];
     const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 40;

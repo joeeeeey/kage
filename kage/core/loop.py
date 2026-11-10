@@ -22,6 +22,7 @@ import urllib.error
 from kage import locale
 from kage.core import control as _control
 from kage.core import mode as _mode
+from kage.core import system_status as _system
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
 
@@ -151,6 +152,7 @@ class LoopCore:
         self.key, self.name = owner_key, owner_name
         self.control = _control.Control(language, owner_key=owner_key, owner_name=owner_name)  # Phase 2 C1
         self.start_cards = _mode.StartCards(language, owner_key=owner_key, owner_name=owner_name)  # O2d
+        self.system = _system.Monitor(language)  # 0.78.6 (F18)
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1186,6 +1188,12 @@ class LoopCore:
             if time.time() >= next_health:
                 next_health = time.time() + HEALTH_SECONDS
                 self.rt.daemon_health(db, dispatcher)
+                try:
+                    # 0.78.6 (F18): disk and memory against system.* (self-gated by system.enabled / check_minutes; the
+                    # directory sizes in a background thread), one owner notice per breach episode.
+                    self.system.evaluate(self.rt, db, path, supervisor_pid=os.getpid())
+                except Exception as exc:  # noqa: BLE001 - never stops the loop
+                    self._meta_error(db, 'system_status_error', exc)
                 try:
                     # P39: the low-frequency reconcile of card threads no live poller covers (self-gated by
                     # cards.reconcile_minutes): the owner's late replies on decided / closed / expired / code-owned cards.
