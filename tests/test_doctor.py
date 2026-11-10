@@ -9,6 +9,7 @@ import tempfile
 import time
 import types
 import unittest
+import unittest.mock
 
 from kage.onboard import doctor as D, identity
 from kage.ports import secrets
@@ -18,9 +19,11 @@ OWNER = types.SimpleNamespace(slack_workspace='T0000TEST01', slack_user='U0000TE
 
 
 class Probe(D.Probe):
-    def __init__(self, auth=None, states=None, versions=None, tz='Europe/Lisbon', now=1000.0, launchd=True, modules=None):
+    def __init__(self, auth=None, states=None, versions=None, tz='Europe/Lisbon', now=1000.0, launchd=True, modules=None,
+                 liveness=True):
         super().__init__(environ={}, clock=lambda: now,
-                         which=lambda binary: '/bin/launchctl' if binary == 'launchctl' and launchd else None)
+                         which=lambda binary: {'launchctl': '/bin/launchctl' if launchd else None,
+                                               'lsof': '/usr/sbin/lsof' if liveness else None}.get(binary))
         self.auth, self.states, self.versions, self.tz, self.calls = auth or {}, states or {}, versions or {}, tz, []
         self.modules = {'websockets': '13.1'} if modules is None else modules
 
@@ -205,6 +208,18 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(probe.module_version('/usr/bin/python3', 'websockets'), '13.1')
         self.assertEqual(calls[0][:2], ['/usr/bin/python3', '-c'])
         self.assertIsNone(probe.module_version('/usr/bin/python3', 'nothere'))
+
+    def test_codex_needs_a_liveness_tool(self):
+        # 0.78.5 (F17): no lsof and no /proc -> a Codex task's events are never dispatched
+        report = self.run_doctor(self.healthy_probe(versions={'claude': 'claude 9.9', 'codex': 'codex 1.0'}))
+        self.assertIn('lsof', self.by_id(report)['liveness.codex']['detail'])
+        probe = self.healthy_probe(versions={'claude': 'claude 9.9', 'codex': 'codex 1.0'}, liveness=False)
+        with unittest.mock.patch.object(D.os.path, 'isdir', return_value=False):
+            report = self.run_doctor(probe)
+        self.assertEqual(report['failed'], ['liveness.codex'])
+        with unittest.mock.patch.object(D.os.path, 'isdir', return_value=True):  # Linux: /proc instead
+            self.assertIn('/proc', self.by_id(self.run_doctor(probe))['liveness.codex']['detail'])
+        self.assertNotIn('liveness.codex', self.by_id(self.run_doctor(self.healthy_probe())))  # no codex: no check
 
     def test_a_token_in_the_deployment_fails_without_printing_it(self):
         secret = 'xoxb-' + '1234567890-abcdefghij'

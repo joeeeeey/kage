@@ -72,6 +72,12 @@ class Probe:
             return None
         return 'running' if re.search(r'^\s*state = running\s*$', out.stdout, re.M) else 'loaded'
 
+    def codex_liveness_tool(self) -> str | None:
+        """0.78.5 (F17): what tells whether a Codex session is live: lsof, else a readable /proc; None = nothing."""
+        if self.which('lsof'):
+            return 'lsof'
+        return '/proc' if os.path.isdir('/proc/self/fd') else None
+
     def module_version(self, python: str, module: str) -> str | None:
         """`module.__version__` as the interpreter `python` imports it (the services' own: user site included), or
         None when it does not import."""
@@ -291,9 +297,15 @@ def receiver_checks(spec: dict[str, Any] | None, probe: Probe) -> list[dict[str,
 def provider_checks(providers: list[str], probe: Probe) -> list[dict[str, Any]]:
     found = {p: probe.version(p) for p in providers}
     any_ok = any(found.values())
-    return [check(f'provider.{p}', False, v is not None, v or 'not found on PATH', f'install the {p} CLI and log in')
-            for p, v in found.items()] + [check('provider.any', True, any_ok, 'at least one agent CLI runs' if any_ok
-                                                else 'no agent CLI found', 'install claude or codex')]
+    out = [check(f'provider.{p}', False, v is not None, v or 'not found on PATH', f'install the {p} CLI and log in')
+           for p, v in found.items()] + [check('provider.any', True, any_ok, 'at least one agent CLI runs' if any_ok
+                                               else 'no agent CLI found', 'install claude or codex')]
+    if found.get('codex'):  # 0.78.5 (F17): without a liveness tool a Codex task's events wait forever
+        tool = probe.codex_liveness_tool()
+        out.append(check('liveness.codex', True, tool is not None, f'Codex session liveness via {tool}' if tool else
+                         'neither lsof nor /proc: Codex sessions read as unknown, their events are never dispatched',
+                         'install lsof'))
+    return out
 
 
 def clock_checks(owner, probe: Probe) -> list[dict[str, Any]]:

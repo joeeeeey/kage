@@ -31,6 +31,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import time
 
@@ -57,8 +58,9 @@ class Probe:
     """One instance per supervisor; every external probe runs at most once per `ttl`."""
 
     def __init__(self, runner=subprocess.run, claude_sessions_dir=None, codex_home=None, ttl=20, clock=time.time,
-                 claude_bin='claude', lsof_bin='lsof', ps_bin='ps', claude_projects_dir=None):
-        self.runner, self.ttl, self.clock = runner, ttl, clock
+                 claude_bin='claude', lsof_bin='lsof', ps_bin='ps', claude_projects_dir=None, which=shutil.which,
+                 proc_root='/proc'):
+        self.runner, self.ttl, self.clock, self.which, self.proc_root = runner, ttl, clock, which, Path(proc_root)
         self.claude_sessions_dir = Path(claude_sessions_dir or Path.home() / '.claude/sessions')
         self.claude_projects_dir = Path(claude_projects_dir or Path.home() / '.claude/projects')
         self.codex_home = Path(codex_home or os.environ.get('CODEX_HOME') or Path.home() / '.codex')
@@ -177,8 +179,11 @@ class Probe:
 
     # ---- Codex ----
     def codex_holders(self):
-        """{session: [pids]} of codex processes holding rollouts open, or None when lsof failed."""
+        """{session: [pids]} of codex processes holding rollouts open, or None when lsof failed. 0.78.5 (F17): without
+        lsof (a slim Linux image) the same answer from /proc (`/proc/<pid>/comm` codex*, `/proc/<pid>/fd` links)."""
         def probe():
+            if self.which(self.lsof_bin) is None:
+                return self.proc_holders()
             out = self._run([self.lsof_bin, '-nP', '-w', '-c', 'codex', '-F', 'pn'], timeout=20)
             if out is None:
                 return None
@@ -200,6 +205,31 @@ class Probe:
                             held[match[1]].append(pid)
             return held
         return self._cached('codex_holders', probe)
+
+    def proc_holders(self):
+        """{session: [pids]} from /proc, or None without a readable /proc (then the state stays unknown)."""
+        if not (self.proc_root / 'self' / 'fd').is_dir():
+            return None
+        held = {}
+        for entry in self.proc_root.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                if not (entry / 'comm').read_text(encoding='utf-8', errors='replace').startswith('codex'):
+                    continue
+                fds = list((entry / 'fd').iterdir())
+            except OSError:  # gone, or another user's process
+                continue
+            for fd in fds:
+                try:
+                    match = ROLLOUT_RE.search(os.readlink(fd))
+                except OSError:
+                    continue
+                if match:
+                    held.setdefault(match[1], [])
+                    if int(entry.name) not in held[match[1]]:
+                        held[match[1]].append(int(entry.name))
+        return held
 
     def rollout_path(self, session):
         cached = self._rollouts.get(session)

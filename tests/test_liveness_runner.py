@@ -37,7 +37,8 @@ class LivenessTest(unittest.TestCase):
 
     def probe(self, answers):
         return liveness.Probe(runner=fake_runner(answers), claude_sessions_dir=self.tmp / 'sessions',
-                              codex_home=self.codex, claude_projects_dir=self.tmp / 'projects', ttl=20, clock=lambda: 1000.0)
+                              codex_home=self.codex, claude_projects_dir=self.tmp / 'projects', ttl=20, clock=lambda: 1000.0,
+                              which=lambda name: '/usr/bin/' + name)  # lsof present (a slim image has none: /proc)
 
     def test_claude_states(self):
         listed = json.dumps([{'sessionId': SESSION, 'status': 'busy', 'pid': 42, 'kind': 'interactive'}])
@@ -64,6 +65,26 @@ class LivenessTest(unittest.TestCase):
                          liveness.UNKNOWN)
         self.assertEqual(self.probe({}).session_bytes('codex', SESSION), rollout.stat().st_size)
         self.assertIsNone(self.probe({}).session_bytes('claude', SESSION))
+
+    def test_codex_liveness_from_proc_without_lsof(self):
+        # 0.78.5 (F17): a slim Linux image has no lsof: the holders come from /proc
+        rollout = self.codex / 'sessions' / '2026' / '10' / '31' / f'rollout-2026-10-31T01-00-00-{SESSION}.jsonl'
+        rollout.write_text('first\n' + json.dumps({'type': 'event_msg', 'payload': {'type': 'task_complete'}}) + '\n')
+        proc = self.tmp / 'proc'
+        (proc / 'self' / 'fd').mkdir(parents=True)
+        for pid, comm, target in (('77', 'codex\n', rollout), ('88', 'python3\n', rollout), ('99', 'codex\n', self.tmp)):
+            (proc / pid / 'fd').mkdir(parents=True)
+            (proc / pid / 'comm').write_text(comm)
+            os.symlink(target, proc / pid / 'fd' / '5')
+        def probe(root):
+            return liveness.Probe(runner=fake_runner({}), claude_sessions_dir=self.tmp / 'sessions', codex_home=self.codex,
+                                  claude_projects_dir=self.tmp / 'projects', ttl=20, clock=lambda: 1000.0,
+                                  which=lambda name: None, proc_root=root)
+        state = probe(proc).check('codex', SESSION)
+        self.assertEqual((state['state'], state['holders']), (liveness.LIVE_IDLE, [77]))  # python3 holding it: not codex
+        os.unlink(proc / '77' / 'fd' / '5')
+        self.assertEqual(probe(proc).check('codex', SESSION)['state'], liveness.DEAD)
+        self.assertEqual(probe(self.tmp / 'no-proc').check('codex', SESSION)['state'], liveness.UNKNOWN)
 
     def test_probes_are_cached(self):
         calls = []
