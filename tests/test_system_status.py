@@ -160,7 +160,8 @@ class MonitorTest(unittest.TestCase):
         self.rt = runtime(self.config)
         sizes = [{'label': 'claude_sessions', 'path': '/srv/owner/.claude/projects', 'bytes': 6 * GIB, 'files': 900,
                   'partial': False},
-                 {'label': '~/src', 'path': '/srv/owner/src', 'bytes': 3 * GIB, 'files': 80000, 'partial': False}]
+                 {'label': '~/src', 'path': '/srv/owner/src', 'bytes': 3 * GIB, 'files': 80000, 'partial': False},
+                 {'label': 'backups', 'path': '/srv/owner/state/backups', 'bytes': 0, 'files': 0, 'partial': False}]
         self.mon = S.Monitor('zh-CN', post=lambda rt, db, metric, kind, text: self.posts.append((metric, kind, text)) or
                              f'ts{len(self.posts)}', walk=lambda paths: sizes)
 

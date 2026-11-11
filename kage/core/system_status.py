@@ -554,6 +554,7 @@ class Monitor:
         if kind == 'recovered':
             return self.msg(f'system.{metric}_recovered', pct=pct, warn=warn, **_fmt(detail))
         text = self.msg(f'system.{metric}_{kind}', pct=pct, warn=warn, crit=crit, **_fmt(detail))
+        sizes = [c for c in sizes or () if c.get('bytes')]  # an empty directory says nothing about a full disk
         if metric == 'disk' and sizes:
             top = self.msg('system.joiner').join(f"{c['path']} {human_bytes(c['bytes'])}" for c in sizes[:3])
             text += self.msg('system.disk_top', top=top)

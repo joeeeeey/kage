@@ -22,6 +22,7 @@ import urllib.error
 from kage import locale
 from kage.core import control as _control
 from kage.core import mode as _mode
+from kage.core import people as _people
 from kage.core import system_status as _system
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
@@ -153,6 +154,7 @@ class LoopCore:
         self.control = _control.Control(language, owner_key=owner_key, owner_name=owner_name)  # Phase 2 C1
         self.start_cards = _mode.StartCards(language, owner_key=owner_key, owner_name=owner_name)  # O2d
         self.system = _system.Monitor(language)  # 0.78.6 (F18)
+        self.people = _people.PeopleRoles(language)  # 0.78.7 (F19)
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1144,6 +1146,10 @@ class LoopCore:
                         settle(self.rt, db)
                     except Exception as exc:  # noqa: BLE001
                         self._meta_error(db, 'proposals_settle_error', exc)
+                try:
+                    self.people.settle(self.rt, db)  # 0.78.7 (F19): an approver's click on a people card writes the facts
+                except Exception as exc:  # noqa: BLE001
+                    self._meta_error(db, 'people_settle_error', exc)
                 try:
                     self.control.sweep(self.rt, db)  # Phase 2 C1: working / no answer / timeout / retention
                     self.control.settle(self.rt, db)  # C1b: the owner's click on a confirm card runs the relay / launch

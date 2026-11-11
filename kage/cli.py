@@ -561,6 +561,17 @@ class CliCore:
         people_p.add_argument('--person', required=True, help='Person id or Slack user id')
         people_p.add_argument('--field', required=True, choices=self.rt.intake.HANDLING_FIELDS)
         people_p.add_argument('--value', required=True)
+        # 0.78.7 (F19): role facts in the people registry — agents propose, code verifies the approval and writes
+        pshow = sub.add_parser('people-show', help="One person's role / employment and their provenance (no private view)")
+        pshow.add_argument('--person', required=True, help='Person id or Slack user id')
+        pshow.add_argument('--fields', default='role,employment', help='role, employment or both (comma separated)')
+        pprop = sub.add_parser('people-propose', help='Propose role / employment facts: written at once after a verified HR '
+                                                      'confirmation, else an approver card [写入] [不写]')
+        pprop.add_argument('--person', required=True, help='Person id or Slack user id')
+        pprop.add_argument('--file', required=True, help='Patch JSON: {"role": {...}, "employment": {...}} or dotted keys')
+        pprop.add_argument('--hr-confirmation', help="Slack link of HR's own message confirming it (in a thread that "
+                                                     'mentions the person)')
+        pprop.add_argument('--note', help='Why (shown on the card, at most 200 characters)')
         # ---- P3 rule engine, weekly rule learning, routines ----
         rc = sub.add_parser('rule-check', help='Check an access / account plan against the active rules (recorded)')
         rc.add_argument('--plan', required=True, help='Plan JSON file (references/rules.md)')
@@ -834,6 +845,13 @@ class CliCore:
         if args.command == 'people-set-field':
             # Never opens the state DB; prints only the changed field, never <owner key>_view.
             print(json.dumps(self.rt.intake.people_set_field(args.file, args.person, args.field, args.value), ensure_ascii=False,
+                             indent=2))
+            return
+        if args.command == 'people-show':
+            # Never opens the state DB; never prints <owner key>_view, authority, flags or identities.
+            from kage.core import people as _people
+            fields = tuple(f.strip() for f in args.fields.split(',') if f.strip())
+            print(json.dumps(_people.show(self.rt.envelopes.people_path(), args.person, fields), ensure_ascii=False,
                              indent=2))
             return
         if args.command == 'intake-probe':
@@ -1173,6 +1191,16 @@ class CliCore:
                                              rewrite_policy=args.rewrite_policy, wait_seconds=args.wait_seconds)
         elif args.command == 'smoke-intake':
             result = self.rt.intake.smoke_intake(self.rt, db, db_path, args.scenario, wait=not args.no_wait, timeout=args.timeout)
+        elif args.command == 'people-propose':
+            from kage.core import people as _people
+            try:
+                patch = json.loads(Path(args.file).read_text(encoding='utf-8'))
+            except ValueError:
+                raise ValueError('patch_file_is_not_valid_json') from None
+            result = _people.PeopleRoles(self.language).propose(self.rt, db, args.person, patch,
+                                                                hr_link=args.hr_confirmation, note=args.note)
+            if result.get('card'):
+                self.rt.start(db_path)
         elif args.command == 'rule-check':
             result = self.rt.rules.rule_check(self.rt, db, db_path, Path(args.plan).read_text(encoding='utf-8'), card=args.card,
                                       category=args.category, summary=args.summary, approved_by=args.approved_by,
