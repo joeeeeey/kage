@@ -23,6 +23,7 @@
 the sibling modules (`rt.buttons`, `rt.envelopes`, `rt.card_threads`, `rt.worker_config`).
 """
 from __future__ import annotations
+import fnmatch
 import json
 import re
 import time
@@ -36,6 +37,10 @@ DDL = '''
   CREATE TABLE IF NOT EXISTS card_reply_routes (
     channel TEXT NOT NULL, reply_ts TEXT NOT NULL, root TEXT NOT NULL, outcome TEXT NOT NULL, card_event TEXT,
     open_cards TEXT, at REAL NOT NULL, PRIMARY KEY (channel, reply_ts));
+  -- 0.78.8 (F20): the owner's card-thread replies posted through an allowed app with their own user token (provenance)
+  CREATE TABLE IF NOT EXISTS owner_api_replies (
+    channel TEXT NOT NULL, ts TEXT NOT NULL, user TEXT NOT NULL, app TEXT NOT NULL, at REAL NOT NULL,
+    PRIMARY KEY (channel, ts));
 '''
 RETRY_ATTEMPTS = 3
 ROUTES_DAYS = 30         # P38: card_reply_routes kept this long (re-returned boundary replies + fresh-session context)
@@ -286,10 +291,12 @@ class CardReplies:
 
     def __init__(self, owner_key, owner_user):
         self.key, self.owner_user = owner_key, owner_user
+        self._people_cache = {}  # 0.78.8: user id -> (monotonic time, is a person), for owner_api_post
 
     def owner_typed(self, rt, db, channel, m, card_ts):
         """The owner's own hand-typed reply in this card's thread (0.77.0: or an owner-like approver's, see
-        kage.core.authority.owner_like_users); never agents' posts with the owner's token, other apps or bots."""
+        kage.core.authority.owner_like_users); never agents' posts with the owner's token, other apps or bots. 0.78.8
+        (F20): or their own reply through an allowed app with their user token (`owner_api_post`)."""
         ts = str(m.get('ts') or '')
         user = m.get('user')
         if not user or (user != self.owner_user and user not in _control.owner_like(rt)) or \
@@ -298,7 +305,51 @@ class CardReplies:
             return False
         ledger = db.execute('SELECT 1 FROM agent_sends WHERE channel=? AND ts=?', (channel, ts)).fetchone() is not None
         env = rt.envelopes.classify_message(m, thread_root=card_ts, ledger_hit=ledger, people=rt.envelopes.load_people())
+        if env.get('rule') in ('agent_foreign_app', 'system_bot') and (m.get('bot_id') or m.get('app_id')):
+            return self.owner_api_post(rt, db, channel, m) is not None  # never ours: our app / marker / ledger came first
         return env['author_kind'] == 'human' and env['trust'] == self.key and env['authority'] == f'{self.key}_intent'
+
+    def owner_api_post(self, rt, db, channel, m, ttl=600, clock=time.monotonic):
+        """0.78.8 (F20): the app's name when `m` is the owner's (or an owner-like approver's) own message posted through
+        an app with their user token, as F14 for intake: a bot-identity deployment (`intake.identity: bot`, so no agent
+        posts with the owner's token), not our app / marker / send ledger (the caller's envelope says a foreign app), a
+        plain message, the app's name allowed by `intake.delegate_bot_names`, and users.info says a person (cached
+        `ttl` s). Recorded in owner_api_replies (the decision's provenance says via api). Else None."""
+        user, ts = str(m.get('user') or ''), str(m.get('ts') or '')
+        if m.get('subtype') not in (None, 'thread_broadcast') or \
+                (user != self.owner_user and user not in _control.owner_like(rt)):
+            return None
+        try:
+            intake = rt.worker_config.load()[0]['intake']
+        except Exception:  # noqa: BLE001 - a broken config grants nothing
+            return None
+        if intake.get('identity') != 'bot':
+            return None
+        profile = m.get('bot_profile') if isinstance(m.get('bot_profile'), dict) else {}
+        name = str(profile.get('name') or m.get('username') or '')
+        if not name or not any(fnmatch.fnmatchcase(name.lower(), str(n).lower())
+                               for n in intake.get('delegate_bot_names') or ()):
+            return None
+        hit = self._people_cache.get(user)
+        if hit is None or clock() - hit[0] >= ttl:
+            try:
+                info = rt.slack.api_call('users.info', rt.api_identity(bot=True), params={'user': user}).get('user') or {}
+                person = info.get('is_bot') is False and not info.get('deleted')
+            except Exception:  # noqa: BLE001 - asked again next time; nothing counts meanwhile
+                return None
+            hit = self._people_cache[user] = (clock(), person)
+        if not hit[1]:
+            return None
+        try:
+            row = (channel, ts, user, name[:80], time.time())
+            if db.in_transaction:  # the caller's transaction commits it
+                db.execute('INSERT OR IGNORE INTO owner_api_replies (channel,ts,user,app,at) VALUES (?,?,?,?,?)', row)
+            else:
+                with rt.transaction(db):
+                    db.execute('INSERT OR IGNORE INTO owner_api_replies (channel,ts,user,app,at) VALUES (?,?,?,?,?)', row)
+        except Exception:  # noqa: BLE001 - the reply still counts; only its provenance line is missing
+            pass
+        return name
 
     def process_watch(self, rt, db, w, messages, now=None):
         """tick(), after ingest: the owner's new replies in a decision watch's card thread.

@@ -554,6 +554,14 @@ class FollowupCore:
                           source_author=p['proposer_user'] if p else None)
         if row['provenance'] == 'thread_reply':
             result.update(source_ts=row['source_ts'], guidance=self.thread_reply_guidance)
+            api = db.execute('SELECT app FROM owner_api_replies WHERE channel=? AND ts=?',
+                             (row['card_channel'], row['source_ts'])).fetchone() if db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='owner_api_replies'").fetchone() else None
+            if api:  # 0.78.8 (F20): typed through an allowed app with the owner's own user token
+                result.update(via='api', via_app=api['app'], verified_by=result['verified_by'].replace(
+                    'hand-typed reply', 'reply posted through the allowed app ' + repr(api['app']) + ' with their own user '
+                    'token (users.info: a person; bot-identity deployment)').replace(
+                    ' (no app id, agent metadata or send-ledger hit)', ' (not our app, no agent metadata or send-ledger hit)'))
         return result
 
     def thread_reply_decision_of(self, db, eid):

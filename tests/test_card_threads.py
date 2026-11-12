@@ -50,6 +50,47 @@ class CardRepliesTest(unittest.TestCase):
                     {'author_kind': 'human', 'trust': 'mira', 'authority': 'none'}):
             self.assertFalse(REPLIES.owner_typed(runtime(env), db, CHANNEL, reply(), ROOT), env)
 
+    def test_the_owners_reply_through_an_allowed_app_counts_on_a_bot_deployment(self):
+        # 0.78.8 (F20): their own user token through an API client (bot_id / app_id set), as F14 for intake
+        import contextlib
+        replies = card_replies.CardReplies('mira', OWNER)
+        intake = {'identity': 'bot', 'delegate_bot_names': ['api-*']}
+        calls = []
+        env = {'author_kind': 'agent', 'trust': 'agent', 'authority': 'none', 'rule': 'agent_foreign_app'}
+        db, rt = store(), runtime(env)
+        rt.worker_config = types.SimpleNamespace(load=lambda: ({'cards': {}, 'intake': intake}, None))
+        person = {'is_bot': False}
+        rt.slack = types.SimpleNamespace(api_call=lambda method, token, params=None: calls.append(params['user']) or
+                                         {'user': dict(person)})
+        rt.api_identity = lambda bot=False: 'bot-token'
+
+        @contextlib.contextmanager
+        def transaction(db):
+            db.execute('BEGIN IMMEDIATE')
+            yield
+            db.commit()
+        rt.transaction = transaction
+        api = reply(bot_id='B0000TEST07', app_id='A0000TEST07', bot_profile={'app_id': 'A0000TEST07', 'name': 'API-Client'})
+        self.assertTrue(replies.owner_typed(rt, db, CHANNEL, api, ROOT))
+        self.assertEqual(db.execute('SELECT user, app FROM owner_api_replies').fetchall()[0][:], (OWNER, 'API-Client'))
+        self.assertTrue(replies.owner_typed(rt, db, CHANNEL, {**api, 'ts': '1700000002.000200'}, ROOT))
+        self.assertEqual(calls, [OWNER])                                                     # users.info cached
+        self.assertFalse(replies.owner_typed(rt, db, CHANNEL, {**api, 'user': OTHER}, ROOT))  # not the owner
+        self.assertFalse(replies.owner_typed(rt, db, CHANNEL, {**api, 'subtype': 'bot_message'}, ROOT))
+        self.assertFalse(replies.owner_typed(rt, db, CHANNEL, {**api, 'bot_profile': {'name': 'deploy-bot'}}, ROOT))
+        intake['identity'] = 'user'  # agents may post with the owner's token here: never theirs
+        self.assertFalse(replies.owner_typed(rt, db, CHANNEL, api, ROOT))
+        intake['identity'] = 'bot'
+        fresh = card_replies.CardReplies('mira', OWNER)
+        person['is_bot'] = True
+        self.assertFalse(fresh.owner_typed(rt, db, CHANNEL, api, ROOT))                      # an app's own bot user
+        for rule in ('agent_app_id', 'agent_metadata', 'agent_ledger'):                      # ours: never
+            self.assertFalse(replies.owner_typed(runtime({**env, 'rule': rule}), db, CHANNEL, api, ROOT), rule)
+        # the thread router takes it as the owner's reply (it no longer drops every bot_id before asking)
+        rt.card_replies = types.SimpleNamespace(owner_typed=replies.owner_typed)
+        self.assertEqual(THREADS.eligible_author(rt, db, CHANNEL, ROOT, {**api, 'ts': '1700000003.000200'}), 'mira')
+        self.assertIsNone(THREADS.eligible_author(rt, db, CHANNEL, ROOT, {**api, 'ts': '1700000004.000200', 'user': OTHER}))
+
     def test_an_owner_like_approvers_reply_is_the_owners(self):
         # 0.77.0: a bot-only deployment's approvers with `intake.owner_like: approvers` (kage.core.authority)
         db, rt = store(), runtime()

@@ -329,6 +329,18 @@ def system_checks(db_path: Path, probe: Probe, spec: dict[str, Any] | None = Non
                   'free disk space: the console health page lists the largest directories')]
 
 
+def intake_checks(intake: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """0.78.8: with intake on, the workspace bootstrap script it launches new tasks with (assembly `intake.BOOTSTRAP`)
+    must exist; without it the first real intake-launch fails (workspace_bootstrap_unavailable). Not required."""
+    if not intake or not intake.get('enabled'):
+        return [check('intake.bootstrap', False, None, 'intake is off')]
+    path = intake.get('bootstrap')
+    ok = bool(path) and Path(path).is_file()
+    return [check('intake.bootstrap', False, ok, f'workspace bootstrap {path}' if ok else
+                  f"no workspace bootstrap script at {path or '(unset)'}: intake-launch cannot create task workspaces",
+                  'set assembly.values intake.BOOTSTRAP in deploy/instance.json to an installed workspace skill')]
+
+
 def clock_checks(owner, probe: Probe) -> list[dict[str, Any]]:
     system = probe.system_timezone()
     same = system == owner.timezone if system and owner.timezone else None
@@ -385,14 +397,15 @@ def port_checks(store) -> list[dict[str, Any]]:
 
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
         profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None,
-        voice: str | None = None, system: dict[str, Any] | None = None) -> dict[str, Any]:
+        voice: str | None = None, system: dict[str, Any] | None = None,
+        intake: dict[str, Any] | None = None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)
     scan = [d for d in (root, Path(profile_dir).expanduser() if profile_dir else None) if d is not None and d.is_dir()]
     runtime = runtime_checks(db, health, probe)
     heartbeat = next((c for c in runtime if c['id'] == 'runtime.heartbeat'), None)
     checks = (slack_checks(owner, probe, tokens, offline, voice) + state_checks(db_path, db) + runtime
               + service_checks(root, probe, heartbeat) + provider_checks(list(providers), probe)
-              + system_checks(db_path, probe, system) + clock_checks(owner, probe)
+              + system_checks(db_path, probe, system) + intake_checks(intake) + clock_checks(owner, probe)
               + secret_checks(scan) + port_checks(secret_store) + identity_checks(owner, Path(db_path).parent))
     failed = [c['id'] for c in checks if c['required'] and c['ok'] is False]
     warnings = [c['id'] for c in checks if not c['required'] and c['ok'] is False]

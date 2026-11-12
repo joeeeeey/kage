@@ -101,6 +101,19 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(self.by_id(report)['system.disk']['fix'], 'free disk space: the console health page lists the largest directories')
         self.assertTrue(self.by_id(self.run_doctor(probe, system={'disk_warn_pct': 90, 'disk_crit_pct': 95}))['system.disk']['ok'])
 
+    def test_intake_needs_its_workspace_bootstrap(self):
+        # 0.78.8: intake on without the bootstrap script -> the first intake-launch fails; reported, not required
+        probe = self.healthy_probe()
+        self.assertIsNone(self.by_id(self.run_doctor(probe))['intake.bootstrap']['ok'])
+        script = Path(self.tmp.name) / 'bootstrap_task_workspace.py'
+        missing = self.by_id(self.run_doctor(probe, intake={'enabled': True, 'bootstrap': str(script)}))['intake.bootstrap']
+        self.assertEqual((missing['required'], missing['ok']), (False, False))
+        self.assertIn('intake.BOOTSTRAP', missing['fix'])
+        script.write_text('# bootstrap\n')
+        self.assertTrue(self.by_id(self.run_doctor(probe, intake={'enabled': True, 'bootstrap': str(script)}))
+                        ['intake.bootstrap']['ok'])
+        self.assertFalse(self.by_id(self.run_doctor(probe, intake={'enabled': True, 'bootstrap': None}))['intake.bootstrap']['ok'])
+
     def test_a_healthy_install_passes_and_reads_slack_twice(self):
         probe = self.healthy_probe()
         report = self.run_doctor(probe)

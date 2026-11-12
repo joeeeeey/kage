@@ -230,6 +230,34 @@ class SocketModeTest(unittest.TestCase):
         retry = next(rec for rec in r.logged if rec.get('event') == 'intake_push_retry')
         self.assertEqual((retry['reason'], retry['returncode'], retry['error']), ('intake_push_failed', 1, 'OperationalError'))
 
+    def test_the_owners_card_reply_through_an_allowed_app_is_pushed(self):
+        # 0.78.8 (F20): no longer dropped as has_bot_id; the runtime re-reads it and checks the person
+        from kage.adapters.slack import receiver as R
+        ns = namespace(**{name: getattr(R, name) for name in (
+            'is_card_reply_event', 'card_reply_refs', 'card_reply_app_refs', 'card_reply_drop_diagnostic',
+            'card_reply_push_command', 'run_followup_json', '_safe', 'SAFE_CODE_RE', 'SAFE_ERROR_RE')})
+        r = Runner(ns)
+        r.own_bot_user, r.own_app_id = 'U0000TEST09', 'A0000TEST01'
+        gate = {'enabled': True, 'channels': frozenset({'C0000TEST01'}), 'users': frozenset({'U0000TEST01'}),
+                'error': False, 'delegate_bot_names': ('api-*',)}
+        r._card_reply_cache = (float('inf'), gate)
+        commands = []
+        r.followup_runner = lambda command, **kw: commands.append(command) or types.SimpleNamespace(
+            returncode=0, stdout='{"ok": true, "outcome": "routed"}', stderr='')
+        event = {'type': 'message', 'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'thread_ts': '1700000000.000100',
+                 'user': 'U0000TEST01', 'bot_id': 'B0000TEST05', 'app_id': 'A0000TEST05',
+                 'bot_profile': {'app_id': 'A0000TEST05', 'name': 'API-Client'}}
+        payload = {'type': 'event_callback', 'team_id': 'T0000TEST01', 'event': event}
+        record = r.process_card_reply(payload)
+        self.assertEqual((record['event'], record['outcome']), ('card_reply_pushed', 'routed'))
+        self.assertIn('card-reply-push', commands[0])
+        r._card_reply_cache = (float('inf'), {**gate, 'delegate_bot_names': ()})
+        self.assertEqual(r.process_card_reply(payload)['reason'], 'app_not_delegated')
+        r._card_reply_cache = (float('inf'), gate)
+        other = {**payload, 'event': {**event, 'user': 'U0000TEST05'}}
+        self.assertEqual(r.process_card_reply(other)['reason'], 'user_not_allowed')
+        self.assertEqual(len(commands), 1)
+
     def test_after_a_restart_the_last_good_gate_is_used(self):
         # 0.78.4 (F16): no good cached gate yet (cold, or the first fetch failed): the gate saved on disk
         import tempfile

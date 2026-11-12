@@ -39,6 +39,33 @@ def database():
 
 
 class FollowupCoreTest(unittest.TestCase):
+    def test_a_decision_typed_through_an_allowed_app_says_so(self):
+        # 0.78.8 (F20): context.decision via=api for the owner's reply through their own API client
+        model = [{'id': 'approve', 'label': 'Approve', 'kind': 'approve', 'recommended': True}]
+        buttons = types.SimpleNamespace(card_model=lambda options: model, resolve_choice=lambda choice, m: m[0],
+                                        public_option=lambda o: o, iso=lambda ts: str(ts))
+        rt = runtime()
+        rt.buttons = buttons
+        c = core(rt=rt)
+        db = sqlite3.connect(':memory:')
+        db.row_factory = sqlite3.Row
+        db.executescript('''
+            CREATE TABLE decisions (event_id TEXT, choice TEXT, actor TEXT, role TEXT, decided_at REAL, card_channel TEXT,
+              card_ts TEXT, receipt_ts TEXT, delivered_event TEXT, stage TEXT, note TEXT, provenance TEXT, source_ts TEXT,
+              proposal_id TEXT);
+            CREATE TABLE escalation_cards (event_id TEXT, options TEXT);
+            INSERT INTO escalation_cards VALUES ('e1', '[]');
+            INSERT INTO decisions VALUES ('e1', 'approve', 'U0000TEST01', 'approver', 1.0, 'C0000TEST01', '1700000000.000100',
+              NULL, 'ev1', 'recorded', NULL, 'thread_reply', '1700000001.000200', NULL);''')
+        plain = c.button_decision(db, 'ev1')
+        self.assertNotIn('via', plain)
+        db.executescript("CREATE TABLE owner_api_replies (channel TEXT, ts TEXT, user TEXT, app TEXT, at REAL);"
+                         "INSERT INTO owner_api_replies VALUES ('C0000TEST01', '1700000001.000200', 'U0000TEST01', "
+                         "'API-Client', 1.0);")
+        api = c.button_decision(db, 'ev1')
+        self.assertEqual((api['via'], api['via_app'], api['provenance']), ('api', 'API-Client', 'thread_reply'))
+        self.assertIn("allowed app 'API-Client'", api['verified_by'])
+
     def test_who_may_write_into_a_watch(self):
         c = core()
         human = {'user': 'U0000TEST09', 'ts': '1.0'}

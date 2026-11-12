@@ -191,6 +191,32 @@ def card_reply_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[
     return refs, ""
 
 
+def card_reply_app_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user: str | None,
+                        own_app_id: str | None = None, delegate_names: Any = ()) -> tuple[dict[str, str] | None, str]:
+    """0.78.8 (F20): a card-thread reply a person posted through an app with their own user token (bot_id / app_id set,
+    a U… / W… `user`): (refs, "") when the app is not ours, not the bot's own post, and its name is allowed by
+    `intake.delegate_bot_names` (as F14 / F15 for intake); else (None, drop code). The runtime re-reads the message and
+    checks that the user is the owner (or owner-like) and a person (users.info) before it counts."""
+    if not is_card_reply_event(payload):
+        return None, "not_message_event"
+    event = payload["event"]
+    if str(payload.get("team_id") or "") != expected_team_id:
+        return None, "unexpected_team"
+    if event.get("subtype") not in (None, ""):
+        return None, "has_subtype"
+    profile = event.get("bot_profile") if isinstance(event.get("bot_profile"), dict) else {}
+    if own_bot_user and event.get("user") == own_bot_user:
+        return None, "own_bot"
+    if own_app_id and own_app_id in (event.get("app_id"), profile.get("app_id")):
+        return None, "our_app"
+    name = str(profile.get("name") or event.get("username") or "").lower()
+    names = [str(n).lower() for n in delegate_names or () if isinstance(n, str)]
+    if not name or not any(fnmatch.fnmatchcase(name, n) for n in names):
+        return None, "app_not_delegated"
+    plain = {**payload, "event": {k: v for k, v in event.items() if k not in ("bot_id", "app_id", "bot_profile")}}
+    return card_reply_refs(plain, expected_team_id=expected_team_id)
+
+
 def control_refs(payload: dict[str, Any], *, expected_team_id: str) -> tuple[dict[str, str] | None, str]:
     """Phase 2 C2: the receiver-side filter for a NEW top-level message (the owner's control message in the card
     channel): (refs, "") for a plain human top-level message in this workspace, else (None, drop code). Ids only; the

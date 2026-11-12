@@ -215,6 +215,21 @@ class IntakePushTest(unittest.TestCase):
         self.assertEqual(r.intake_refs(self.event(**ours), expected_team_id=TEAM, own_app_id='A0000TEST01'),
                          (None, 'our_app'))
 
+    def test_a_card_reply_through_an_allowed_app(self):
+        # 0.78.8 (F20): forwarded when the app is not ours and intake allows its name; the runtime checks the person
+        app = {'type': 'message', 'thread_ts': '1700000000.000100', 'bot_id': 'B0000TEST05', 'app_id': 'A0000TEST05',
+               'bot_profile': {'app_id': 'A0000TEST05', 'name': 'API-Client'}}
+        kw = {'expected_team_id': TEAM, 'own_bot_user': 'U0000TEST09', 'own_app_id': 'A0000TEST01'}
+        self.assertEqual(r.card_reply_refs(self.event(**app), expected_team_id=TEAM), (None, 'has_bot_id'))
+        refs, why = r.card_reply_app_refs(self.event(**app), delegate_names=['api-*'], **kw)
+        self.assertEqual((refs['user'], refs['thread_ts'], why), (OWNER, '1700000000.000100', ''))
+        for event, names, code in (({}, [], 'app_not_delegated'), ({}, ['other'], 'app_not_delegated'),
+                                   ({'user': 'U0000TEST09'}, ['*'], 'own_bot'), ({'app_id': 'A0000TEST01'}, ['*'], 'our_app'),
+                                   ({'subtype': 'bot_message'}, ['*'], 'has_subtype'),
+                                   ({'thread_ts': None}, ['*'], 'not_thread_reply')):
+            self.assertEqual(r.card_reply_app_refs(self.event(**{**app, **event}), delegate_names=names, **kw), (None, code),
+                             event)
+
     def test_which_messages_get_the_receivers_receipt(self):
         # 0.78.3 (F12): decided from the payload alone; never the bot's own message, never a post through an app
         kw = {'expected_team_id': TEAM, 'own_bot_user': 'U0000TEST09'}

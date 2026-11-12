@@ -278,11 +278,12 @@ class CardThreads:
         """The owner key for the owner's own hand-typed reply in this thread, 'delegate' for an in-window OOO
         delegate's human reply, else None (bots, agents' posts with the owner's token, everyone else)."""
         ts = str(m.get('ts') or '')
-        if m.get('thread_ts') != root or not TS_RE.fullmatch(ts) or float(ts) <= float(root) or m.get('subtype') or \
-                m.get('bot_id'):
+        if m.get('thread_ts') != root or not TS_RE.fullmatch(ts) or float(ts) <= float(root) or m.get('subtype'):
             return None
         if rt.card_replies.owner_typed(rt, db, channel, m, root):
-            return self.key
+            return self.key  # 0.78.8 (F20): also the owner's own reply through an allowed app (owner_api_post)
+        if m.get('bot_id'):
+            return None
         user = str(m.get('user') or '')
         if not USER_RE.fullmatch(user) or user in (self.owner_user, rt.BOT) or m.get('app_id'):
             return None

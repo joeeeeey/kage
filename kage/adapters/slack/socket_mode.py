@@ -248,6 +248,12 @@ class SocketModeRunner:
         codes only, never the message text."""
         try:
             refs, code = self.ns.card_reply_refs(payload, expected_team_id=self.args.expected_team_id)
+            app_refs = getattr(self.ns, "card_reply_app_refs", None)
+            if refs is None and code in ("has_bot_id", "has_app_id") and app_refs is not None:
+                # 0.78.8 (F20): the owner's reply posted through an allowed app with their own user token
+                refs, code = app_refs(payload, expected_team_id=self.args.expected_team_id, own_bot_user=self.own_bot_user,
+                                      own_app_id=self.own_app_id,
+                                      delegate_names=self.card_reply_settings().get("delegate_bot_names") or ())
             if refs is None:
                 pushed = self.process_control_message(payload) if code == "not_thread_reply" else None
                 if pushed is not None:

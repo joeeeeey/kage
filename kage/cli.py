@@ -60,13 +60,18 @@ class CliCore:
             tokens = {'bot': self.rt.slack.default_bot_token, 'user': self.rt.slack.default_user_token}
             store = getattr(getattr(self.rt.slack, 'TRANSPORT', None), 'secret_store', None)
             try:
-                system = self.rt.worker_config.load()[0].get('system')
+                loaded = self.rt.worker_config.load()[0]
+                system, intake = loaded.get('system'), {'enabled': bool(loaded['intake'].get('enabled'))}
             except Exception:  # noqa: BLE001 - a malformed config: the defaults (worker_config has its own check)
-                system = None
+                system, intake = None, None
+            if intake is not None:  # 0.78.8: the workspace bootstrap intake-launch runs
+                bootstrap = getattr(getattr(self.rt, 'intake', None), 'BOOTSTRAP', None)
+                intake['bootstrap'] = str(bootstrap) if bootstrap else None
             return doctor.run(self.deployment.owner, probe=doctor.Probe(transport=self.rt.slack), tokens=tokens,
                               db_path=db_path, db=db, health=health, profile_dir=self.deployment.directory,
                               offline=offline, secret_store=store,
-                              voice=doctor.voice(getattr(self.deployment.owner, 'key', 'owner'), store), system=system)
+                              voice=doctor.voice(getattr(self.deployment.owner, 'key', 'owner'), store), system=system,
+                              intake=intake)
         finally:
             if db is not None:
                 db.close()
