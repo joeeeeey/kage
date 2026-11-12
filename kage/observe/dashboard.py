@@ -84,6 +84,8 @@ CACHE_REPORT_SECONDS = 60  # the panel re-reads the run logs at most once a minu
 
 
 PROVIDERS = {
+    'grok': {'id': 'grok', 'label': 'Grok', 'delivery_supported': True, 'status': 'available',
+             'delivery_path': 'headless_dispatch', 'auto_resume': True},
     'codex': {'id': 'codex', 'label': 'Codex', 'delivery_supported': True, 'status': 'available', 'delivery_path': 'codex_queue', 'avatar_url': '/assets/codex-agent.png'},
     'claude': {'id': 'claude', 'label': 'Claude', 'delivery_supported': True, 'status': 'available', 'delivery_path': 'sqlite_outbox_native_hook_or_waiter', 'consumer_required': True, 'auto_resume': False, 'avatar_url': '/assets/claude-agent.png', 'logo_url': '/assets/claude-agent.png'},
 }
@@ -136,7 +138,7 @@ SETTINGS_BODY_LIMIT = 32768
 
 EDITABLE_KEYS = (
     'providers.claude.model_default', 'providers.claude.model_important', 'providers.claude.effort',
-    'providers.codex.model', 'providers.codex.effort',
+    'providers.codex.model', 'providers.codex.effort', 'providers.grok.model', 'providers.grok.effort',
     'routing.categories', 'routing.fallback_order',
     'dispatch.enabled', 'dispatch.progress_updates', 'dispatch.concurrency', 'dispatch.max_event_age_hours',
     'dispatch.claude_env_passthrough',

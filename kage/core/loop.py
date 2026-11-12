@@ -822,6 +822,8 @@ class LoopCore:
                 decision = {'action': 'as_today'}
             if decision.get('action') == 'held':
                 return
+        if self.rt.claude.provider(self.rt.load(db, wid)) == 'grok':
+            return  # Headless only: leave events pending for the dispatcher; never send to Codex's queue.
         if self.rt.claude.provider(self.rt.load(db, wid)) == 'claude':
             pending = [r[0] for r in db.execute("SELECT id FROM events WHERE watch_id=? AND status='pending'", (wid,))]
             self.rt.claude.queue_watch(db, wid)
@@ -870,7 +872,7 @@ class LoopCore:
             # P38 G3: the running run of the dispatch holding this event may resolve it even after the watch moved on.
             consumer = self.rt.dispatch_consumer(db, e) if actor_session else None
             dispatched = bool(consumer and (consumer['provider'], consumer['session']) == (actor_provider, actor_session))
-            if not dispatched and ((self.rt.claude.provider(w) == 'claude' and not actor_session) or (actor_session and (actor_provider, actor_session) != (self.rt.claude.provider(w), w['session']))):
+            if not dispatched and ((self.rt.claude.provider(w) in ('claude', 'grok') and not actor_session) or (actor_session and (actor_provider, actor_session) != (self.rt.claude.provider(w), w['session']))):
                 raise ValueError('watch_transferred_to_another_session_do_not_execute')
             if e['status'] == 'handled':
                 return w

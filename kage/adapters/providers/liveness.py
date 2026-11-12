@@ -59,10 +59,11 @@ class Probe:
 
     def __init__(self, runner=subprocess.run, claude_sessions_dir=None, codex_home=None, ttl=20, clock=time.time,
                  claude_bin='claude', lsof_bin='lsof', ps_bin='ps', claude_projects_dir=None, which=shutil.which,
-                 proc_root='/proc'):
+                 proc_root='/proc', grok_home=None):
         self.runner, self.ttl, self.clock, self.which, self.proc_root = runner, ttl, clock, which, Path(proc_root)
         self.claude_sessions_dir = Path(claude_sessions_dir or Path.home() / '.claude/sessions')
         self.claude_projects_dir = Path(claude_projects_dir or Path.home() / '.claude/projects')
+        self.grok_home = Path(grok_home or os.environ.get('GROK_HOME') or Path.home() / '.grok')
         self.codex_home = Path(codex_home or os.environ.get('CODEX_HOME') or Path.home() / '.codex')
         self.claude_bin, self.lsof_bin, self.ps_bin = claude_bin, lsof_bin, ps_bin
         self._cache = {}
@@ -293,7 +294,8 @@ class Probe:
         missed = self._size_misses.get((provider, session))
         if missed is not None and self.clock() - missed < 3 * self.ttl:
             return None  # a missing transcript is looked up again at most every 3 ttl (no glob per supervisor cycle)
-        path = self.rollout_path(session) if provider == 'codex' else self.claude_transcript_path(session)
+        path = (self.grok_transcript_path(session) if provider == 'grok' else
+                self.rollout_path(session) if provider == 'codex' else self.claude_transcript_path(session))
         try:
             size = path.stat().st_size if path else None
         except OSError:
@@ -304,12 +306,73 @@ class Probe:
             self._size_misses.pop((provider, session), None)
         return size
 
+    def grok_transcript_path(self, session):
+        paths = sorted(self.grok_home.glob(f'sessions/*/{session}/chat_history.jsonl'))
+        return paths[-1] if paths else None
+
+    def grok_processes(self):
+        """{pid: command line} of the Grok processes, from /proc where readable, else ps; None when neither works."""
+        procs = {}
+        if (self.proc_root / 'self' / 'cmdline').is_file():
+            for entry in self.proc_root.iterdir():
+                if not entry.name.isdigit():
+                    continue
+                try:
+                    argv = (entry / 'cmdline').read_bytes().decode('utf-8', 'replace').split('\0')
+                except OSError:  # gone, or another user's process
+                    continue
+                if argv and Path(argv[0]).name.startswith('grok'):
+                    procs[int(entry.name)] = ' '.join(argv)
+            return procs
+        out = self._run([self.ps_bin, '-axww', '-o', 'pid=,args='], env=PS_ENV)
+        if out is None or out[0] != 0:
+            return None
+        for line in out[1].splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0].isdigit() and Path(parts[1].split(None, 1)[0]).name.startswith('grok'):
+                procs[int(parts[0])] = parts[1]
+        return procs
+
+    def _grok(self, session):
+        """Live when a Grok process names the session on its command line (a headless `-s` / `-r` run, a TUI resumed by
+        id) or holds it in Grok's active-session registry. A Grok process that names no session and is not registered
+        may be a TUI still starting, so the state stays unknown; one naming another session never blocks this one.
+        Missing or corrupt evidence never proves death."""
+        path = self.grok_home / 'active_sessions.json'
+        try:
+            if path.is_symlink() or path.stat().st_size > MAX_SESSION_FILE:
+                return {'state': UNKNOWN, 'source': 'grok_registry_unreadable'}
+            entries = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(entries, list) or any(not isinstance(e, dict) for e in entries):
+                raise ValueError('invalid_registry')
+        except FileNotFoundError:
+            entries = []
+        except (OSError, ValueError):
+            return {'state': UNKNOWN, 'source': 'grok_registry_unreadable'}
+        procs = self.grok_processes()
+        if procs is None:
+            return {'state': UNKNOWN, 'source': 'grok_process_scan_failed'}
+        for pid, cmdline in procs.items():
+            if session in cmdline:
+                return {'state': LIVE_BUSY, 'source': 'grok_process', 'pid': pid}
+        registered = set()
+        for entry in entries:
+            pid = entry.get('pid')
+            if not isinstance(pid, int) or pid not in procs:
+                continue
+            registered.add(pid)
+            if entry.get('session_id') == session:
+                return {'state': LIVE_BUSY, 'source': 'grok_registry+process', 'pid': pid}
+        if any(pid not in registered and not UUID_RE.search(cmdline) for pid, cmdline in procs.items()):
+            return {'state': UNKNOWN, 'source': 'grok_unregistered_process'}
+        return {'state': DEAD, 'source': 'grok_registry+process'}
+
     # ---- public ----
     def check(self, provider, session):
         if not UUID_RE.fullmatch(str(session or '')):
             return {'state': UNKNOWN, 'source': 'invalid_session', 'provider': provider, 'session': session}
 
         def probe():
-            result = self._claude(session) if provider == 'claude' else self._codex(session)
+            result = {'claude': self._claude, 'codex': self._codex, 'grok': self._grok}[provider](session)
             return {**result, 'provider': provider, 'session': session, 'checked_at': self.clock()}
         return self._cached(('session', provider, session), probe)

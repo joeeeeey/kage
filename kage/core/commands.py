@@ -899,7 +899,7 @@ class CommandsCore:
             return self.dispatch_iterm(db, db_path, d, actor, now)
         if choice == 'view':
             return self.dispatch_view(db, db_path, d, actor, now)
-        modes = {'retry': 'auto', 'retry_codex': 'codex', 'retry_claude': 'claude'}
+        modes = {'retry': 'auto', 'retry_codex': 'codex', 'retry_claude': 'claude', 'retry_grok': 'grok'}
         if choice not in ('stop', 'resume', *modes):
             return self.rt._fail('invalid_choice')
         if choice == 'stop':
@@ -985,8 +985,8 @@ class CommandsCore:
                                      {'mode': 'resume', 'provider': provider, 'session': session}),
                 'killed_runs': killed, 'still_running': [r['run_id'] for r in live] + starting,
                 'held_events': self.rt._held_count(db, disp, key),
-                'resume_command': shlex.join(['codex', 'resume', session] if provider == 'codex' else
-                                             ['claude', '--resume', session]),
+                'resume_command': shlex.join({'codex': ['codex', 'resume', session], 'grok': ['grok', '-r', session]}.get(
+                    provider, ['claude', '--resume', session])),
                 'handback_command': shlex.join([sys.executable, str(Path(self.rt.__file__).resolve()), '--db', str(db_path),
                                                 'handback', '--task', key])}
 

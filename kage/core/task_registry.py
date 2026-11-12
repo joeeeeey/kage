@@ -32,7 +32,7 @@ import time
 import uuid
 
 SMOKE_PREFIX = 'smoke-dispatch-'
-PROVIDERS = ('codex', 'claude')
+PROVIDERS = ('codex', 'claude', 'grok')
 STATES = ('active', 'missing', 'archived')
 LINK_KINDS = ('parent',)
 PARENT_LINE_RE = re.compile(r'^parent:\s*(\S.*?)\s*$', re.I)

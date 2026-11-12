@@ -36,7 +36,7 @@ def _provider(run_dir, command, run_log):
     if found:
         return found
     name = Path(command[0]).name if command else ''
-    return 'claude' if name.startswith('claude') else 'codex'
+    return 'grok' if name.startswith('grok') else 'claude' if name.startswith('claude') else 'codex'
 
 
 def _render(run_log, run_dir, provider):

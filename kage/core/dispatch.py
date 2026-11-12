@@ -212,7 +212,7 @@ FAILURE_PATTERNS = (
     ('model_unsupported', r'model[^\n]{0,80}(?:does not exist|not found|is not supported|not available)|'
                           r'issue with the selected model|\b404\b[^\n]{0,60}model'),
     ('auth', r'\b40[13]\b|unauthori[sz]ed|forbidden|invalid[ _-]?api[ _-]?key|authentication[_ ](?:error|failed)|'
-             r'please run /login|not logged in|oauth token|permission_error|token (?:has )?expired'),
+             r'please run /login|not logged in|not signed in|oauth token|permission_error|token (?:has )?expired'),
     ('quota', r'usage limit|insufficient[_ ]quota|exceeded your current quota|quota|limit reached|'
               r"you've hit your|hit your (?:session|usage|weekly|daily) limit|credit balance|billing[_ ]error|"
               r'spend(?:ing)? limit|daily limit'),
@@ -302,7 +302,7 @@ def new_run_id(now):
     return dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime('r%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:6]
 
 
-PROVIDER_NAME = {'codex': 'Codex', 'claude': 'Claude'}
+PROVIDER_NAME = {'codex': 'Codex', 'claude': 'Claude', 'grok': 'Grok'}
 
 
 def _button(text, action, value, style=None):
@@ -1157,6 +1157,9 @@ class Dispatcher:
         if provider == 'claude':
             cmd = self.core.build_command('claude', 'fresh', str(uuid.uuid4()), PROBE_PROMPT, model, effort, (), run_dir, None,
                                 PROBE_CLAUDE_ARGS)
+        elif provider == 'grok':
+            cmd = self.core.build_command('grok', 'fresh', str(uuid.uuid4()), PROBE_PROMPT, model, effort, (), run_dir,
+                                          extra_args=('--max-turns', '1', '--tools', ''))
         else:
             cmd = self.core.build_command('codex', 'fresh', None, PROBE_PROMPT, model, effort, PROBE_CODEX_ARGS, run_dir)
         try:
@@ -1191,7 +1194,7 @@ class Dispatcher:
             error_class, marker = 'transient', 'probe_timeout'
         elif (exit_info or {}).get('error'):
             error_class, marker = 'spawn_failed', str(exit_info['error'])[:40]
-        elif info['cli_ok'] is not False and exit_info and exit_info.get('exit_code') == 0:
+        elif (info['cli_ok'] is True if provider == 'grok' else info['cli_ok'] is not False) and exit_info and exit_info.get('exit_code') == 0:
             error_class, marker = None, None
         else:
             error_class, marker = run_failure(info, exit_info)
@@ -1432,7 +1435,7 @@ class Dispatcher:
         if d['step'] >= len(plan):
             return self._fail(d, d['error_class'] or 'unknown', now)
         step = dict(plan[d['step']])
-        if step['mode'] == 'fresh' and step['provider'] == 'claude' and not step.get('session'):
+        if step['mode'] == 'fresh' and step['provider'] in ('claude', 'grok') and not step.get('session'):
             step['session'] = str(uuid.uuid4())
             plan[d['step']] = step
         run_id = new_run_id(now)
@@ -1587,6 +1590,8 @@ class Dispatcher:
                                if layout == 'constant' else {'context_file': RUN_CONTEXT_FILE} if context_file else {})}}
         meta['cwd'] = cwd
         env = self._env(run_id, d['task_key'], hops, provider, config)
+        if provider == 'grok':
+            env['GROK_SESSION_ID'] = session
         if context_file:
             env[rt.RUN_CONTEXT_ENV] = str(run_dir / RUN_CONTEXT_FILE)
         meta['env_injected'] = list(self.last_env_injected)  # names only, never values
@@ -1883,7 +1888,8 @@ class Dispatcher:
         handled = [e for e in events if statuses.get(e) == 'handled']
         unresolved = [e for e in events if statuses.get(e) != 'handled']
         exit_code = exit_info.get('exit_code') if exit_info else None
-        cli_ok = info['cli_ok'] if info['cli_ok'] is not None else exit_code == 0
+        cli_ok = (info['cli_ok'] is True if run['provider'] == 'grok' else
+                  info['cli_ok'] if info['cli_ok'] is not None else exit_code == 0)
         cli_ok = bool(cli_ok and exit_code in (0, None) and exit_info is not None)
         error_class, marker = None, None
         if not unresolved and (events or cli_ok):
@@ -1898,6 +1904,8 @@ class Dispatcher:
             outcome, error_class = ('partial', 'task_unresolved') if handled else ('unresolved', 'task_unresolved')
         else:
             error_class, marker = run_failure(info, exit_info)
+            if run['provider'] == 'grok' and (exit_info or {}).get('error'):
+                error_class, marker = 'spawn_failed', str(exit_info['error'])[:40]
             outcome = 'failed'
         with rt.transaction(self.db):
             won = self.db.execute('UPDATE consumer_runs SET state=?,ended_at=?,exit_code=?,outcome=?,error_class=?,'
@@ -2000,7 +2008,8 @@ class Dispatcher:
                     self._pin_plan(d, run)
             self._card_status(d['dispatch_id'], 'retrying', error_class)
             return 'retry_same'
-        if error_class in RETRY_SAME + SWITCH_NOW and d['step'] + 1 < len(plan):
+        grok_unavailable = run and run['provider'] == 'grok' and error_class in ('auth', 'model_unsupported', 'spawn_failed')
+        if (error_class in RETRY_SAME + SWITCH_NOW or grok_unavailable) and d['step'] + 1 < len(plan):
             with rt.transaction(self.db):
                 self.db.execute("UPDATE dispatches SET state='waiting',step=step+1,retries=0,partial_retries=0,next_at=?,"
                                 'updated_at=? WHERE dispatch_id=?', (now, now, d['dispatch_id']))
@@ -2167,7 +2176,7 @@ class Dispatcher:
         task = self.task_for_key(d['task_key'])
         if task is None:
             return {'ok': False, 'reason': 'unknown_task'}
-        only = {'auto': None, 'codex': 'codex', 'claude': 'claude'}[mode]
+        only = {'auto': None, 'codex': 'codex', 'claude': 'claude', 'grok': 'grok'}[mode]
         plan = self.plan_for(task, task['current'], self.config(), only=only)
         with self.rt.transaction(self.db):
             self.db.execute('UPDATE dispatch_pauses SET resumed_at=?,resumed_by=? WHERE task_key=? AND resumed_at IS NULL',
@@ -2178,7 +2187,7 @@ class Dispatcher:
                 self.db.execute("UPDATE dispatches SET state='superseded',updated_at=? WHERE dispatch_id=?", (now, other[0]))
             self.db.execute(f"UPDATE dispatches SET state='waiting',reason='{self.core.key}_retry',plan=?,step=0,retries=0,partial_retries=0,failures='[]',error_class=NULL,wait_reason=NULL,wait_since=NULL,next_at=?,updated_at=? WHERE dispatch_id=?",
                             (json.dumps(plan), now, now, dispatch_id))
-        label = {'auto': self.core.msg('dispatch.Dispatcher.retry.auto'), 'codex': self.core.msg('dispatch.Dispatcher.retry.codex'), 'claude': self.core.msg('dispatch.Dispatcher.retry.claude')}[mode]
+        label = {'auto': self.core.msg('dispatch.Dispatcher.retry.auto'), 'codex': self.core.msg('dispatch.Dispatcher.retry.codex'), 'claude': self.core.msg('dispatch.Dispatcher.retry.claude'), 'grok': 'Grok'}[mode]
         self._close_failure_card(d, self.core.msg('dispatch.Dispatcher.retry.1', label=label, actor=actor, clock=self.core._clock(now), tz_name=self.core.tz_name))
         self._card_status(dispatch_id, 'running')
         return {'ok': True, 'action': 'retry', 'mode': mode, 'dispatch_id': dispatch_id, 'plan': plan,
@@ -2208,7 +2217,7 @@ class Dispatcher:
                 plan[0]['why'] = 'degraded_reroute'  # recorded on the run, so the task returns once it is healthy
         else:
             plan = [self._step(p, 'fresh', None) for p in [provider] + wc.fallback_after(config, provider)]
-        if plan[0]['provider'] == 'claude':
+        if plan[0]['provider'] in ('claude', 'grok'):
             plan[0]['session'] = str(uuid.uuid4())
         dispatch_id = 'd' + uuid.uuid4().hex[:15]
         with rt.transaction(self.db):
@@ -2224,7 +2233,7 @@ class Dispatcher:
                             (dispatch_id, task['key'], task['task_id'], task['path'], 'waiting', 'launch', reason,
                              json.dumps(plan), now, prompt, int(important), now, now))
         if plan[0]['session']:
-            self._register_current(self._dispatch(dispatch_id), 'claude', plan[0]['session'], now, 'launch')
+            self._register_current(self._dispatch(dispatch_id), plan[0]['provider'], plan[0]['session'], now, 'launch')
         return dispatch_id
 
     # ---- cards (the assistant, the owner's language, the owner-only channel) ----
@@ -2627,7 +2636,7 @@ class DispatchCore:
         self.ask_owner = ask_owner
         self.key, self.name = owner_key, owner_name
         self.holding = ('paused', 'failed', f'needs_{self.key}')
-        self.strip_env_exact = ('CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_ENV_FILE',
+        self.strip_env_exact = ('GROK_SESSION_ID', 'GROK_AGENT', 'CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_ENV_FILE',
                                 self.run_id_env, self.task_env, self.hops_env, self.run_context_env)
         self.why_label = {'long_lived': self.msg('dispatch.why_label.long_lived'), 'context_cap': self.msg('dispatch.why_label.context_cap'),
                           'cap_handoff': self.msg('dispatch.why_label.cap_handoff'), 'auto_return': self.msg('dispatch.why_label.auto_return'),

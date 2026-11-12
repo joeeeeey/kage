@@ -22,8 +22,8 @@ import time
 
 from kage import locale
 
-PROVIDERS = ('codex', 'claude')
-LABEL = {'codex': 'Codex', 'claude': 'Claude'}
+PROVIDERS = ('codex', 'claude', 'grok')
+LABEL = {'codex': 'Codex', 'claude': 'Claude', 'grok': 'Grok'}
 HEALTHY, DEGRADED = 'healthy', 'degraded'
 PROVIDER_FAILURES = ('transient', 'rate_limited', 'quota', 'run_timeout')
 OVERLOAD_FAILURES = ('transient', 'rate_limited')
@@ -123,8 +123,9 @@ def _save(rt, db, row, now, event=None, detail=None):
 # ---------------------------------------------------------------------------
 
 def default_model(config, provider):
-    spec = config['providers'][provider]
-    return spec['model'] if provider == 'codex' else spec['model_default']
+    from kage.adapters.providers.grok import DEFAULTS
+    spec = config['providers'].get(provider, DEFAULTS if provider == 'grok' else {})
+    return spec['model_default'] if provider == 'claude' else spec['model']
 
 
 # ---------------------------------------------------------------------------
@@ -159,6 +160,9 @@ def overview(db, wc, config, now=None, limit=20):
     limits = wc.slow_limits(config)
     providers = []
     for provider in PROVIDERS:
+        if provider == 'grok' and 'grok' not in config['providers'] and not db.execute(
+                "SELECT 1 FROM consumer_runs WHERE provider='grok' LIMIT 1").fetchone():
+            continue  # an optional provider this deployment never configured nor ran
         row = _row(db, provider)
         providers.append({'provider': provider, 'label': LABEL[provider], 'model': default_model(config, provider),
                           'status': row['status'], 'since': row['since'], 'clean_checks': row['clean_checks'],
@@ -238,7 +242,8 @@ class ProviderHealth:
         name = self.msg('health.name', model=model, provider=LABEL[provider])
         if kind == HEALTHY:
             return self.msg('health.recovered', name=name)
-        order = list(config['routing']['fallback_order']) + [p for p in PROVIDERS if p not in config['routing']['fallback_order']]
+        from kage.core.worker_config import fallback_after
+        order = fallback_after(config, provider)
         alt = next((p for p in order if p != provider and health.get(p) != DEGRADED), None)
         first = (self.msg('health.degraded_switched', name=name, alt=LABEL[alt]) if alt else
                  self.msg('health.degraded_both', name=name))

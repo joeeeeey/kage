@@ -158,7 +158,7 @@ class Renderer:
     """Stateful per run; `feed` turns one raw event into zero or more entries."""
 
     def __init__(self, provider, state=None, log=None):
-        self.provider = provider if provider in ('codex', 'claude') else 'codex'
+        self.provider = provider if provider in ('codex', 'claude', 'grok') else 'codex'
         self.log = log or RunLog()
         self.msg = self.log.msg
         state = state or {}
@@ -185,9 +185,20 @@ class Renderer:
             return []
         at = _event_time(event, seen_at)
         try:
-            return (self._claude if self.provider == 'claude' else self._codex)(event, at)
+            return {'claude': self._claude, 'codex': self._codex, 'grok': self._grok}[self.provider](event, at)
         except Exception:  # noqa: BLE001 - a surprising event shape never breaks the log
             return [self._entry(at, 'raw', str(event.get('type') or 'event'))]
+
+    def _grok(self, event, at):
+        from kage.adapters.providers.grok import Grok
+        info = Grok().parse_run_log(json.dumps(event))
+        if info['cli_ok'] is False:
+            message = ' '.join(info['errors'])
+            self._marker(message, always=True)
+            return [self._entry(at, 'error', message)]
+        if info['final'] is not None:
+            return [self._entry(at, 'result', info['final'])]
+        return []
 
     # ---- Codex `exec --json` ----
     def _codex(self, e, at):
@@ -442,7 +453,7 @@ def _append(run_dir, lines):
 def provider_of(run_dir, default=None):
     try:
         meta = json.loads((Path(run_dir) / 'meta.json').read_text(encoding='utf-8'))
-        if meta.get('provider') in ('codex', 'claude'):
+        if meta.get('provider') in ('codex', 'claude', 'grok'):
             return meta['provider']
     except (OSError, ValueError):
         pass

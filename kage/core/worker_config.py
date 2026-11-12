@@ -54,7 +54,7 @@ from kage import locale
 SCHEMA_VERSION = 1
 
 
-PROVIDERS = ('codex', 'claude')
+PROVIDERS = ('codex', 'claude', 'grok')
 
 
 EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
@@ -173,7 +173,8 @@ ENV_NAME_RE = re.compile(r'[A-Z][A-Z0-9_]{1,63}')
 
 
 PROVIDER_KEYS = {'claude': ('model_default', 'model_important', 'effort', 'yolo_args'),
-                 'codex': ('model', 'effort', 'yolo_args')}
+                 'codex': ('model', 'effort', 'yolo_args'),
+                 'grok': ('model', 'effort', 'yolo_args')}
 
 
 def _fail(field, why='invalid'):
@@ -316,14 +317,15 @@ def provider_order(config, category):
 def fallback_after(config, provider):
     """Providers to try after `provider` failed at the infrastructure level, in configured order."""
     order = list(config['routing']['fallback_order'])
-    order += [p for p in PROVIDERS if p not in order]
+    order += [p for p in PROVIDERS if p not in order and p != 'grok']
     return [p for p in order if p != provider]
 
 
 def model_for(config, provider, important=False):
     """(model, effort, yolo_args) for a dispatched run; model IDs come only from the config."""
-    spec = config['providers'][provider]
-    model = spec['model'] if provider == 'codex' else spec['model_important' if important else 'model_default']
+    from kage.adapters.providers.grok import DEFAULTS as GROK_DEFAULTS
+    spec = config['providers'].get(provider, GROK_DEFAULTS if provider == 'grok' else {})
+    model = spec['model'] if provider != 'claude' else spec['model_important' if important else 'model_default']
     return model, spec['effort'], list(spec['yolo_args'])
 
 
@@ -472,6 +474,8 @@ class WorkerConfig:
         providers = raw['providers']
         _keys(providers, PROVIDERS, 'providers')
         for name in PROVIDERS:
+            if name == 'grok' and name not in providers:
+                continue  # Older deployments keep their existing defaults and fallback order.
             spec = providers.get(name)
             if spec is None:
                 _fail(f'providers_{name}', 'missing')
@@ -792,7 +796,7 @@ class WorkerConfig:
                 return control['model'] or model, control['effort'] or effort, yolo
             return model_for(config, provider, important)
         if role and provider == intake[f'{role}_provider']:
-            return intake[f'{role}_model'], intake[f'{role}_effort'], list(config['providers'][provider]['yolo_args'])
+            return intake[f'{role}_model'], intake[f'{role}_effort'], model_for(config, provider)[2]
         return model_for(config, provider, important)
 
     def set_value(self, key, value_text, who, path=None, now=None):

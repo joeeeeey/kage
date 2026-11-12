@@ -382,13 +382,13 @@ class _identity:
         self.provider, self.session, self.saved = provider, session, {}
 
     def __enter__(self):
-        for key in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
+        for key in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'GROK_SESSION_ID'):
             self.saved[key] = os.environ.pop(key, None)
-        os.environ['CLAUDE_CODE_SESSION_ID' if self.provider == 'claude' else 'CODEX_THREAD_ID'] = self.session
+        os.environ[{'claude': 'CLAUDE_CODE_SESSION_ID', 'codex': 'CODEX_THREAD_ID', 'grok': 'GROK_SESSION_ID'}[self.provider]] = self.session
         return self
 
     def __exit__(self, *exc):
-        for key in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID'):
+        for key in ('CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID', 'GROK_SESSION_ID'):
             os.environ.pop(key, None)
             if self.saved.get(key) is not None:
                 os.environ[key] = self.saved[key]
@@ -1121,7 +1121,7 @@ class Blockers:
             if not SLUG_RE.fullmatch(slug):
                 raise ValueError(f'proposal_{n}_slug_must_be_3_to_51_lowercase_ascii_letters_digits_or_dashes')
             provider = p.get('provider') or 'auto'
-            if provider not in ('auto', 'codex', 'claude'):
+            if provider not in ('auto', 'codex', 'claude', 'grok'):
                 raise ValueError(f'proposal_{n}_provider_must_be_auto_codex_or_claude')
             category = p.get('category') or 'dev'
             if not rt.worker_config.CATEGORY_RE.fullmatch(str(category)):

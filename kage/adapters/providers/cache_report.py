@@ -110,6 +110,27 @@ def codex_usage(path):
             'first_input': inp, 'turns': turns, 'output_tokens': output, 'api_calls': None}
 
 
+def grok_usage(path):
+    """Grok result counters use uncached input plus separate cache read/write counts."""
+    from kage.adapters.providers.grok import result_events
+    try:
+        text = Path(path).read_text(encoding='utf-8')
+    except OSError:
+        return None
+    result = next((e for e in reversed(list(result_events(text))) if isinstance(e.get('usage'), dict)), None)
+    if result is None:
+        return None
+    usage = result['usage']
+    inp = _num(usage.get('input_tokens', usage.get('inputTokens')))
+    read = _num(usage.get('cache_read_input_tokens', usage.get('cacheReadInputTokens')))
+    write = _num(usage.get('cache_creation_input_tokens', usage.get('cacheCreationInputTokens')))
+    output = _num(usage.get('output_tokens', usage.get('outputTokens')))
+    return {'input_tokens': inp, 'cache_creation_input_tokens': write,
+            'cache_read_input_tokens': read, 'first_input': inp + read + write, 'output_tokens': output,
+            'total_input': inp, 'total_read': read, 'total_write': write,
+            'turns': result.get('num_turns'), 'api_calls': None, 'cost_usd': result.get('total_cost_usd')}
+
+
 def profile_label(meta):
     """`p39` for a run without the P40 context record, else e.g. `p40:inbox:names,no-git,sys-rules,ttl=1h`; P40.1 (a
     constant first message) e.g. `p40.1:inbox:names,no-git,const,no-mem,no-mcp,drop=13,ttl=1h`."""
@@ -248,7 +269,7 @@ def report(db, since_hours=24.0, task=None, provider=None, limit=50, now=None):
         usage = None
         if row['log_dir']:
             log = Path(row['log_dir'], 'events.jsonl')
-            usage = claude_usage(log) if row['provider'] == 'claude' else codex_usage(log)
+            usage = {'claude': claude_usage, 'codex': codex_usage, 'grok': grok_usage}.get(row['provider'], lambda p: None)(log)
         gap = round(started - prev) if prev is not None and started >= prev else None
         item = {'run_id': row['run_id'], 'task': row['task'], 'provider': row['provider'], 'model': row['model'],
                 'mode': row['mode'], 'trigger': row['trigger'], 'outcome': row['outcome'],

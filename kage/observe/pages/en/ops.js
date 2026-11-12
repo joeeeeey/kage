@@ -9,7 +9,7 @@
   const toasts = document.getElementById('toasts');
   const TZ = '{{tz_name}}';
 
-  const PROVIDER = { codex: 'Codex', claude: 'Claude' };
+  const PROVIDER = { codex: 'Codex', claude: 'Claude', grok: 'Grok' };
   const RUN_STATE = { running: 'Running', ended: 'Ended' };
   const OUTCOME = {
     success: ['Succeeded', 'good'], failed: ['Failed', 'bad'], partial: ['Partly handled', 'warn'],
@@ -1832,6 +1832,7 @@
   // Settings
   // =====================================================================
   const FIELD_LABEL = {
+    'providers.grok.model': 'Grok model', 'providers.grok.effort': 'Grok effort',
     'providers.claude.model_default': 'Claude default model', 'providers.claude.model_important': 'Claude model for important tasks',
     'providers.claude.effort': 'Claude effort', 'providers.codex.model': 'Codex model', 'providers.codex.effort': 'Codex effort',
     'routing.categories': 'Task category → provider', 'routing.fallback_order': 'Fallback order',
@@ -1889,9 +1890,9 @@
     [/^must_be_an_integer_(\d+)_to_(\d+)$/, (m) => `Must be an integer from ${m[1]} to ${m[2]}`],
     [/^must_be_0_or_(\d+)_to_(\d+)$/, (m) => `Must be 0 (off) or an integer from ${m[1]} to ${m[2]}`],
     [/^must_be_true_or_false$/, 'Must be on or off'],
-    [/^must_list_distinct_providers$/, 'Must list codex / claude without repeats'],
+    [/^must_list_distinct_providers$/, 'Must list codex / claude / grok without repeats'],
     [/^must_be_a_non_empty_object$/, 'Keep at least one category'],
-    [/^must_map_category_to_codex_or_claude$/, 'Category names must start with a lowercase letter, use only a-z 0-9 _ -, and map to codex or claude'],
+    [/^must_map_category_to_codex_or_claude$/, 'Category names must start with a lowercase letter, use only a-z 0-9 _ -, and map to codex, claude or grok'],
     [/^must_be_distinct_channel_names_or_ids$/, 'One channel per line: #name or a C… channel ID, no duplicates'],
     [/^must_look_like_10h$/, 'Use a format like 10h, 30m, 2d'],
     [/^must_be_1h_to_7d$/, 'Must be between 1 hour and 7 days'],
@@ -1899,7 +1900,7 @@
     [/^must_be_a_list_of_up_to_20_env_var_names$/, 'Variable names only (uppercase letters, digits, underscores), up to 20'],
     [/^must_be_up_to_5_distinct_single_line_queries$/, 'Up to 5 distinct single-line queries'],
     [/^must_be_up_to_20_app_name_patterns$/, 'Up to 20 entries, each 1–60 characters: letters, digits, * _ -'],
-    [/^must_be_codex_or_claude$/, 'Must be codex or claude'],
+    [/^must_be_codex_or_claude$/, 'Must be codex, claude or grok'],
     [/^must_differ_from_inbox_task$/, 'Must differ from the Intake task'],
     [/^must_not_exceed_probe_max_seconds$/, 'Must not exceed the max probe interval'],
   ];
@@ -2183,6 +2184,8 @@
           field('providers.claude.effort', select('providers.claude.effort', efforts)),
           field('providers.codex.model', text('providers.codex.model'), 'Passed to codex via -m; ~/.codex/config.toml is left unchanged'),
           field('providers.codex.effort', select('providers.codex.effort', efforts)),
+          ...(st.config.providers.grok ? [field('providers.grok.model', text('providers.grok.model')),
+            field('providers.grok.effort', select('providers.grok.effort', efforts))] : []),
         ], 'Each background run reads the latest config when it starts; sessions already running are not affected.'),
         section('Routing', 'ROUTING', [
           field('routing.categories', categories(), 'New tasks pick a provider by category'),

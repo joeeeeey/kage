@@ -9,7 +9,7 @@
   const toasts = document.getElementById('toasts');
   const TZ = '{{tz_name}}';
 
-  const PROVIDER = { codex: 'Codex', claude: 'Claude' };
+  const PROVIDER = { codex: 'Codex', claude: 'Claude', grok: 'Grok' };
   const RUN_STATE = { running: '运行中', ended: '已结束' };
   const OUTCOME = {
     success: ['成功', 'good'], failed: ['失败', 'bad'], partial: ['部分处理', 'warn'],
@@ -1832,6 +1832,7 @@
   // Settings
   // =====================================================================
   const FIELD_LABEL = {
+    'providers.grok.model': 'Grok 模型', 'providers.grok.effort': 'Grok 推理强度',
     'providers.claude.model_default': 'Claude 默认模型', 'providers.claude.model_important': 'Claude 重要任务模型',
     'providers.claude.effort': 'Claude effort', 'providers.codex.model': 'Codex 模型', 'providers.codex.effort': 'Codex effort',
     'routing.categories': '任务类别 → provider', 'routing.fallback_order': '后备顺序',
@@ -1889,9 +1890,9 @@
     [/^must_be_an_integer_(\d+)_to_(\d+)$/, (m) => `必须是 ${m[1]} 到 ${m[2]} 的整数`],
     [/^must_be_0_or_(\d+)_to_(\d+)$/, (m) => `只能是 0（关），或 ${m[1]} 到 ${m[2]} 的整数`],
     [/^must_be_true_or_false$/, '只能是开或关'],
-    [/^must_list_distinct_providers$/, '必须列出不重复的 codex / claude'],
+    [/^must_list_distinct_providers$/, '必须列出不重复的 codex / claude / grok'],
     [/^must_be_a_non_empty_object$/, '至少保留一个类别'],
-    [/^must_map_category_to_codex_or_claude$/, '类别名只能用小写字母开头的 a-z 0-9 _ -，并映射到 codex 或 claude'],
+    [/^must_map_category_to_codex_or_claude$/, '类别名只能用小写字母开头的 a-z 0-9 _ -，并映射到 codex、claude 或 grok'],
     [/^must_be_distinct_channel_names_or_ids$/, '每行一个频道：#名字 或 C… 频道 ID，不能重复'],
     [/^must_look_like_10h$/, '格式类似 10h、30m、2d'],
     [/^must_be_1h_to_7d$/, '必须在 1 小时到 7 天之间'],
@@ -1899,7 +1900,7 @@
     [/^must_be_a_list_of_up_to_20_env_var_names$/, '只能填变量名（大写字母、数字、下划线），最多 20 个'],
     [/^must_be_up_to_5_distinct_single_line_queries$/, '最多 5 条、互不重复的单行查询'],
     [/^must_be_up_to_20_app_name_patterns$/, '最多 20 条，每条 1–60 个字符：字母、数字、* _ -'],
-    [/^must_be_codex_or_claude$/, '只能选 codex 或 claude'],
+    [/^must_be_codex_or_claude$/, '只能选 codex、claude 或 grok'],
     [/^must_differ_from_inbox_task$/, '不能和收件处任务相同'],
     [/^must_not_exceed_probe_max_seconds$/, '不能比最长探测间隔还长'],
   ];
@@ -2183,6 +2184,8 @@
           field('providers.claude.effort', select('providers.claude.effort', efforts)),
           field('providers.codex.model', text('providers.codex.model'), '通过 -m 传给 codex，不改 ~/.codex/config.toml'),
           field('providers.codex.effort', select('providers.codex.effort', efforts)),
+          ...(st.config.providers.grok ? [field('providers.grok.model', text('providers.grok.model')),
+            field('providers.grok.effort', select('providers.grok.effort', efforts))] : []),
         ], '每次启动后台运行时读取最新配置；已在运行的会话不受影响。'),
         section('路由', 'ROUTING', [
           field('routing.categories', categories(), '新任务按类别选 provider'),

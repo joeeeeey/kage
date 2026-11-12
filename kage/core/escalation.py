@@ -495,7 +495,7 @@ class EscalationCore:
             with self.rt.transaction(db):
                 self.rt.schedule.note_window(db, w['channel'], held['ts'], self.rt.registry.task_id_for_cwd(w['cwd']), 'holding_message',
                                      e['author'] if re.fullmatch(r'U[A-Z0-9]+', str(e['author'])) else None)
-        self.rt.slack.add_reactions(user_token, e['channel'], e['ts'], ['thinking_face', self.rt.RECEIPT_EMOJI['claude' if self.rt.claude.provider(owner) == 'claude' else 'codex']])
+        self.rt.slack.add_reactions(user_token, e['channel'], e['ts'], ['thinking_face', self.rt.RECEIPT_EMOJI.get(self.rt.claude.provider(owner), 'robot_face')])
         link = f"{self.deployment.owner.slack_workspace_url}/archives/{e['channel']}/p{e['ts'].replace('.', '')}"
         # Escape supplied plain text so it cannot insert mentions or Slack links. P3.1: the question leads; the source
         # message link and the task move to the footer.

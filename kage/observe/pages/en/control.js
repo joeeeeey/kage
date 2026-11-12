@@ -217,7 +217,7 @@
 
   function renderSettings(d) {
     const body = $('ctl-settings-body');
-    const providers = (d.enums && d.enums.providers) || ['claude', 'codex'];
+    const providers = (d.enums && d.enums.providers) || ['claude', 'codex', 'grok'];
     const efforts = (d.enums && d.enums.efforts) || [];
     const sel = (name, options, value) => h('select', { name },
       options.map((o) => h('option', { value: o, selected: o === (value || '') ? true : null, text: o || 'Default' })));

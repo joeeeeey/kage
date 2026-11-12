@@ -8,7 +8,7 @@
         schedule: "7 10 * * 1"     # 5-field cron in the owner's local time; or `every: 15m` .. `30d`
         prompt: "…"
         scope: "…"
-        enabled: true               # optional: until (YYYY-MM-DD or ISO with offset), provider (codex | claude)
+        enabled: true               # optional: until (YYYY-MM-DD or ISO with offset), provider (codex | claude | grok)
 
 One top-level `routines:` list of flat mappings; scalars are plain, 'single' or "double" quoted strings, integers,
 true / false, null. Anything else (nesting, flow collections, block scalars, anchors, tabs) is an error with its line.
@@ -447,7 +447,7 @@ class Routines:
                     problems.append(f'{key}_looks_like_it_contains_a_credential')
         if 'enabled' in entry and not isinstance(entry['enabled'], bool):
             problems.append('enabled_must_be_true_or_false')
-        if entry.get('provider') not in (None, 'codex', 'claude'):
+        if entry.get('provider') not in (None, 'codex', 'claude', 'grok'):
             problems.append('provider_must_be_codex_or_claude')
         if entry.get('until') is not None:
             try:
@@ -795,7 +795,7 @@ class Routines:
         (no current session -> fresh headless launch), then optionally fires it again (current session -> revival).
         The TEST routine never outlives the smoke: it carries an `until` just past the smoke's timeout (covers --no-wait
         and an interrupted smoke) and is disabled when the smoke finishes."""
-        if provider not in ('codex', 'claude'):
+        if provider not in ('codex', 'claude', 'grok'):
             raise ValueError('provider_must_be_codex_or_claude')
         limits = limits_of(rt)
         if not limits['enabled']:

@@ -100,7 +100,8 @@ class RcExportsAndProvidersTest(unittest.TestCase):
         current['claude'] = fake('claude-2')
         self.assertEqual(p.lean_claude({}, '/cwd'), ('claude-2', '/cwd'))
         self.assertEqual(p.build_command('codex', 'resume', None, 'p', 'm', 'e', [], '/run'), ('codex', 'resume'))
-        self.assertEqual(p.parse_run_log('other', 'log'), ('codex', 'log'))
+        with self.assertRaises(KeyError):
+            p.parse_run_log('other', 'log')
 
 
 if __name__ == '__main__':

@@ -305,7 +305,7 @@ def provider_checks(providers: list[str], probe: Probe) -> list[dict[str, Any]]:
     any_ok = any(found.values())
     out = [check(f'provider.{p}', False, v is not None, v or 'not found on PATH', f'install the {p} CLI and log in')
            for p, v in found.items()] + [check('provider.any', True, any_ok, 'at least one agent CLI runs' if any_ok
-                                               else 'no agent CLI found', 'install claude or codex')]
+                                               else 'no agent CLI found', 'install claude, codex or grok')]
     if found.get('codex'):  # 0.78.5 (F17): without a liveness tool a Codex task's events wait forever
         tool = probe.codex_liveness_tool()
         out.append(check('liveness.codex', True, tool is not None, f'Codex session liveness via {tool}' if tool else
@@ -396,7 +396,7 @@ def port_checks(store) -> list[dict[str, Any]]:
 
 
 def run(owner, *, probe: Probe, tokens, db_path: Path, db: sqlite3.Connection | None, health: dict[str, Any] | None,
-        profile_dir: Path | None, providers=('claude', 'codex'), offline=False, secret_store=None,
+        profile_dir: Path | None, providers=('claude', 'codex', 'grok'), offline=False, secret_store=None,
         voice: str | None = None, system: dict[str, Any] | None = None,
         intake: dict[str, Any] | None = None) -> dict[str, Any]:
     root = deployment_root(profile_dir, getattr(owner, 'key', 'owner'), probe.environ)

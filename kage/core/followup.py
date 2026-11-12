@@ -691,7 +691,7 @@ class FollowupCore:
     def ask_owner_footer(self, provider, session, task_id, lang=None, extra=None, tag=None):
         """Context line under the buttons: task name (or session), provider, an optional detail (dashboard link) and, P43,
         the session tag of a background session (`session_footer`)."""
-        name = 'Claude' if provider == 'claude' else 'Codex'
+        name = {'claude': 'Claude', 'grok': 'Grok'}.get(provider, 'Codex')
         lang = lang or locale.card_lang(self.language)
         if task_id:
             who = f'{task_id} · {name}'

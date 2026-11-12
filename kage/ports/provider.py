@@ -57,14 +57,15 @@ class Provider:
 
 
 class Providers:
-    """A deployment's providers by name (claude, else codex) and the dispatcher's calls on them. `claude` / `codex`:
+    """A deployment's providers by explicit name and the dispatcher's calls on them. `claude` / `codex` / `grok`:
     callables that return the deployment's provider objects at call time (a replaced one is the one used)."""
 
-    def __init__(self, *, claude, codex):
-        self.claude, self.codex = claude, codex
+    def __init__(self, *, claude, codex, grok=None):
+        from kage.adapters.providers.grok import Grok
+        self.claude, self.codex, self.grok = claude, codex, grok or Grok
 
     def _provider(self, name):
-        return self.claude() if name == 'claude' else self.codex()
+        return {'claude': self.claude, 'codex': self.codex, 'grok': self.grok}[name]()
 
     def lean_claude(self, profile, cwd, home=None):
         """(settings, extra argv, summary) of a task class's lean-context profile; see kage.adapters.providers.claude."""

@@ -13,7 +13,7 @@ import sqlite3
 import time
 import uuid
 
-PROVIDERS = ('codex', 'claude')
+PROVIDERS = ('codex', 'claude', 'grok')
 
 
 def provider(w):
@@ -25,6 +25,8 @@ def provider(w):
 
 def actor():
     # A Claude child may inherit CODEX_THREAD_ID; its explicit native binding wins.
+    if os.environ.get('GROK_SESSION_ID'):
+        return 'grok', os.environ['GROK_SESSION_ID']
     if os.environ.get('CLAUDE_CODE_SESSION_ID'):
         return 'claude', os.environ['CLAUDE_CODE_SESSION_ID']
     return 'codex', os.environ.get('CODEX_THREAD_ID')

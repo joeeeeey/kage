@@ -204,6 +204,7 @@
   // logo is null on purpose: the bundled /assets/claude-logo.png is a photo of a person, not a brand mark,
   // so the badge uses a CSS glyph unless the API supplies an explicit providers[].logo_url
   const KNOWN_ART = {
+    grok: { avatar: null, logo: null, glyph: "G" },
     codex: { avatar: "/assets/codex-agent.png", logo: null, glyph: "›_" },
     claude: { avatar: "/assets/claude-agent.png", logo: null, glyph: "C" },
   };
@@ -241,7 +242,7 @@
   // known providers have explicit palettes in CSS; anything else derives a hue so it never looks like a real brand
   function theme(node, id) {
     const k = str(id);
-    if (k === "codex" || k === "claude") node.setAttribute("data-prov", k);
+    if (k === "codex" || k === "claude" || k === "grok") node.setAttribute("data-prov", k);
     else { node.setAttribute("data-prov", "other"); node.style.setProperty("--h", String(hash(k) % 360)); }
     return node;
   }

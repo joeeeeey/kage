@@ -420,7 +420,7 @@ class CliCore:
         dstat.add_argument('--task')
         dstat.add_argument('--limit', type=int, default=20)
         for name, choices in (('dispatch-control', ['stop', 'resume', 'iterm', 'view']),
-                              ('dispatch-retry', ['auto', 'codex', 'claude'])):
+                              ('dispatch-retry', ['auto', 'codex', 'claude', 'grok'])):
             p = sub.add_parser(name, help='Receiver only: run/failure card buttons')
             p.add_argument('--dispatch-id', required=True)
             p.add_argument('--action' if name == 'dispatch-control' else '--mode', required=True, choices=choices)
@@ -1119,7 +1119,7 @@ class CliCore:
                                          args.message_ts)
             else:
                 choice = args.action if args.command == 'dispatch-control' else {
-                    'auto': 'retry', 'codex': 'retry_codex', 'claude': 'retry_claude'}[args.mode]
+                    'auto': 'retry', 'codex': 'retry_codex', 'claude': 'retry_claude', 'grok': 'retry_grok'}[args.mode]
                 result = self.rt.dispatch_action(db, db_path, 'dispatch', args.dispatch_id, choice, args.actor, args.channel,
                                          args.message_ts)
             if result.get('ok') and not result.get('duplicate') and result.get('action') not in ('iterm', 'view'):

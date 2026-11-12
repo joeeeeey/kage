@@ -75,7 +75,7 @@ class PromptsCore:
 
     def receipt(self, provider):
         """The provenance reaction of a provider's session: the runtime's RECEIPT_EMOJI (the deployment's values)."""
-        return self.rt.RECEIPT_EMOJI['claude' if provider == 'claude' else 'codex']
+        return self.rt.RECEIPT_EMOJI.get(provider, 'robot_face')
 
     def pattern(self, key):
         return locale.pattern(self.language, key).replace('<owner_key>', self.key).replace('<owner_name>', self.name)
@@ -108,8 +108,10 @@ class PromptsCore:
             timing = ('Legacy sliding lifetime: waiting/decision 1h, observe 15m. ')
         timing += ' New conversation activity resets cadence: 1,2,2,5,5,5,10,10,10,15 minutes, then 15 repeatedly. Resolution alone does not reset cadence.'
         provenance = self.receipt(self.rt.claude.provider(w))
-        owner_env = 'CLAUDE_CODE_SESSION_ID' if self.rt.claude.provider(w) == 'claude' else 'CODEX_THREAD_ID'
+        owner_env = {'claude': 'CLAUDE_CODE_SESSION_ID', 'codex': 'CODEX_THREAD_ID', 'grok': 'GROK_SESSION_ID'}[self.rt.claude.provider(w)]
         continuation = ('After resolving ALL event IDs, re-arm claude-wait --session-id ' + w['session'] + ' in the background, or use the native FileChanged/asyncRewake hooks. Do not spawn or resume another Claude. Recheck ownership/Stop before acting.' if self.rt.claude.provider(w) == 'claude' else 'Continue consuming the original Codex queue.')
+        if self.rt.claude.provider(w) == 'grok':
+            continuation = 'After resolving all events, finish. Further events are dispatched by a headless resume.'
         destination = ('local task inbox (notes / agent messages / intake bursts): reply only as `context --event` says '
                        '(send-to-task for agents; intake CLIs for Slack bursts)'
                        if w.get('kind') == self.rt.INBOX_KIND else
@@ -169,7 +171,7 @@ class PromptsCore:
         sentences that depend on the run (takeover, session note, first session) move into it, so the instructions are the
         same bytes for every run of the task and provider."""
         provider, session = step['provider'], step.get('session')
-        env_name = 'CLAUDE_CODE_SESSION_ID' if provider == 'claude' else 'CODEX_THREAD_ID'
+        env_name = {'claude': 'CLAUDE_CODE_SESSION_ID', 'codex': 'CODEX_THREAD_ID', 'grok': 'GROK_SESSION_ID'}[provider]
         sid = '"$' + env_name + '"'  # P40: also on a resume (the CLIs read the caller's identity from the same variable)
         path = (task or {}).get('path') or dispatch['task_path']
         name = dispatch['task_id'] or dispatch['task_key']
