@@ -16,6 +16,8 @@ args = sys.argv[1:]
 if '--version' in args:
     print('1.0.0 test')
     sys.exit(0)
+with open(Path.home() / 'grok-argv.jsonl', 'a') as log:
+    log.write(json.dumps(args) + '\n')
 if Path('.malformed-grok').exists():
     print('{')
     sys.exit(0)
@@ -49,6 +51,32 @@ else:
     history.write_text('session remembered\n')
 print(json.dumps({'text': json.dumps(done), 'sessionId': sid, 'stopReason': 'EndTurn',
                   'usage': {'inputTokens': 12, 'outputTokens': 3}}))
+'''
+
+
+# 0.79.1: the fake Claude of test_dispatch_run, unavailable while its task holds `.provider-down` (an overloaded API) and
+# ending cleanly without resolving anything while it holds `.leave-unresolved` (a task failure, e.g. tests failing).
+FLAKY_CLAUDE = test_dispatch_run.FAKE_CLAUDE.replace('''args = sys.argv[1:]
+''', '''args = sys.argv[1:]
+from pathlib import Path
+if Path('.provider-down').exists() and '--version' not in args and args[:1] != ['agents']:
+    print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True,
+                      'result': 'API Error: 529 overloaded'}))
+    sys.exit(1)
+if Path('.leave-unresolved').exists() and '-p' in args:
+    print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'Two tests fail; stopped.',
+                      'session_id': args[args.index('--resume') + 1] if '--resume' in args else 'unknown'}))
+    sys.exit(0)
+''', 1)
+
+# A Codex whose relay answers 503 to every run.
+DOWN_CODEX = r'''#!/usr/bin/env python3
+import json, sys
+if '--version' in sys.argv:
+    print('codex-cli 0.0.0 (test)')
+    sys.exit(0)
+print(json.dumps({'type': 'error', 'message': 'unexpected status 503 Service Unavailable'}))
+sys.exit(1)
 '''
 
 
@@ -127,3 +155,75 @@ class GrokDispatchTest(test_dispatch_run.DispatchRunTest):
         runs = self.wait_runs(supervisor, 't1', lambda rows: len(rows) >= 8 and rows[-1]['state'] == 'ended')
         self.assertEqual((runs[-2]['provider'], runs[-2]['error_class']), ('grok', 'spawn_failed'), self.diag())
         self.assertEqual((runs[-1]['provider'], runs[-1]['outcome']), ('claude', 'success'), self.diag())
+
+    def test_b_provider_failures_fall_back_to_grok_and_task_failures_do_not(self):
+        """0.79.1: an executor reaches Grok last (routing.fallback_order, config only); the intake triage task reaches
+        it first with triage.fallback's model and effort; a task failure never falls back."""
+        self.assertIn('.provider-down', FLAKY_CLAUDE)
+        for name, text in (('claude', FLAKY_CLAUDE), ('codex', DOWN_CODEX)):
+            (self.bin / name).write_text(text)
+            (self.bin / name).chmod(0o755)
+        self.ok('config', 'set', 'dispatch.enabled', 'true')
+        self.ok('config', 'set', 'dispatch.retry_backoff_seconds', '[]')
+        self.ok('config', 'set', 'routing.fallback_order', '["codex", "claude", "grok"]')
+        self.ok('config', 'set', 'intake.inbox_provider', '"claude"')
+        self.ok('config', 'set', 'triage.fallback', '{"provider": "grok", "model": "grok-test-triage", "effort": "low"}')
+        inbox = json.loads(self.ok('config', 'show').stdout)['config']['intake']['inbox_task']
+        prompt = self.tmp / 'prompt.md'; prompt.write_text('Complete the acceptance run.\n')
+        tasks = {}
+        for name in ('t1', inbox, 't2'):
+            tasks[name] = task = self.home / 'kage-tasks' / name
+            task.mkdir(parents=True)
+            (task / 'goal.md').write_text('# Goal\nFallback acceptance.\n')
+            (task / 'status.md').write_text('<!-- rev: 1 -->\n# Status\n')
+        (tasks['t1'] / '.provider-down').touch()
+        (tasks[inbox] / '.provider-down').touch()
+        log = open(self.tmp / 'supervisor.log', 'w'); self.addCleanup(log.close)
+        supervisor = subprocess.Popen([sys.executable, str(self.target / 'scripts/kage.py'), 'run'], env=self.env,
+                                      stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, cwd=str(self.tmp))
+        self.addCleanup(lambda: (supervisor.terminate(), supervisor.wait(20)))
+        self.wait_for_supervisor(supervisor)
+        from kage.core.mode import KEY
+        with sqlite3.connect(self.db) as db:
+            db.execute('UPDATE runtime_meta SET value=? WHERE key=?', ('active', KEY))
+
+        # An executor: Codex (503), then Claude (529), then Grok with its provider defaults.
+        self.ok('launch-task', '--task', str(tasks['t1']), '--provider', 'codex', '--prompt-file', str(prompt),
+                '--wait-seconds', '60')
+        runs = self.wait_runs(supervisor, 't1', lambda rows: len(rows) >= 3 and rows[-1]['state'] == 'ended')
+        self.assertEqual([(r['provider'], r['outcome'], r['error_class']) for r in runs],
+                         [('codex', 'failed', 'transient'), ('claude', 'failed', 'transient'), ('grok', 'success', None)],
+                         self.diag())
+        self.assertEqual(runs[-1]['model'], 'grok-4.7')
+
+        # The triage task: its Claude fails (529), Grok answers at once (no same-provider retry after a backoff) with the
+        # triage model and effort; Codex is never tried.
+        self.ok('config', 'set', 'dispatch.retry_backoff_seconds', '[600, 600]')
+        self.ok('launch-task', '--task', str(tasks[inbox]), '--prompt-file', str(prompt), '--wait-seconds', '60')
+        runs = self.wait_runs(supervisor, inbox, lambda rows: len(rows) >= 2 and rows[-1]['state'] == 'ended')
+        self.assertEqual([(r['provider'], r['outcome'], r['model']) for r in runs],
+                         [('claude', 'failed', runs[0]['model']), ('grok', 'success', 'grok-test-triage')], self.diag())
+        self.assertLess(runs[1]['started_at'] - runs[0]['ended_at'], 60, self.diag())
+        argv = [json.loads(line) for line in (self.home / 'grok-argv.jsonl').read_text().splitlines()]
+        self.assertEqual(argv[-1][argv[-1].index('--reasoning-effort') + 1], 'low')
+        self.assertIn('grok-test-triage', argv[-1])
+
+        # A task failure: the run ends cleanly with its event unresolved; the dispatch fails without any fallback.
+        self.ok('launch-task', '--task', str(tasks['t2']), '--provider', 'claude', '--prompt-file', str(prompt),
+                '--wait-seconds', '60')
+        self.wait_runs(supervisor, 't2', lambda rows: rows and rows[-1]['state'] == 'ended')
+        (tasks['t2'] / '.leave-unresolved').touch()
+        self.ok('note', '--task', 't2', '--text', 'Run the tests and fix them.')
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            with sqlite3.connect(self.db.as_uri() + '?mode=ro', uri=True) as db:
+                state = db.execute("SELECT state, error_class FROM dispatches WHERE task_key='t2' ORDER BY created_at "
+                                   'DESC LIMIT 1').fetchone()
+            if state and state[0] == 'failed':
+                break
+            self.assertIsNone(supervisor.poll(), self.diag())
+            time.sleep(.5)
+        self.assertEqual(tuple(state), ('failed', 'task_unresolved'), self.diag())
+        runs = self.rows('t2')
+        self.assertEqual([(r['provider'], r['outcome']) for r in runs], [('claude', 'success'), ('claude', 'unresolved')],
+                         self.diag())

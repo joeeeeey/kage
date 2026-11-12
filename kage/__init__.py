@@ -5,4 +5,4 @@ where an instance lives come from a deployment profile (see `kage.profile`). Sta
 """
 from __future__ import annotations
 
-__version__ = '0.79.0'
+__version__ = '0.79.1'

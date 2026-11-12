@@ -35,6 +35,10 @@ P44: `dispatch.provider_wait_hours` / `probe_min_seconds` / `probe_max_seconds` 
 P45: `RETIRED_KEYS` — keys of removed features (`blockers.guard_enabled`). A file that still holds one loads: the
 value must keep its old type (a bool) and is then dropped, so nothing reads it and the next `set` writes the file
 without it. Any other unknown key still fails closed.
+0.79.1: the sparse `triage` section — `triage.fallback` {provider, model, effort}: the provider an intake triage task
+(`triage.roles`, default the inbox) tries first when its own provider fails at the provider level, with that model and
+effort (`triage_fallback`); the dispatcher puts it ahead of `routing.fallback_order` and moves there at once (no
+same-provider retry). Without the section: as before.
 """
 from __future__ import annotations
 import contextlib
@@ -83,7 +87,7 @@ RETIRED_KEYS = {'blockers': ('guard_enabled',)}  # the P3.1 run-end guard
 
 # Phase 2 C1: sections the config may carry that are validated when present and never filled in from the defaults
 # (a config without one reads and prints exactly as before); readers merge their own defaults (`control_settings`).
-SPARSE_SECTIONS = ('control', 'system')
+SPARSE_SECTIONS = ('control', 'system', 'triage')
 
 
 # The control entry (kage.core.control): off unless the config turns it on. `task` None = `<owner key>-control`;
@@ -126,6 +130,43 @@ def _validate_system(spec):
             _fail(f'system_{metric}_warn_pct', f'must_be_below_{metric}_crit_pct')
 
 
+# 0.79.1: the intake triage fallback, a sparse section like `control`. `fallback` None = no triage fallback (the plan is
+# `routing.fallback_order` as before); its `model` / `effort` None = that provider's defaults (`model_for`).
+TRIAGE_DEFAULTS = {'fallback': None, 'roles': ['inbox']}
+TRIAGE_ROLES = ('inbox', 'oncall')
+TRIAGE_FALLBACK_KEYS = ('provider', 'model', 'effort')
+
+
+def _validate_triage(spec):
+    _keys(spec, TRIAGE_DEFAULTS, 'triage')
+    if 'roles' in spec:
+        roles = spec['roles']
+        if not isinstance(roles, list) or not roles or len(set(map(str, roles))) != len(roles) or any(
+                r not in TRIAGE_ROLES for r in roles):
+            _fail('triage_roles', 'must_list_distinct_' + '_or_'.join(TRIAGE_ROLES))
+    fallback = spec.get('fallback')
+    if fallback is None:
+        return
+    _keys(fallback, TRIAGE_FALLBACK_KEYS, 'triage_fallback')
+    if fallback.get('provider') not in PROVIDERS:
+        _fail('triage_fallback_provider', 'must_be_one_of_' + '_'.join(PROVIDERS))
+    model, effort = fallback.get('model'), fallback.get('effort')
+    if model is not None and (not isinstance(model, str) or not MODEL_RE.fullmatch(model)):
+        _fail('triage_fallback_model', 'must_be_a_model_id')
+    if effort is not None and effort not in EFFORTS:
+        _fail('triage_fallback_effort', 'must_be_one_of_' + '_'.join(EFFORTS))
+
+
+def triage_fallback(config, role):
+    """The `triage.fallback` object ({provider, model, effort}, absent keys None) when `role` (an intake role) is one of
+    `triage.roles`, else None."""
+    raw = (config or {}).get('triage') if isinstance(config, dict) else None
+    spec = {**TRIAGE_DEFAULTS, **(raw if isinstance(raw, dict) else {})}
+    if not role or role not in spec['roles'] or not isinstance(spec['fallback'], dict):
+        return None
+    return {key: spec['fallback'].get(key) for key in TRIAGE_FALLBACK_KEYS}
+
+
 def control_settings(config, owner_key):
     """The control section of a loaded config with its defaults (the task named by the owner key when not set)."""
     raw = (config or {}).get('control') if isinstance(config, dict) else None
@@ -157,7 +198,8 @@ def _validate_control(spec):
 
 
 def _open_sparse(config, key):
-    """Before a `control.*` / `system.*` key is set on a config without that section: an empty section to set it in."""
+    """Before a `control.*` / `system.*` / `triage.*` key is set on a config without that section: an empty section to
+    set it in."""
     head = str(key).split('.', 1)[0]
     if head in SPARSE_SECTIONS and head not in config:
         config[head] = {}
@@ -471,6 +513,8 @@ class WorkerConfig:
             _validate_control(raw['control'])
         if 'system' in raw:
             _validate_system(raw['system'])
+        if 'triage' in raw:
+            _validate_triage(raw['triage'])
         providers = raw['providers']
         _keys(providers, PROVIDERS, 'providers')
         for name in PROVIDERS:
@@ -786,7 +830,8 @@ class WorkerConfig:
 
     def model_for_task(self, config, provider, important=False, task_id=None):
         """Like model_for, but the <owner key>-inbox / <owner key>-oncall tasks use intake.<role>_model/_effort when they run on
-        their configured provider (a fallback to the other provider uses that provider's defaults)."""
+        their configured provider; on the triage fallback's provider (0.79.1, `triage_fallback`) its model / effort; a
+        fallback to any other provider uses that provider's defaults."""
         role = self.intake_role(config, task_id)
         intake = {**self.defaults['intake'], **(config.get('intake') or {})}
         if role == 'control':
@@ -797,6 +842,10 @@ class WorkerConfig:
             return model_for(config, provider, important)
         if role and provider == intake[f'{role}_provider']:
             return intake[f'{role}_model'], intake[f'{role}_effort'], model_for(config, provider)[2]
+        fallback = triage_fallback(config, role)
+        if fallback and provider == fallback['provider']:
+            model, effort, yolo = model_for(config, provider, important)
+            return fallback['model'] or model, fallback['effort'] or effort, yolo
         return model_for(config, provider, important)
 
     def set_value(self, key, value_text, who, path=None, now=None):

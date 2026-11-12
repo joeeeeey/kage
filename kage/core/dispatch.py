@@ -23,6 +23,7 @@ from kage import locale
 from kage.core import mode as _mode
 from kage.core import observe as _observe
 from kage.core.worker_config import control_settings as _control_settings
+from kage.core.worker_config import triage_fallback as _triage_fallback
 
 HELD = 'dispatched'
 
@@ -737,14 +738,24 @@ class Dispatcher:
             elif rotate and displaced:
                 why = 'auto_return'
             if (health or {}).get(start) == DEGRADED:
-                alt = next((p for p in [preferred] + wc.fallback_after(config, preferred) if health.get(p) != DEGRADED),
-                           None)
+                alt = next((p for p in [preferred] + self._fallbacks(config, task['task_id'], preferred)
+                            if health.get(p) != DEGRADED), None)
                 if alt is not None and alt != start:
                     start, why = alt, 'degraded_reroute'
             steps = [self._step(start, 'fresh', None, why)]
-        for provider in self._by_health(wc.fallback_after(config, steps[0]['provider']), health):
+        for provider in self._by_health(self._fallbacks(config, task['task_id'], steps[0]['provider']), health):
             steps.append(self._step(provider, 'fresh', None))
         return steps
+
+    def _fallbacks(self, config, task_id, provider):
+        """The providers to try after `provider` (`fallback_after`); 0.79.1: for an intake triage task (`triage.roles`) the
+        triage fallback's provider (`triage.fallback`) first, unless it is `provider` itself."""
+        wc = self.rt.worker_config
+        order = wc.fallback_after(config, provider)
+        fallback = _triage_fallback(config, wc.intake_role(config, task_id))
+        if not fallback or fallback['provider'] == provider:
+            return order
+        return [fallback['provider']] + [p for p in order if p != fallback['provider']]
 
     # ---- P38: plan inputs ----
     @staticmethod
@@ -2000,7 +2011,7 @@ class Dispatcher:
                                 'updated_at=? WHERE dispatch_id=?', (now, now, d['dispatch_id']))
             self._card_status(d['dispatch_id'], 'fallback', error_class)
             return 'fallback'
-        if error_class in RETRY_SAME and d['retries'] < len(backoff):
+        if error_class in RETRY_SAME and d['retries'] < len(backoff) and not self._triage_switch(d, plan):
             with rt.transaction(self.db):
                 self.db.execute("UPDATE dispatches SET state='waiting',retries=retries+1,next_at=?,updated_at=? "
                                 'WHERE dispatch_id=?', (now + backoff[d['retries']], now, d['dispatch_id']))
@@ -2021,6 +2032,18 @@ class Dispatcher:
         except Exception as exc:  # noqa: BLE001 - the wait never strands a batch: fail as before
             self.rt._meta_error(self.db, 'provider_wait_error', exc)
         return self._fail(self._dispatch(d['dispatch_id']), error_class, now)
+
+    def _triage_switch(self, d, plan):
+        """0.79.1: an intake triage task whose next step is its triage fallback (`triage.fallback`, another provider)
+        moves there at once on a provider-side failure instead of retrying the same provider after a backoff."""
+        try:
+            config = self.config()
+        except ValueError:
+            return False
+        fallback = _triage_fallback(config, self.rt.worker_config.intake_role(config, d['task_id']))
+        step = d['step']
+        return bool(fallback) and step + 1 < len(plan) and \
+            plan[step + 1]['provider'] == fallback['provider'] != plan[step]['provider']
 
     def _provider_wait(self, d, error_class, failures, now):
         """P44: instead of a failure card, wait for a provider to come back when the retries and fallbacks ran out on a
@@ -2204,19 +2227,18 @@ class Dispatcher:
         the preferred one (`_preferred`); important / category -> the stored ones. A non-persisting launch never
         touches the stored preference."""
         rt = self.rt
-        wc = rt.worker_config
         now = self.clock() if now is None else now
         config = self.config()
         prefs = self._prefs(task['key']) if inherit else {'provider': None, 'important': False, 'category': None}
         important, category = bool(important) or prefs['important'], category or prefs['category']
         if provider == 'auto':  # P38: healthy providers first; P39: the preferred provider leads
             preferred = self._preferred(task, config, {**prefs, 'category': category})
-            order = self._by_health([preferred] + wc.fallback_after(config, preferred), self._health(config))
+            order = self._by_health([preferred] + self._fallbacks(config, task['task_id'], preferred), self._health(config))
             plan = [self._step(p, 'fresh', None) for p in order]
             if plan[0]['provider'] != preferred:
                 plan[0]['why'] = 'degraded_reroute'  # recorded on the run, so the task returns once it is healthy
         else:
-            plan = [self._step(p, 'fresh', None) for p in [provider] + wc.fallback_after(config, provider)]
+            plan = [self._step(p, 'fresh', None) for p in [provider] + self._fallbacks(config, task['task_id'], provider)]
         if plan[0]['provider'] in ('claude', 'grok'):
             plan[0]['session'] = str(uuid.uuid4())
         dispatch_id = 'd' + uuid.uuid4().hex[:15]
