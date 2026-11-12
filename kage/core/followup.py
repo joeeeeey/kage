@@ -17,6 +17,7 @@ import urllib.error
 
 from kage import locale
 from kage.core import authority as _authority
+from kage.core.dispatch import watchdog_overview as _watchdog_overview
 
 IDLE_SECONDS = 2 * 86400
 
@@ -441,7 +442,8 @@ class FollowupCore:
                 'stranded': self.rt.dispatch.stranded_overview(db, now),
                 'stuck_claims': self.rt.stuck_claims.overview(db, self.rt.claude, config['dispatch']['stuck_claim_minutes'], now),
                 'card_destination': self.rt.buttons.destination_overview(db, now),
-                'provider_wait': self.rt.dispatch.provider_wait_overview(db, now)}  # P44
+                'provider_wait': self.rt.dispatch.provider_wait_overview(db, now),  # P44
+                'watchdog': _watchdog_overview(db, config, now)}  # 0.79.2 (F26)
 
     def dispatch_consumer(self, db, e):
         """P38 G3: {provider, session, task_path} of the RUNNING run of the dispatch that holds event `e` (status

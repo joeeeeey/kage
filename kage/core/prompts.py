@@ -24,6 +24,11 @@ SESSION_NOTES = {  # P38, keyed by the plan step's `why`
                     'as done.'),
     'degraded_reroute': ('The task\'s preferred provider is degraded right now (overloaded / failing), so this run uses '
                          'another provider. status.md is the handoff: rebuild from it.'),
+    'watchdog_takeover': ('The previous run of this batch was stopped by the dispatcher because its provider was too slow '
+                          '(no model output in time, or API errors that did not recover), and this run takes over on '
+                          'another provider. That run may already have done part of the work or replied: before you act '
+                          'on an event, check status.md and, for every Slack ref, whether a reply was already sent '
+                          '(the context and the thread), so nothing is done or sent twice.'),
     'cap_handoff': ('This session is close to the context cap: the next dispatch of this task starts a FRESH session '
                     'that knows only the workspace. Before you finish, make status.md a complete handoff (what is in '
                     'flight, what you wait for and from whom, the next step) with memory-guard check / bump.'),

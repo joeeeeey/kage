@@ -66,6 +66,7 @@ DISPATCH_CORE = _k.DispatchCore(_owner.language, tz=SHANGHAI, tz_name=TZ_NAME, o
 (progress_line, _plan_providers, _waited) = (DISPATCH_CORE.progress_line, _k._plan_providers, DISPATCH_CORE._waited)
 (probe_state, progress_backoff) = (_k.probe_state, _k.progress_backoff)
 (provider_wait_overview, stranded_overview) = (_k.provider_wait_overview, _k.stranded_overview)
+watchdog_overview = _k.watchdog_overview  # 0.79.2 (F26)
 _k = kage_bridge.module('dispatch_engine', 'kage.core.dispatch')
 _owner = kage_bridge.deployment().owner
 

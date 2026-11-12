@@ -24,6 +24,7 @@
     model_unsupported: '模型不可用（relay 404）', session_missing: '找不到要恢复的会话', session_live: '会话仍在别处运行',
     unknown: '未知错误', task_unresolved: '事件没有处理完', run_timeout: '运行超时', spawn_failed: '无法启动 CLI',
     stopped: '已被停止', crashed: '进程异常退出', provider_degraded: 'provider 过载，换健康的那个',
+    ttft_timeout: '首个 token 迟迟不来，换下一个 provider', error_grace: 'API 报错后迟迟没恢复，换下一个 provider',
   };
   const TRIGGER = {
     slack_message: 'Slack 消息', decision_answer: '决策卡片回复', ask_answer: '询问卡片回复', agent_message: 'agent 消息',
@@ -1523,7 +1524,8 @@
   const HEALTH_EVENT = { degraded: '变为过载', healthy: '恢复健康', notice_degraded: '已通知 {{owner_name}}：过载',
     notice_healthy: '已通知 {{owner_name}}：恢复' };
   const SWITCH_WHY = { long_lived: '常驻任务每条事件新会话', context_cap: '上下文到上限换新会话', auto_return: '切回首选 provider',
-    degraded_reroute: '首选 provider 过载临时改道', stuck_on_degraded: '卡在过载的 provider 上，已换' };
+    degraded_reroute: '首选 provider 过载临时改道', stuck_on_degraded: '卡在过载的 provider 上，已换',
+    ttft_timeout: '首个 token 超时，已换下一个', error_grace: 'API 报错没恢复，已换下一个' };
   const STRANDED_STATE = { suspect: ['会话已退出 · 确认中', 'warn'], held: ['已交给任务处理', 'good'],
     rerouted: ['已改投活着的会话', 'good'], unowned: ['找不到所属任务', 'bad'], handled: ['已处理完', 'good'] };
   const STUCK_STATE = { posting: ['发卡片中', null], open: ['等 {{owner_name}}', 'warn'], resolved: ['已处理', 'good'],
@@ -1635,6 +1637,7 @@
     function renderStatus(d) {
       const cfg = d.config || {};
       const ph = cfg.provider_health || {};
+      const wd = cfg.watchdog || {};
       const ps = (d.providers || {}).providers || [];
       const sc = (d.stranded || {}).counts || {};
       const st = d.stuck_claims || {};
@@ -1657,6 +1660,9 @@
           h('dt', {}, '健康检测'), h('dd', {}, pill(ph.enabled === false ? '关' : '开', ph.enabled === false ? 'bad' : 'good'), ' ',
             pill(`窗口 ${ph.window_minutes ?? '—'} 分钟`, null), ' ', pill(`${ph.degrade_threshold ?? '—'} 次出问题 → 过载`, null), ' ',
             pill(`连续 ${ph.recover_checks ?? '—'} 次干净 → 恢复`, null), ' ', pill(`常驻任务 ≥ ${ph.slow_run_minutes ?? '—'} 分钟算慢`, null)),
+          h('dt', {}, '快速切换'), h('dd', {}, pill(wd.ttft_seconds ? `首个 token ${wd.ttft_seconds} 秒内要到（Claude）` : '首 token 看门狗关', wd.ttft_seconds ? null : 'warn'), ' ',
+            pill(wd.error_grace_seconds ? `API 报错后 ${wd.error_grace_seconds} 秒内要恢复（Claude / Codex）` : '报错宽限看门狗关', wd.error_grace_seconds ? null : 'warn'), ' ',
+            pill('否则换下一个 provider 接手', null)),
           h('dt', {}, '有界上下文'), h('dd', {}, pill(cfg.long_lived_fresh === false ? '常驻任务照旧 resume' : '常驻任务每条事件新会话',
             cfg.long_lived_fresh === false ? 'warn' : 'good'), ' ',
             pill(cfg.max_session_context_mb ? `会话上下文上限 ${cfg.max_session_context_mb} MB` : '上下文上限关', cfg.max_session_context_mb ? null : 'warn'), ' ',

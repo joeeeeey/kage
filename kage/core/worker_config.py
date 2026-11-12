@@ -39,6 +39,11 @@ without it. Any other unknown key still fails closed.
 (`triage.roles`, default the inbox) tries first when its own provider fails at the provider level, with that model and
 effort (`triage_fallback`); the dispatcher puts it ahead of `routing.fallback_order` and moves there at once (no
 same-provider retry). Without the section: as before.
+0.79.2 (F26): two optional `dispatch` keys with engine defaults (`WATCHDOG_DEFAULTS`, never filled in from a deployment's
+DEFAULTS, so `config show` prints them only once set): `ttft_seconds` (no first model output this long after the CLI is
+ready: stop the run and continue on the next provider) and `error_grace_seconds` (the CLI reports a retryable API error
+and no model output follows within this long, at any point of the run: the same). 0 = off, else 5..120 s
+(`watchdog_settings`).
 """
 from __future__ import annotations
 import contextlib
@@ -283,6 +288,19 @@ PROVIDER_WAIT_RANGES = {'provider_wait_hours': (0, 168), 'probe_min_seconds': (3
 
 
 KEEP_WARM_RANGES = {'interval_minutes': (1, 55), 'max_idle_hours': (0, 168)}  # P40.1; the TTL bounds the interval
+
+
+# 0.79.2 (F26): the run watchdog (kage.core.dispatch `_watchdog`). Optional dispatch keys with engine defaults: a
+# deployment's DEFAULTS dict does not list them, so older pinned defaults keep validating and printing as before.
+WATCHDOG_DEFAULTS = {'ttft_seconds': 10, 'error_grace_seconds': 10}
+WATCHDOG_RANGE = (5, 120)  # or 0 = off
+
+
+def watchdog_settings(config):
+    """{ttft_seconds, error_grace_seconds} of a loaded config (0 = that watchdog is off)."""
+    raw = (config or {}).get('dispatch') if isinstance(config, dict) else None
+    raw = raw if isinstance(raw, dict) else {}
+    return {key: raw.get(key, default) for key, default in WATCHDOG_DEFAULTS.items()}
 
 
 PROVIDER_HEALTH_RANGES = {'enabled': None, 'window_minutes': (5, 1440), 'degrade_threshold': (1, 100),
@@ -555,7 +573,7 @@ class WorkerConfig:
 
     def _validate_dispatch(self, spec):
         """Present keys are validated; missing keys take DEFAULTS (see `load`)."""
-        _keys(spec, self.defaults['dispatch'], 'dispatch')
+        _keys(spec, {**self.defaults['dispatch'], **WATCHDOG_DEFAULTS}, 'dispatch')
         for key, value in spec.items():
             field = f'dispatch_{key}'
             if key in ('enabled', 'install_hold', 'notify_cards', 'progress_updates', 'long_lived_fresh', 'stranded_revive',
@@ -590,6 +608,10 @@ class WorkerConfig:
                 _int(value, field, 0, 3)
             elif key == 'max_run_seconds':
                 _int(value, field, 60, 86400)
+            elif key in WATCHDOG_DEFAULTS:  # 0.79.2 (F26)
+                low, high = WATCHDOG_RANGE
+                if isinstance(value, bool) or not isinstance(value, int) or not (value == 0 or low <= value <= high):
+                    _fail(field, f'must_be_0_or_{low}_to_{high}')
             elif key == 'failed_cooldown_seconds':
                 _int(value, field, 60, 7 * 86400)
             elif key == 'max_event_age_hours':

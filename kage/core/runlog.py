@@ -7,7 +7,11 @@ the owner's language and clock (labels and phrases from the catalog, `runlog.*`)
 Rendering is incremental and idempotent: `.readable.state.json` keeps the byte offset already rendered plus small
 counters (steps, last summary, tool ids, `markers`: the provider-level overload / reconnect / stream-disconnect /
 API-retry events a provider-health monitor counts), and an fcntl lock (`.readable.lock`) makes the detached runner, the
-supervisor, a terminal tail and anything else safe to call `update()` concurrently. Bodies never leave the run
+supervisor, a terminal tail and anything else safe to call `update()` concurrently. 0.79.2 (F26): the state also keeps the
+run watchdog's inputs (`WATCH_KEYS`, times as seen): `ready_at` (the CLI is ready: Claude `system/init`, Codex
+`turn.started`), `model_at` (the first model output: a Claude `stream_event` / `assistant` message, a Codex item) and
+`retry_at` / `retry_marker` (the first retryable API error since the last model output: a Claude `api_retry`, a Codex
+`error` event with a health marker; model output clears it). Bodies never leave the run
 directory; callers that need a summary read the masked state / lines from here.
 
 Masking happens before truncation, on every rendered string: known token formats, bearer and Authorization headers,
@@ -46,6 +50,7 @@ LABEL_KINDS = ('start', 'say', 'cmd', 'exit', 'edit', 'tool', 'error', 'retry', 
 STEP_KINDS = ('cmd', 'tool', 'edit')
 SUMMARY_KINDS = ('say', 'cmd', 'exit', 'edit', 'tool', 'error', 'retry', 'result', 'todo')
 EDIT_TOOLS = ('Edit', 'MultiEdit', 'Write', 'NotebookEdit')
+WATCH_KEYS = ('ready_at', 'model_at', 'retry_at', 'retry_marker')  # 0.79.2 (F26): the dispatcher's run watchdog reads them
 
 # ---------------------------------------------------------------------------
 # Masking
@@ -166,10 +171,33 @@ class Renderer:
         self.tools = dict(state.get('tools') or {})
         self.started_cmds = list(state.get('started_cmds') or [])
         self.markers = int(state.get('markers') or 0)
+        self.watch = {key: state.get(key) for key in WATCH_KEYS}
 
     def snapshot(self):
         return {'steps': self.steps, 'tools': dict(list(self.tools.items())[-MAX_TOOL_IDS:]),
-                'started_cmds': self.started_cmds[-MAX_TOOL_IDS:], 'markers': self.markers}
+                'started_cmds': self.started_cmds[-MAX_TOOL_IDS:], 'markers': self.markers, **self.watch}
+
+    def _watch_event(self, e, seen_at):
+        """0.79.2 (F26): the watchdog inputs of one raw event (see the module docstring); never renders anything."""
+        kind = e.get('type')
+        ready = model = retry = None
+        if self.provider == 'claude':
+            ready = kind == 'system' and e.get('subtype') == 'init'
+            model = kind == 'stream_event' or (kind == 'assistant' and not (e.get('error') or e.get('is_api_error_message')))
+            if kind == 'system' and e.get('subtype') == 'api_retry':
+                retry = 'api_retry ' + str(e.get('error_status') or e.get('error') or '')
+        elif self.provider == 'codex':
+            ready = kind == 'turn.started'
+            model = kind in ('item.started', 'item.updated', 'item.completed') and (e.get('item') or {}).get('type') != 'error'
+            if kind == 'error' and HEALTH_MARKER_RE.search(str(e.get('message') or '')):
+                retry = re.sub(r'\s+', ' ', HEALTH_MARKER_RE.search(str(e['message'])).group(0)).lower()
+        if ready and self.watch['ready_at'] is None:
+            self.watch['ready_at'] = seen_at
+        if model:
+            self.watch['model_at'] = self.watch['model_at'] or seen_at
+            self.watch['retry_at'] = self.watch['retry_marker'] = None
+        elif retry and self.watch['retry_at'] is None:
+            self.watch['retry_at'], self.watch['retry_marker'] = seen_at, retry.strip()[:40]
 
     def _marker(self, text, always=False):
         if always or HEALTH_MARKER_RE.search(str(text or '')):
@@ -184,6 +212,10 @@ class Renderer:
         if not isinstance(event, dict):
             return []
         at = _event_time(event, seen_at)
+        try:
+            self._watch_event(event, seen_at)
+        except Exception:  # noqa: BLE001 - the watchdog inputs never break the log
+            pass
         try:
             return {'claude': self._claude, 'codex': self._codex, 'grok': self._grok}[self.provider](event, at)
         except Exception:  # noqa: BLE001 - a surprising event shape never breaks the log
@@ -556,7 +588,7 @@ class RunLog:
                 size = stream.seek(0, os.SEEK_END)
                 if size < offset:  # truncated/replaced: start over from the top
                     offset = 0
-                    state.update(offset=0, steps=0, tools={}, started_cmds=[], markers=0)
+                    state.update(offset=0, steps=0, tools={}, started_cmds=[], markers=0, **dict.fromkeys(WATCH_KEYS))
                 stream.seek(offset)
                 chunk = stream.read(MAX_CHUNK)
             renderer = Renderer(provider, state, self)

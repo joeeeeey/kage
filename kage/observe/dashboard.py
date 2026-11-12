@@ -65,6 +65,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from kage import locale
+from kage.core.worker_config import watchdog_settings
 from kage.core import control as _control
 from kage.core import system_status as _system
 from kage.core import mode as _mode
@@ -1703,6 +1704,7 @@ class DashboardCore:
         result['config'] = {key: config['dispatch'][key] for key in (
             'provider_health', 'long_lived_fresh', 'long_lived_tasks', 'max_session_context_mb', 'stranded_revive',
             'stuck_claim_minutes', 'provider_wait_hours', 'probe_enabled', 'probe_min_seconds', 'probe_max_seconds')}
+        result['config']['watchdog'] = watchdog_settings(config)  # 0.79.2 (F26): the run watchdog's two thresholds
         if not Path(path).is_file():
             result['notice'] = 'state_database_missing'
             return result

@@ -24,6 +24,7 @@ from kage.core import mode as _mode
 from kage.core import observe as _observe
 from kage.core.worker_config import control_settings as _control_settings
 from kage.core.worker_config import triage_fallback as _triage_fallback
+from kage.core.worker_config import watchdog_settings as _watchdog_settings
 
 HELD = 'dispatched'
 
@@ -57,6 +58,14 @@ DEGRADED = 'degraded'
 
 
 STOP_DEGRADED = 3  # consumer_runs.stop_requested: 1 = the owner's stop, 2 = max_run_seconds, 3 = P38 health move
+
+
+# 0.79.2 (F26): the run watchdog's stops (4 / 5) and the failure classes they end in; such a run gives way to the next
+# provider of its plan at once (`_after_failure`), and provider health counts it adverse.
+WATCHDOG_STOPS = {4: 'ttft_timeout', 5: 'error_grace'}
+WATCHDOG_CLASSES = tuple(WATCHDOG_STOPS.values())
+WATCHDOG_PROVIDERS = ('claude', 'codex')  # a Grok run prints one JSON object at its end: nothing to watch
+PARTIAL_MESSAGES_ARG = '--include-partial-messages'  # Claude: stream events from the first token on (the TTFT signal)
 
 
 CAP_HANDOFF_FRACTION = 0.75  # a resume past this share of the context cap is told to leave status.md as the handoff
@@ -101,7 +110,7 @@ KEEP_WARM_ID_RE = re.compile(r'k\d{8}T\d{6}Z-[0-9a-f]{6}')
 SESSION_ID_CHARS = 13  # UUIDv7 ids start with a timestamp: sessions started in the same second share 8 characters
 
 
-PROVIDER_WAIT = ('transient', 'rate_limited', 'quota')  # P44: provider-side classes a wait answers, not a card
+PROVIDER_WAIT = ('transient', 'rate_limited', 'quota', *WATCHDOG_CLASSES)  # P44: provider-side classes a wait answers
 
 
 WAIT_REASON = 'provider_wait'   # dispatches.wait_reason while a dispatch waits for a probe to see a provider back
@@ -1571,6 +1580,8 @@ class Dispatcher:
         settings = extra = summary = None
         if provider == 'claude':
             settings, extra, summary = self._claude_settings(profile, cwd, run_id)
+            if _watchdog_settings(config)['ttft_seconds']:  # 0.79.2 (F26): the first-token watchdog's signal
+                extra = (*(extra or ()), PARTIAL_MESSAGES_ARG)
         cmd = self.core.build_command(provider, mode, session, prompt, model, effort, yolo, run_dir, settings, extra or (),
                             system_prompt, profile['drop_tools'] if provider == 'claude' else ())
         hops = max([0] + [int(r[0] or 0) for r in self.db.execute(
@@ -1713,7 +1724,8 @@ class Dispatcher:
             with rt.transaction(self.db):
                 self.db.execute('UPDATE consumer_leases SET heartbeat_at=? WHERE task_key=? AND run_id=?',
                                 (now, run['task'], run['run_id']))
-            markers = int(self.render(run, now=now).get('markers') or 0)
+            rendered = self.render(run, now=now)
+            markers = int(rendered.get('markers') or 0)
             if markers != (run.get('health_markers') or 0):  # P38: the provider-health monitor reads it live
                 with rt.transaction(self.db):
                     self.db.execute('UPDATE consumer_runs SET health_markers=? WHERE run_id=?', (markers, run['run_id']))
@@ -1733,6 +1745,12 @@ class Dispatcher:
                 d = self._dispatch(run['dispatch_id'])
                 self._switch_log(d, 'stuck_on_degraded', (run['provider'], run['session']), (None, None),
                                  json.loads(run['event_ids']), now)
+            elif not run['stop_requested']:
+                reason = self._watchdog(run, rendered, now)
+                if reason:  # 0.79.2 (F26): finalize ends it in `reason`; _after_failure moves to the next provider
+                    self._signal(run, signal.SIGTERM, {c: s for s, c in WATCHDOG_STOPS.items()}[reason], now)
+                    self._switch_log(self._dispatch(run['dispatch_id']), reason, (run['provider'], run['session']),
+                                     (None, None), json.loads(run['event_ids']), now)
             return
         child = self.children.pop(run['pid'], None)
         if child is not None:
@@ -1758,6 +1776,53 @@ class Dispatcher:
             return False
         return any(step['provider'] != run['provider'] and health.get(step['provider']) != DEGRADED
                    for step in json.loads(d['plan'])[d['step'] + 1:])
+
+    def _watchdog(self, run, state, now):
+        """0.79.2 (F26): 'ttft_timeout' / 'error_grace' when a running Claude / Codex run should give way to the next
+        provider of its plan, else None. ttft_timeout: no model output `dispatch.ttft_seconds` after the CLI was ready —
+        Claude runs launched with stream events only (Codex `exec --json` reports a step only once it is complete, so a
+        long first reasoning step is no sign of trouble there). error_grace: a retryable API error (Claude api_retry, a
+        Codex reconnect) with no model output since for `dispatch.error_grace_seconds`, at any point of the run. Only a
+        dispatch's current run with a later plan step on another provider is stopped: the last provider is never cut
+        short. Before stopping, the state is rendered again under the lock (the saved one may lag the runner by a
+        second)."""
+        if run['provider'] not in WATCHDOG_PROVIDERS or not run.get('log_dir') or not run.get('dispatch_id'):
+            return None
+        try:
+            limits = _watchdog_settings(self.config())
+        except ValueError:
+            return None
+        if not self._watch_due(run, state, limits, now):
+            return None
+        d = self._dispatch(run['dispatch_id'])
+        if d is None or d['run_id'] != run['run_id'] or not any(
+                step['provider'] != run['provider'] for step in json.loads(d['plan'])[d['step'] + 1:]):
+            return None
+        try:
+            state = self.rt.run_log.update(run['log_dir'], run['provider'], now=now, blocking=True)
+        except Exception as exc:  # noqa: BLE001 - no fresh state, no stop
+            self.rt._meta_error(self.db, 'run_log_error', exc)
+            return None
+        return self._watch_due(run, state, limits, now)
+
+    def _watch_due(self, run, state, limits, now):
+        state = state or {}
+        grace, ttft = limits['error_grace_seconds'], limits['ttft_seconds']
+        if grace and state.get('retry_at') and now - state['retry_at'] >= grace:
+            return 'error_grace'
+        if ttft and run['provider'] == 'claude' and state.get('model_at') is None and state.get('ready_at') and \
+                now - state['ready_at'] >= ttft and self._streams_first_token(run):
+            return 'ttft_timeout'
+        return None
+
+    @staticmethod
+    def _streams_first_token(run):
+        """The Claude run was launched with stream events (its meta.json argv), so its first token is visible."""
+        try:
+            meta = json.loads(Path(run['log_dir'], 'meta.json').read_text())
+        except (OSError, ValueError, TypeError):
+            return False
+        return PARTIAL_MESSAGES_ARG in (meta.get('argv_without_prompt') or [])
 
     def capture_session(self, run, now=None):
         """Fresh Codex run: bind the thread id from `thread.started` as soon as it appears."""
@@ -1911,6 +1976,9 @@ class Dispatcher:
             outcome, error_class = 'failed', 'run_timeout'
         elif run['stop_requested'] == STOP_DEGRADED:
             outcome, error_class = 'failed', 'provider_degraded'
+        elif run['stop_requested'] in WATCHDOG_STOPS:  # 0.79.2 (F26)
+            outcome, error_class = 'failed', WATCHDOG_STOPS[run['stop_requested']]
+            marker = (rendered.get('retry_marker') if error_class == 'error_grace' else None) or 'no model output'
         elif cli_ok:
             outcome, error_class = ('partial', 'task_unresolved') if handled else ('unresolved', 'task_unresolved')
         else:
@@ -2011,6 +2079,20 @@ class Dispatcher:
                                 'updated_at=? WHERE dispatch_id=?', (now, now, d['dispatch_id']))
             self._card_status(d['dispatch_id'], 'fallback', error_class)
             return 'fallback'
+        later = next((i for i in range(d['step'] + 1, len(plan)) if plan[i]['provider'] != run['provider']),
+                     None) if run and error_class in WATCHDOG_CLASSES else None
+        if later is not None:
+            # 0.79.2 (F26): the watchdog stopped a slow provider: the next provider of the plan at once, no same-provider
+            # retry; its fresh session is told the stopped run may have done part of the batch (SESSION_NOTES).
+            plan[later].setdefault('why', 'watchdog_takeover')
+            with rt.transaction(self.db):
+                self.db.execute("UPDATE dispatches SET state='waiting',step=?,plan=?,retries=0,partial_retries=0,"
+                                'next_at=?,updated_at=? WHERE dispatch_id=?',
+                                (later, json.dumps(plan), now, now, d['dispatch_id']))
+            self._card_status(d['dispatch_id'], 'fallback', error_class)
+            return 'fallback'
+        if error_class in WATCHDOG_CLASSES:
+            error_class = 'transient'  # no other provider left (the plan changed meanwhile): as an overload
         if error_class in RETRY_SAME and d['retries'] < len(backoff) and not self._triage_switch(d, plan):
             with rt.transaction(self.db):
                 self.db.execute("UPDATE dispatches SET state='waiting',retries=retries+1,next_at=?,updated_at=? "
@@ -2593,6 +2675,20 @@ class Dispatcher:
                 'leases': leases, 'paused': pauses, 'provider_wait': provider_wait_overview(self.db, self.clock())}
 
 
+def watchdog_overview(db, config, now):
+    """0.79.2 (F26): the run watchdog's two thresholds and the runs it stopped in the last 24 h (per provider / class)."""
+    out = dict(_watchdog_settings(config))
+    try:
+        rows = db.execute('SELECT provider, error_class, count(*) FROM consumer_runs WHERE error_class IN (?,?) AND '
+                          'ended_at>=? GROUP BY provider, error_class ORDER BY provider, error_class',
+                          (*WATCHDOG_CLASSES, now - 86400)).fetchall()
+    except Exception:  # noqa: BLE001 - a store without consumer_runs: no stops
+        rows = []
+    out['stops_24h'] = sum(r[2] for r in rows)
+    out['stops'] = [{'provider': r[0], 'error_class': r[1], 'runs': r[2]} for r in rows]
+    return out
+
+
 def provider_wait_overview(db, now, limit=20):
     """P44 read model (dispatch-status, health, the dashboard): per provider the last probe (time, result, class,
     model), its consecutive failures, the next probe and how many dispatches wait for it; the waiting dispatches and the
@@ -2671,6 +2767,8 @@ class DispatchCore:
                  'session_live': self.msg('dispatch.error_labels.session_live'), 'unknown': self.msg('dispatch.error_labels.unknown'), 'task_unresolved': self.msg('dispatch.error_labels.task_unresolved'),
                  'run_timeout': self.msg('dispatch.error_labels.run_timeout'), 'spawn_failed': self.msg('dispatch.error_labels.spawn_failed'), 'stopped': self.msg('dispatch.error_labels.stopped'), 'crashed': self.msg('dispatch.error_labels.crashed'),
                  'provider_degraded': self.msg('dispatch.error_labels.provider_degraded'),
+                 'ttft_timeout': self.msg('dispatch.error_labels.ttft_timeout'),  # 0.79.2 (F26)
+                 'error_grace': self.msg('dispatch.error_labels.error_grace'),
              }
         self.question_hints = re.compile(self.pattern('dispatch.question_hints.1'), re.I)
         self.trigger_label = {'slack_message': self.msg('dispatch.trigger_label.slack_message'), 'decision_answer': self.msg('dispatch.trigger_label.decision_answer'), 'ask_answer': self.msg('dispatch.trigger_label.ask_answer'),

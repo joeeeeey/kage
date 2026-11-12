@@ -24,6 +24,7 @@
     model_unsupported: 'Model unavailable (relay 404)', session_missing: 'Session to resume not found', session_live: 'Session still running elsewhere',
     unknown: 'Unknown error', task_unresolved: 'Events not fully handled', run_timeout: 'Run timed out', spawn_failed: 'Could not start the CLI',
     stopped: 'Stopped', crashed: 'Process crashed', provider_degraded: 'Provider overloaded; switched to a healthy one',
+    ttft_timeout: 'No first token in time; next provider', error_grace: 'API errors did not recover in time; next provider',
   };
   const TRIGGER = {
     slack_message: 'Slack message', decision_answer: 'Decision card reply', ask_answer: 'Ask card reply', agent_message: 'Agent message',
@@ -1523,7 +1524,8 @@
   const HEALTH_EVENT = { degraded: 'Became overloaded', healthy: 'Back to healthy', notice_degraded: 'Notified {{owner_name}}: overloaded',
     notice_healthy: 'Notified {{owner_name}}: recovered' };
   const SWITCH_WHY = { long_lived: 'Long-lived task: new session per event', context_cap: 'Context at cap: new session', auto_return: 'Back to preferred provider',
-    degraded_reroute: 'Preferred provider overloaded: temporary reroute', stuck_on_degraded: 'Stuck on an overloaded provider: switched' };
+    degraded_reroute: 'Preferred provider overloaded: temporary reroute', stuck_on_degraded: 'Stuck on an overloaded provider: switched',
+    ttft_timeout: 'No first token in time: next provider', error_grace: 'API errors did not recover: next provider' };
   const STRANDED_STATE = { suspect: ['Session exited · confirming', 'warn'], held: ['Handed to the task', 'good'],
     rerouted: ['Redelivered to a live session', 'good'], unowned: ['Owning task not found', 'bad'], handled: ['Handled', 'good'] };
   const STUCK_STATE = { posting: ['Posting card', null], open: ['Waiting for {{owner_name}}', 'warn'], resolved: ['Handled', 'good'],
@@ -1635,6 +1637,7 @@
     function renderStatus(d) {
       const cfg = d.config || {};
       const ph = cfg.provider_health || {};
+      const wd = cfg.watchdog || {};
       const ps = (d.providers || {}).providers || [];
       const sc = (d.stranded || {}).counts || {};
       const st = d.stuck_claims || {};
@@ -1657,6 +1660,9 @@
           h('dt', {}, 'Health checks'), h('dd', {}, pill(ph.enabled === false ? 'Off' : 'On', ph.enabled === false ? 'bad' : 'good'), ' ',
             pill(`Window ${ph.window_minutes ?? '—'} min`, null), ' ', pill(`${ph.degrade_threshold ?? '—'} problems → overloaded`, null), ' ',
             pill(`${ph.recover_checks ?? '—'} clean checks in a row → recovered`, null), ' ', pill(`Long-lived task ≥ ${ph.slow_run_minutes ?? '—'} min = slow`, null)),
+          h('dt', {}, 'Fast failover'), h('dd', {}, pill(wd.ttft_seconds ? `First token within ${wd.ttft_seconds} s (Claude)` : 'First-token watchdog off', wd.ttft_seconds ? null : 'warn'), ' ',
+            pill(wd.error_grace_seconds ? `After an API error: recover within ${wd.error_grace_seconds} s (Claude / Codex)` : 'Error-grace watchdog off', wd.error_grace_seconds ? null : 'warn'), ' ',
+            pill('Else the next provider takes over', null)),
           h('dt', {}, 'Bounded context'), h('dd', {}, pill(cfg.long_lived_fresh === false ? 'Long-lived tasks resume as before' : 'Long-lived tasks: new session per event',
             cfg.long_lived_fresh === false ? 'warn' : 'good'), ' ',
             pill(cfg.max_session_context_mb ? `Session context cap ${cfg.max_session_context_mb} MB` : 'Context cap off', cfg.max_session_context_mb ? null : 'warn'), ' ',

@@ -621,6 +621,7 @@ class TraceCore:
                  'launch': self.msg('trace.hold_reason.launch')}
         self.switch_reason = {'long_lived': self.msg('trace.switch_reason.long_lived'), 'context_cap': self.msg('trace.switch_reason.context_cap'), 'degraded_reroute': self.msg('trace.switch_reason.degraded_reroute'),
                               'auto_return': self.msg('trace.switch_reason.auto_return'), 'stuck_on_degraded': self.msg('trace.switch_reason.stuck_on_degraded'),
+                              'ttft_timeout': self.msg('trace.switch_reason.ttft_timeout'), 'error_grace': self.msg('trace.switch_reason.error_grace'),
                               'rerouted_to_live_current': self.msg('trace.switch_reason.rerouted_to_live_current'), 'rerouted_to_live_task_session': self.msg('trace.switch_reason.rerouted_to_live_task_session')}
         self.direct_reason = {'watch_session_live': self.msg('trace.direct_reason.watch_session_live'), 'watch_liveness_unknown': self.msg('trace.direct_reason.watch_liveness_unknown'),
                               'current_liveness_unknown': self.msg('trace.direct_reason.current_liveness_unknown')}
@@ -628,7 +629,8 @@ class TraceCore:
         self.error = {'transient': self.msg('trace.error.transient'), 'rate_limited': self.msg('trace.error.rate_limited'), 'quota': self.msg('trace.error.quota'), 'auth': self.msg('trace.error.auth'),
                       'model_unsupported': self.msg('trace.error.model_unsupported'), 'session_missing': self.msg('trace.error.session_missing'), 'session_live': self.msg('trace.error.session_live'),
                       'unknown': self.msg('trace.error.unknown'), 'task_unresolved': self.msg('trace.error.task_unresolved'), 'run_timeout': self.msg('trace.error.run_timeout'), 'spawn_failed': self.msg('trace.error.spawn_failed'),
-                      'stopped': self.msg('trace.error.stopped'), 'crashed': self.msg('trace.error.crashed'), 'provider_degraded': self.msg('trace.error.provider_degraded')}
+                      'stopped': self.msg('trace.error.stopped'), 'crashed': self.msg('trace.error.crashed'), 'provider_degraded': self.msg('trace.error.provider_degraded'),
+                      'ttft_timeout': self.msg('trace.error.ttft_timeout'), 'error_grace': self.msg('trace.error.error_grace')}
         self.trigger = {'slack_message': self.msg('trace.trigger.slack_message'), 'decision_answer': self.msg('trace.trigger.decision_answer'), 'ask_answer': self.msg('trace.trigger.ask_answer'), 'agent_message': self.msg('trace.trigger.agent_message'),
                         'note': self.msg('trace.trigger.note'), 'routine': self.msg('trace.trigger.routine'), 'launch': self.msg('trace.trigger.launch'), 'event': self.msg('trace.trigger.event')}
         self.event_status = {'pending': self.msg('trace.event_status.pending'), 'queued': self.msg('trace.event_status.queued'), 'claimed': self.msg('trace.event_status.claimed'),

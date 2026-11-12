@@ -239,6 +239,14 @@ def runtime_checks(db: sqlite3.Connection | None, health: dict[str, Any] | None,
         blocked = len((health.get('stuck_claims') or {}).get('blocked') or [])
         out.append(check('runtime.stuck_claims', False, not blocked, f'{blocked} stuck claims blocking delivery',
                          'see `health` and the stuck-claim card'))
+        watchdog = health.get('watchdog')
+        if watchdog:  # 0.79.2 (F26): informational, the two thresholds and the stops of the last 24 h
+            ttft, grace = watchdog.get('ttft_seconds'), watchdog.get('error_grace_seconds')
+            out.append(check('runtime.watchdog', False, True,
+                             (f'first token within {ttft} s (Claude)' if ttft else 'first-token watchdog off') + ' · ' +
+                             (f'error grace {grace} s (Claude / Codex)' if grace else 'error-grace watchdog off') +
+                             f" · {watchdog.get('stops_24h', 0)} runs moved to the next provider in 24 h",
+                             'config set dispatch.ttft_seconds / dispatch.error_grace_seconds (0 = off, 5..120)'))
         dest = health.get('card_destination') or {}
         verdicts = [d.get('verdict') for d in dest.get('destinations') or []]
         public = [v for v in verdicts if v not in ('private', 'im')]

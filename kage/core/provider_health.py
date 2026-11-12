@@ -2,7 +2,8 @@
 
 `evaluate` (a supervisor step) looks at the dispatcher's own run rows over a rolling `window_minutes` window and, per
 provider, counts ADVERSE runs — runs that ended in the window or are still running:
-  - a provider-level failure: `transient` (overload / 5xx / timeout / network), `rate_limited`, `quota`, `run_timeout`;
+  - a provider-level failure: `transient` (overload / 5xx / timeout / network), `rate_limited`, `quota`, `run_timeout`,
+    and (0.79.2) the run watchdog's stops `ttft_timeout` / `error_grace`;
   - repeated overload / reconnect / stream-disconnect / API-retry markers in its log (`consumer_runs.health_markers`) on
     a run that ENDED without success (an overload the CLI retried and then succeeded is `retried_ok`, not adverse;
     markers on a still-running run do not count yet);
@@ -25,8 +26,8 @@ from kage import locale
 PROVIDERS = ('codex', 'claude', 'grok')
 LABEL = {'codex': 'Codex', 'claude': 'Claude', 'grok': 'Grok'}
 HEALTHY, DEGRADED = 'healthy', 'degraded'
-PROVIDER_FAILURES = ('transient', 'rate_limited', 'quota', 'run_timeout')
-OVERLOAD_FAILURES = ('transient', 'rate_limited')
+PROVIDER_FAILURES = ('transient', 'rate_limited', 'quota', 'run_timeout', 'ttft_timeout', 'error_grace')  # 0.79.2: the last two
+OVERLOAD_FAILURES = ('transient', 'rate_limited', 'error_grace')
 MARKERS_PER_RUN = 2  # one stray reconnect is normal noise; two or more in one run is the provider struggling
 
 DDL = '''
