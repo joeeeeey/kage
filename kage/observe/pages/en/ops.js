@@ -1934,7 +1934,76 @@
     head.firstChild.append(info);
     // a section index on the left (sticky), the form in one column on the right
     const index = h('nav', { class: 'set-index', 'aria-label': 'Settings sections' });
-    clear(main).append(head, errBox, h('div', { class: 'set-layout' }, index, h('div', { class: 'set-col' }, form, logCard)));
+
+    // 0.78.9 (F21): the approvers (owner-like on a bot-only deployment), edited here; one save writes the card config and a
+    // new access-rules version (kage.core.approvers), the actor is the signed-in Access email.
+    const APPR_ERR = {"approvers_changed_since_loaded_reload": "The approvers changed after you opened the page; reloaded, please edit again.", "invalid_page_token": "The page token expired; reload the page and save again.", "the_owner_stays_an_approver_change_the_owner_through_the_deployment": "The deployment owner must stay an approver; changing the owner means redeploying.", "at_most_5_approvers": "At most 5 approvers.", "an_hr_contact_cannot_be_an_approver": "An HR contact cannot also be an approver.", "approver_must_be_a_person_not_a_bot": "Only people, not bots.", "approver_account_is_deactivated": "This account is deactivated.", "approver_must_be_a_full_member_of_this_workspace": "Must be a full member of this workspace (no guests or other organisations).", "approver_not_found_in_slack": "Not found in Slack (check the id or email; email lookup needs the bot scope users:read.email).", "approver_must_be_a_slack_user_id_or_an_email": "Enter a Slack user id (U…) or an email.", "nothing_to_change": "Nothing changed.", "approvers_must_be_a_list_of_slack_ids_or_emails": "Keep at least one approver."};
+    const apprCard = h('section', { class: 'ops-card', id: 'settings-approvers' });
+    let appr = null, apprToken = null, apprList = [];
+    function apprError(e) {
+      const code = (e.body && e.body.error) || e.message;
+      return (APPR_ERR[code] || code) + (e.body && e.body.detail ? ` (${e.body.detail})` : '');
+    }
+    function renderApprovers() {
+      if (!appr) return;
+      const rows = apprList.map((a) => h('li', { class: 'appr-row' },
+        h('span', { class: 'appr-name' }, a.name || a.id, a.pending ? h('small', {}, ' (not saved yet)') : null),
+        h('code', { class: 'appr-id' }, a.id),
+        h('span', { class: 'appr-tags' }, a.owner ? pill('owner', 'good') : null,
+          a.in_decisions ? pill('in the card config', null) : null,
+          a.in_rules === true ? pill('in the rules', null) : a.in_rules === false ? pill('not in the rules', 'warn') : null),
+        a.owner ? h('span', {}) : h('button', { type: 'button', class: 'btn sm ghost', onclick: () => {
+          apprList = apprList.filter((x) => x !== a); renderApprovers(); } }, 'Remove')));
+      const input = h('input', { type: 'text', class: 'appr-input', placeholder: 'Slack user id (U…) or email', spellcheck: 'false', autocomplete: 'off',
+        'aria-label': 'Slack user id (U…) or email' });
+      const add = () => {
+        const v = input.value.trim();
+        if (!v || apprList.some((x) => x.id === v)) return;
+        apprList = apprList.concat([{ id: v, name: null, pending: true }]);
+        renderApprovers();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      const save = h('button', { type: 'button', class: 'btn primary', id: 'approvers-save', onclick: async () => {
+        const names = apprList.map((x) => x.name ? `${x.name} (${x.id})` : x.id).join('\n');
+        if (!window.confirm("Save these approvers?\n{list}\nRecorded under your sign-in email; a notice goes to the decision channel.".replace('{list}', names))) return;
+        save.disabled = true; save.textContent = 'Saving…';
+        try {
+          const res = await api('/api/approvers', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Page-Token': apprToken },
+            body: JSON.stringify({ approvers: apprList.map((x) => x.id), digest: appr.digest }) });
+          apprToken = res.page_token || apprToken;
+          appr = res.state; apprList = appr.approvers.slice();
+          const v = res.change && res.change.rules_version;
+          toast((v ? "Saved: {n} approvers, rules version {v}".replace('{v}', v) : "Saved: {n} approvers").replace('{n}', apprList.length), 'good');
+        } catch (e) {
+          toast(apprError(e), 'bad');
+          if (e.body && ['approvers_changed_since_loaded_reload', 'invalid_page_token'].includes(e.body.error)) loadApprovers();
+        }
+        renderApprovers();
+      } }, 'Save approvers');
+      const log = appr.changes || [];
+      const who = (x) => String(x || '').replace(/^dashboard:/, '') || '—';
+      fill(apprCard, h('h3', {}, 'Owner and approvers ', h('span', { class: 'count' }, apprList.length)),
+        h('p', { class: 'note' }, "The people listed here decide cards with the buttons; with owner_like=approvers (bot identity) their messages in the channels count as the owner's too. The deployment owner stays in the list; changing the owner means redeploying. One save updates the card config and a new version of the access rules, and posts a notice in the decision channel."),
+        h('ul', { class: 'appr-list' }, rows),
+        h('div', { class: 'appr-add' }, input, h('button', { type: 'button', class: 'btn sm', onclick: add }, 'Add'), save),
+        log.length ? [h('h3', {}, 'Recent changes'), h('table', { class: 'ops-table', id: 'approvers-log' },
+          h('thead', {}, h('tr', {}, ['Time', 'By', 'Added', 'Removed'].map((t) => h('th', { scope: 'col' }, t)))),
+          h('tbody', {}, log.slice(0, 10).map((r) => h('tr', {}, h('td', { class: 'num' }, when(r.ts)), h('td', {}, who(r.who)),
+            h('td', { class: 'mono' }, (r.added || []).join(', ') || '—'),
+            h('td', { class: 'mono' }, (r.removed || []).join(', ') || '—')))))] : null);
+    }
+    async function loadApprovers() {
+      try {
+        appr = await api('/api/approvers');
+      } catch (e) {
+        fill(apprCard, h('h3', {}, 'Owner and approvers'), h('p', { class: 'note' }, e.status === 404 ? 'This deployment cannot edit approvers on the page.' : 'Could not read the approvers.'));
+        return;
+      }
+      apprToken = appr.page_token; apprList = appr.approvers.slice();
+      renderApprovers();
+    }
+    clear(main).append(head, errBox, h('div', { class: 'set-layout' }, index, h('div', { class: 'set-col' }, apprCard, form, logCard)));
+    loadApprovers();
     const dialog = document.getElementById('ops-confirm');
     const dialogBody = document.getElementById('ops-confirm-body');
     let pending = null;
@@ -2205,7 +2274,7 @@
     }
     function renderInfo() {
       fill(info, 'File: ', h('code', {}, st.path), st.source === 'default' ? ' (not created yet; created on save)' : null,
-        ' · Changes are validated and then confirmed with you before saving; the editor is recorded as dashboard.');
+        ' · Changes are validated and then confirmed with you before saving; the editor is recorded as dashboard (your sign-in email when opened through Cloudflare Access).');
     }
     async function load() {
       try { st = await api('/api/settings'); online(true); } catch (e) { online(false); errBox.hidden = false; errBox.textContent = 'Failed to read settings.'; return; }
@@ -2245,7 +2314,7 @@
       if (dryRun) {
         if (!res.changes.length) { toast('No actual changes'); saveBtn.disabled = false; return; }
         pending = list;
-        clear(dialogBody).append(h('p', {}, `Validation passed. ${res.changes.length} setting(s) will change (editor recorded as dashboard):`),
+        clear(dialogBody).append(h('p', {}, `Validation passed. ${res.changes.length} setting(s) will change (editor recorded as dashboard or your sign-in email):`),
           h('table', { class: 'ops-table' }, h('thead', {}, h('tr', {}, ['Setting', 'Old value', 'New value'].map((x) => h('th', { scope: 'col' }, x)))),
             h('tbody', {}, res.changes.map((c) => h('tr', {}, h('td', {}, FIELD_LABEL[c.key] || c.key, h('div', { class: 'sub mono' }, c.key)),
               h('td', { class: 'mono val' }, show(c.old)), h('td', { class: 'mono val' }, show(c.new)))))),

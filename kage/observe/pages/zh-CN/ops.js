@@ -1934,7 +1934,76 @@
     head.firstChild.append(info);
     // a section index on the left (sticky), the form in one column on the right
     const index = h('nav', { class: 'set-index', 'aria-label': '设置分组' });
-    clear(main).append(head, errBox, h('div', { class: 'set-layout' }, index, h('div', { class: 'set-col' }, form, logCard)));
+
+    // 0.78.9 (F21): the approvers (owner-like on a bot-only deployment), edited here; one save writes the card config and a
+    // new access-rules version (kage.core.approvers), the actor is the signed-in Access email.
+    const APPR_ERR = {"approvers_changed_since_loaded_reload": "审批人在你打开页面之后被改过了，已重新读取，请再改一次。", "invalid_page_token": "页面令牌已过期，请刷新页面后再保存。", "the_owner_stays_an_approver_change_the_owner_through_the_deployment": "部署的 owner 必须留在审批人里；换 owner 要重新部署。", "at_most_5_approvers": "最多 5 位审批人。", "an_hr_contact_cannot_be_an_approver": "HR 联系人不能同时是审批人。", "approver_must_be_a_person_not_a_bot": "只能是真人，不能是 bot。", "approver_account_is_deactivated": "这个账号已停用。", "approver_must_be_a_full_member_of_this_workspace": "必须是本工作区的正式成员（不能是访客或外部组织的人）。", "approver_not_found_in_slack": "在 Slack 里找不到这个人（检查 ID 或邮箱；用邮箱查找需要 bot 有 users:read.email 权限）。", "approver_must_be_a_slack_user_id_or_an_email": "请填 Slack 用户 ID（U…）或邮箱。", "nothing_to_change": "没有改动。", "approvers_must_be_a_list_of_slack_ids_or_emails": "至少要有一位审批人。"};
+    const apprCard = h('section', { class: 'ops-card', id: 'settings-approvers' });
+    let appr = null, apprToken = null, apprList = [];
+    function apprError(e) {
+      const code = (e.body && e.body.error) || e.message;
+      return (APPR_ERR[code] || code) + (e.body && e.body.detail ? ` (${e.body.detail})` : '');
+    }
+    function renderApprovers() {
+      if (!appr) return;
+      const rows = apprList.map((a) => h('li', { class: 'appr-row' },
+        h('span', { class: 'appr-name' }, a.name || a.id, a.pending ? h('small', {}, ' （待保存）') : null),
+        h('code', { class: 'appr-id' }, a.id),
+        h('span', { class: 'appr-tags' }, a.owner ? pill('owner', 'good') : null,
+          a.in_decisions ? pill('卡片配置里', null) : null,
+          a.in_rules === true ? pill('规则里', null) : a.in_rules === false ? pill('规则里没有', 'warn') : null),
+        a.owner ? h('span', {}) : h('button', { type: 'button', class: 'btn sm ghost', onclick: () => {
+          apprList = apprList.filter((x) => x !== a); renderApprovers(); } }, '移除')));
+      const input = h('input', { type: 'text', class: 'appr-input', placeholder: 'Slack 用户 ID（U…）或邮箱', spellcheck: 'false', autocomplete: 'off',
+        'aria-label': 'Slack 用户 ID（U…）或邮箱' });
+      const add = () => {
+        const v = input.value.trim();
+        if (!v || apprList.some((x) => x.id === v)) return;
+        apprList = apprList.concat([{ id: v, name: null, pending: true }]);
+        renderApprovers();
+      };
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+      const save = h('button', { type: 'button', class: 'btn primary', id: 'approvers-save', onclick: async () => {
+        const names = apprList.map((x) => x.name ? `${x.name}（${x.id}）` : x.id).join('\n');
+        if (!window.confirm("保存这些审批人？\n{list}\n修改人记为你的登录邮箱；会在决策频道发一条通知。".replace('{list}', names))) return;
+        save.disabled = true; save.textContent = '保存中…';
+        try {
+          const res = await api('/api/approvers', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Page-Token': apprToken },
+            body: JSON.stringify({ approvers: apprList.map((x) => x.id), digest: appr.digest }) });
+          apprToken = res.page_token || apprToken;
+          appr = res.state; apprList = appr.approvers.slice();
+          const v = res.change && res.change.rules_version;
+          toast((v ? "已保存：审批人 {n} 位，规则第 {v} 版".replace('{v}', v) : "已保存：审批人 {n} 位").replace('{n}', apprList.length), 'good');
+        } catch (e) {
+          toast(apprError(e), 'bad');
+          if (e.body && ['approvers_changed_since_loaded_reload', 'invalid_page_token'].includes(e.body.error)) loadApprovers();
+        }
+        renderApprovers();
+      } }, '保存审批人');
+      const log = appr.changes || [];
+      const who = (x) => String(x || '').replace(/^dashboard:/, '') || '—';
+      fill(apprCard, h('h3', {}, 'Owner 与审批人 ', h('span', { class: 'count' }, apprList.length)),
+        h('p', { class: 'note' }, "列表里的人可以点卡片按钮做决定；部署设为 owner_like=approvers（bot 身份）时，他们在频道里说的话也算 owner 本人的。部署的 owner 固定在列表里，换 owner 要重新部署。一次保存同时改卡片配置和一版新的访问规则，并在决策频道发一条变更通知。"),
+        h('ul', { class: 'appr-list' }, rows),
+        h('div', { class: 'appr-add' }, input, h('button', { type: 'button', class: 'btn sm', onclick: add }, '添加'), save),
+        log.length ? [h('h3', {}, '最近的变更'), h('table', { class: 'ops-table', id: 'approvers-log' },
+          h('thead', {}, h('tr', {}, ['时间', '修改人', '加了', '移除了'].map((t) => h('th', { scope: 'col' }, t)))),
+          h('tbody', {}, log.slice(0, 10).map((r) => h('tr', {}, h('td', { class: 'num' }, when(r.ts)), h('td', {}, who(r.who)),
+            h('td', { class: 'mono' }, (r.added || []).join(', ') || '—'),
+            h('td', { class: 'mono' }, (r.removed || []).join(', ') || '—')))))] : null);
+    }
+    async function loadApprovers() {
+      try {
+        appr = await api('/api/approvers');
+      } catch (e) {
+        fill(apprCard, h('h3', {}, 'Owner 与审批人'), h('p', { class: 'note' }, e.status === 404 ? '这个部署不能在页面里改审批人。' : '读取审批人失败。'));
+        return;
+      }
+      apprToken = appr.page_token; apprList = appr.approvers.slice();
+      renderApprovers();
+    }
+    clear(main).append(head, errBox, h('div', { class: 'set-layout' }, index, h('div', { class: 'set-col' }, apprCard, form, logCard)));
+    loadApprovers();
     const dialog = document.getElementById('ops-confirm');
     const dialogBody = document.getElementById('ops-confirm-body');
     let pending = null;
@@ -2205,7 +2274,7 @@
     }
     function renderInfo() {
       fill(info, '文件：', h('code', {}, st.path), st.source === 'default' ? '（还没有创建，保存时创建）' : null,
-        ' · 保存前会先校验，再请你确认；修改人记为 dashboard。');
+        ' · 保存前会先校验，再请你确认；修改人记为 dashboard（通过 Cloudflare Access 打开时记为你的登录邮箱）。');
     }
     async function load() {
       try { st = await api('/api/settings'); online(true); } catch (e) { online(false); errBox.hidden = false; errBox.textContent = '读取设置失败。'; return; }
@@ -2245,7 +2314,7 @@
       if (dryRun) {
         if (!res.changes.length) { toast('没有实际改动'); saveBtn.disabled = false; return; }
         pending = list;
-        clear(dialogBody).append(h('p', {}, `校验通过。将修改 ${res.changes.length} 项（修改人记为 dashboard）：`),
+        clear(dialogBody).append(h('p', {}, `校验通过。将修改 ${res.changes.length} 项（修改人记为 dashboard 或你的登录邮箱）：`),
           h('table', { class: 'ops-table' }, h('thead', {}, h('tr', {}, ['设置', '旧值', '新值'].map((x) => h('th', { scope: 'col' }, x)))),
             h('tbody', {}, res.changes.map((c) => h('tr', {}, h('td', {}, FIELD_LABEL[c.key] || c.key, h('div', { class: 'sub mono' }, c.key)),
               h('td', { class: 'mono val' }, show(c.old)), h('td', { class: 'mono val' }, show(c.new)))))),

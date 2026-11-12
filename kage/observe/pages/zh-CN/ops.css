@@ -303,3 +303,18 @@ pre.json { margin-top: var(--sp-2); }
 .sys-meter[data-level="warning"] .sys-meter-bar > i { background: var(--warn); }
 .sys-meter[data-level="critical"] .sys-meter-bar > i { background: var(--bad); }
 .sys-meter small { font-size: var(--fs-xs); color: var(--ink-3); }
+
+/* 0.78.9 (F21): the approvers card on the settings page */
+.appr-list { list-style: none; margin: var(--sp-3) 0; padding: 0; display: grid; gap: 6px; }
+.appr-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto minmax(0, 1.4fr) auto; align-items: center; gap: var(--sp-3);
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.appr-name { font-weight: 600; color: var(--ink); }
+.appr-name small { font-weight: 500; color: var(--warn-d); }
+.appr-id { font: var(--fs-sm) var(--mono); color: var(--ink-3); }
+.appr-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.appr-add { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.appr-input { flex: 1 1 260px; min-height: var(--control-h); padding: 6px 10px; font: var(--fs-base) var(--sans); color: var(--ink);
+  background: #fff; border: 1px solid var(--line-2); border-radius: var(--r-sm); box-shadow: var(--sh-sm); }
+.appr-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
+#approvers-save { margin-left: auto; }
+@media (max-width: 720px) { .appr-row { grid-template-columns: 1fr auto; } .appr-tags { grid-column: 1 / -1; } }

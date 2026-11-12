@@ -15,6 +15,7 @@ from pathlib import Path
 import types
 
 from kage.adapters.slack import previews as _previews
+from kage.core import approvers as _approvers
 from kage.core import trace as _trace
 from kage.observe import dashboard as _k
 from kage.observe import web as _web
@@ -83,6 +84,26 @@ def previews_module(assembly, blockers):
     return types.SimpleNamespace(PREVIEWS=core, PreviewService=PreviewService, PreviewError=_previews.PreviewError)
 
 
+def approvers_module(assembly, leaves):
+    """The approvers editor (kage.core.approvers) over this deployment: its owner and bot, the decisions file and rule
+    engine, Slack lookups with the bot token through the deployment's own transport."""
+    owner = assembly.deployment.owner
+
+    def slack(method, params):
+        transport = assembly.leaf('slack_transport')
+        return transport.api_call(method, transport.default_bot_token(), params=params)
+
+    def names():
+        try:
+            return assembly.leaf('intake').display_names(assembly.leaf('event_envelope').people_path())
+        except Exception:  # noqa: BLE001 - names are a nicety
+            return {}
+    buttons = leaves['decision_buttons']
+    return _approvers.Approvers(owner_user=owner.slack_user, bot_user=getattr(owner, 'assistant_slack_bot_user', None),
+                                team=getattr(owner, 'slack_workspace', None), decisions_path=buttons.config_path,
+                                load_decisions=buttons.load_config, rules=leaves['rule_engine'], slack=slack, names=names)
+
+
 def build(assembly):
     """(DashboardCore, a DashboardServer class bound to it) for an assembled deployment."""
     d = assembly.deployment
@@ -103,6 +124,7 @@ def build(assembly):
         feedback_learning=leaves['feedback_learning'], provider_health=leaves['provider_health'],
         stuck_claims=leaves['stuck_claims'], dispatcher=leaves['dispatcher'], cache_report=leaves['cache_report'],
         trace=trace_module(assembly, leaves['run_log']), process_alive=lambda pid, birth: _k.process_alive(pid, birth))
+    core.approvers = approvers_module(assembly, leaves)  # 0.78.9 (F21): approvers editable on the settings page
     shell = _web.ROOT / language  # a real directory for the server's Path(); the rendered pages replace it
 
     class Server(_k.DashboardServer):

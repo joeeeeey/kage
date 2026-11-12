@@ -171,6 +171,7 @@ CONTROL_BODY_LIMIT = 8192  # Phase 2 C1: one control POST (a message of at most 
 CORRECT_BODY_LIMIT = 2048  # O2f: one correction (a note of at most 300 characters)
 DECIDE_BODY_LIMIT = 8192   # O3b: one decision on a candidate (an edited value of a few short fields)
 CONTROL_EDITABLE = ('enabled', 'provider', 'model', 'effort')  # what the /control page may set (control.<key>)
+APPROVERS_BODY_LIMIT = 4096  # 0.78.9: at most a few Slack ids / emails
 ACCESS_EMAIL_RE = re.compile(r'[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}')  # 0.78.6: the settings audit actor
 
 
@@ -565,6 +566,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(404, {'error': 'gap_not_found'})
             if path == '/api/settings':
                 return self.respond(200, self.server.core.settings_state(self.server.issue_page_token()))
+            if path == '/api/approvers':  # 0.78.9 (F21)
+                try:
+                    return self.respond(200, self.server.core.approvers_state(self.server.issue_page_token()))
+                except KeyError:
+                    return self.respond(404, {'error': 'approvers_unavailable'})
             if path == '/api/design':
                 return self.respond(200, self.server.core.design_status(self.server.design_html))
             if path == '/design/doc':
@@ -621,6 +627,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(403, {'error': 'same_origin_required'})
         if urlsplit(self.path).path == '/api/settings':
             return self.post_settings()
+        if urlsplit(self.path).path == '/api/approvers':
+            return self.post_approvers()
         if urlsplit(self.path).path in ('/api/control/messages', '/api/control/retry', '/api/control/settings'):
             return self.post_control(urlsplit(self.path).path)
         if not secrets.compare_digest(self.headers.get('X-CSRF-Token', ''), self.server.csrf):
@@ -738,6 +746,38 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(503, {'error': 'local_state_unavailable'})
         return self.respond(200, result)
 
+    def post_approvers(self):
+        """0.78.9 (F21): the approvers save — same-origin, a live page token (used up by a save), JSON only; the actor is
+        the Cloudflare Access user when the request came through a public origin."""
+        if self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin':
+            return self.respond(403, {'error': 'same_origin_required'})
+        token = self.headers.get('X-Page-Token', '')
+        if not self.server.check_page_token(token):
+            return self.respond(403, {'error': 'invalid_page_token'})
+        if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
+            return self.respond(415, {'error': 'json_required'})
+        try:
+            size = int(self.headers.get('Content-Length', '0'))
+            if not 0 < size <= APPROVERS_BODY_LIMIT:
+                raise ValueError()
+            payload = json.loads(self.rfile.read(size))
+        except (ValueError, UnicodeError):
+            return self.respond(400, {'error': 'invalid_request_body'})
+        try:
+            result = self.server.core.save_approvers(payload, who=self.actor())
+        except KeyError:
+            return self.respond(404, {'error': 'approvers_unavailable'})
+        except ValueError as exc:
+            code = str(exc).split(':', 1)[0]
+            code = code if re.fullmatch(r'[a-z0-9_]{1,120}', code) else 'invalid_approvers'
+            detail = str(exc)[len(code) + 1:][:80] if ':' in str(exc) else None
+            return self.respond(409 if code == 'approvers_changed_since_loaded_reload' else 400,
+                                {'error': code, **({'detail': detail} if detail and re.fullmatch(r'[a-z0-9_]{1,80}', detail) else {})})
+        except OSError:
+            return self.respond(503, {'error': 'approvers_write_failed'})
+        self.server.check_page_token(token, consume=True)
+        return self.respond(200, {**result, 'page_token': self.server.issue_page_token()})
+
     def post_settings(self):
         """The settings save: same-origin (checked by the caller), a live per-page token, JSON only."""
         if self.headers.get('Sec-Fetch-Site', 'same-origin') != 'same-origin':
@@ -780,7 +820,7 @@ class DashboardCore:
     channel names and tail command, and the runtime modules the read models read (hooks); the
     DashboardServer holds one and its Handler reaches it through the server."""
 
-    def __init__(self, language, *, tz, owner_key, owner_name, web, default_design_html, design_workspace, known_channels, tail_command, avatars, poll_schedule, previews, claude_delivery, run_log, worker_config, task_registry, rule_engine, routines, decision_buttons, blockers, feedback_learning, provider_health, stuck_claims, dispatcher, cache_report, trace, process_alive):
+    def __init__(self, language, *, tz, owner_key, owner_name, web, default_design_html, design_workspace, known_channels, tail_command, avatars, poll_schedule, previews, claude_delivery, run_log, worker_config, task_registry, rule_engine, routines, decision_buttons, blockers, feedback_learning, provider_health, stuck_claims, dispatcher, cache_report, trace, process_alive, approvers=None):
         self.language = language
         self.tz = tz
         self.web = web
@@ -810,6 +850,7 @@ class DashboardCore:
         self._cache_memo = {}
         self._system_lock = threading.Lock()
         self._system_memo = (0.0, None, None)  # 0.78.6: (monotonic time, overview, CPU sample) — one probe per 10 s
+        self.approvers = approvers  # 0.78.9 (F21): kage.core.approvers.Approvers of a generated deployment, else None
 
     def msg(self, key, **values):
         return locale.message(self.language, key, **values)
@@ -1717,6 +1758,23 @@ class DashboardCore:
         return {'alert': ov['alert'], 'levels': ov['levels'], 'thresholds': ov['thresholds'], 'disk': disks[0] if disks else None,
                 'memory': ov['memory'], 'cpu': {k: ov['cpu'].get(k) for k in ('pct', 'cores_used', 'limit_cores', 'loadavg')},
                 'processes': ov['processes'], 'enabled': ov['enabled']}
+
+    def approvers_state(self, token):
+        """0.78.9 (F21): GET /api/approvers — the approvers (owner-like on a bot-only deployment) with names, the digest a
+        save quotes, recent changes; a page token for the save."""
+        if self.approvers is None:
+            raise KeyError('approvers_unavailable')
+        return {**self.approvers.state(), 'page_token': token}
+
+    def save_approvers(self, payload, who='dashboard', now=None):
+        """POST /api/approvers {approvers: [Slack id | email, ...], digest}: decisions.json + a new access-rules version in
+        one save (kage.core.approvers); raises ValueError codes."""
+        if self.approvers is None:
+            raise KeyError('approvers_unavailable')
+        if not isinstance(payload, dict) or set(payload) != {'approvers', 'digest'} or \
+                not isinstance(payload['digest'], str) or not re.fullmatch(r'[0-9a-f]{16}', payload['digest']):
+            raise ValueError('invalid_request_body')
+        return self.approvers.save(payload['approvers'], payload['digest'], who, now=now)
 
     def gap_detail(self, path, gap_id, now=None):
         """/gaps/<id>: one blocker with its `tried` / `unblock` text (agent-written, secret-checked), card refs and

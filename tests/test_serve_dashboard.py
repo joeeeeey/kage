@@ -21,7 +21,8 @@ HOOK_ATTRS = re.compile(r'(?:self|core)\.(' + '|'.join(
     ['trace', 'previews', 'avatars', *dashboard.HOOKS]) + r')\.([A-Za-z_]+)')
 LEAF_OF = {'avatars': 'avatar_cache'}
 READ_APIS = ('/api/state', '/api/runs', '/api/backlog', '/api/intake', '/api/inbox', '/api/rules', '/api/routines',
-             '/api/gaps', '/api/learning', '/api/cache', '/api/health', '/api/settings', '/api/design', '/api/control')
+             '/api/gaps', '/api/learning', '/api/cache', '/api/health', '/api/settings', '/api/design', '/api/control',
+             '/api/approvers')
 
 
 def get(server, target):
@@ -34,6 +35,20 @@ def get(server, target):
     handler.send_header = lambda key, value: headers.__setitem__(key, value)
     handler.end_headers = lambda: None
     handler.do_GET()
+    return sent[0]
+
+
+def post(server, target, body, token):
+    """POST through the server's handler without a socket: (status, payload)."""
+    import io
+    handler = observe.Handler.__new__(observe.Handler)
+    handler.server = server
+    handler.path, sent = target, []
+    handler.headers = {'Host': f'127.0.0.1:{server.server_port}', 'Origin': f'http://127.0.0.1:{server.server_port}',
+                       'Content-Type': 'application/json', 'Content-Length': str(len(body)), 'X-Page-Token': token}
+    handler.rfile = io.BytesIO(body)
+    handler.respond = lambda status, payload, content_type=None, csp=None: sent.append((status, payload))
+    handler.do_POST()
     return sent[0]
 
 
@@ -84,6 +99,12 @@ class ServeDashboardTest(Base):
             system = (body if isinstance(body, dict) else json.loads(body))['system']
             self.assertIn(key, system, path)
         self.assertIn(get(server, '/api/control')[1]['system']['alert'], ('ok', 'warning', 'critical'))
+        # 0.78.9 (F21): the approvers save goes through the page token; the owner alone is no change
+        state = get(server, '/api/approvers')[1]
+        self.assertEqual([a['id'] for a in state['approvers']], [state['owner']['id']])
+        body = json.dumps({'approvers': [state['owner']['id']], 'digest': state['digest']}).encode()
+        self.assertEqual(post(server, '/api/approvers', body, 'wrong-token'), (403, {'error': 'invalid_page_token'}))
+        self.assertEqual(post(server, '/api/approvers', body, state['page_token']), (400, {'error': 'nothing_to_change'}))
         with self.assertRaises(ValueError):
             server_class(('0.0.0.0', 0), db)
         with sqlite3.connect(db) as conn:  # the console only read the store
