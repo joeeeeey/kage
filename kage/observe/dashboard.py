@@ -1767,14 +1767,16 @@ class DashboardCore:
         return {**self.approvers.state(), 'page_token': token}
 
     def save_approvers(self, payload, who='dashboard', now=None):
-        """POST /api/approvers {approvers: [Slack id | email, ...], digest}: decisions.json + a new access-rules version in
-        one save (kage.core.approvers); raises ValueError codes."""
+        """POST /api/approvers {owners?: [Slack id | email, ...], approvers: [...], digest}: decisions.json + a new
+        access-rules version in one save (kage.core.approvers); raises ValueError codes."""
         if self.approvers is None:
             raise KeyError('approvers_unavailable')
-        if not isinstance(payload, dict) or set(payload) != {'approvers', 'digest'} or \
+        if not isinstance(payload, dict) or set(payload) - {'owners'} != {'approvers', 'digest'} or \
                 not isinstance(payload['digest'], str) or not re.fullmatch(r'[0-9a-f]{16}', payload['digest']):
             raise ValueError('invalid_request_body')
-        return self.approvers.save(payload['approvers'], payload['digest'], who, now=now)
+        # 0.78.10 (F22): {owners, approvers}: the owners and, among them, the active approvers
+        return self.approvers.save(payload['approvers'], payload['digest'], who, now=now, owners=payload.get('owners'),
+                                   source='console')
 
     def gap_detail(self, path, gap_id, now=None):
         """/gaps/<id>: one blocker with its `tried` / `unblock` text (agent-written, secret-checked), card refs and

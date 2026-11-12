@@ -13,6 +13,7 @@ import time
 import uuid
 
 from kage import locale
+from kage.core import authority as _authority
 from kage.core import control as _control
 
 _OWNER_DEFAULT = object()  # a parameter whose default is the owner's value, filled in at call time
@@ -428,7 +429,12 @@ class EscalationCore:
             self._register_root(db, channel, ts, task_id, now)
         read = self.rt.slack.api_call('conversations.replies', user_token,
                               params={'channel': channel, 'ts': ts, 'limit': 1})['messages'][0]
-        if read.get('user') != self.bot_user or f'<@{self.owner_slack_user}>' not in read.get('text', ''):
+        try:
+            mentioned = _authority.card_mentioned(config or self.rt.buttons.load_config(), self.owner_slack_user,
+                                                  read.get('text', ''))
+        except ValueError:
+            mentioned = f'<@{self.owner_slack_user}>' in read.get('text', '')
+        if read.get('user') != self.bot_user or not mentioned:
             raise RuntimeError('escalation_readback_failed')
         return ts
 
@@ -493,7 +499,7 @@ class EscalationCore:
         link = f"{self.deployment.owner.slack_workspace_url}/archives/{e['channel']}/p{e['ts'].replace('.', '')}"
         # Escape supplied plain text so it cannot insert mentions or Slack links. P3.1: the question leads; the source
         # message link and the task move to the footer.
-        text = f'<@{self.owner_slack_user}> {self.rt.buttons.escape(question)}'
+        text = f'{_authority.card_mentions(config, self.owner_slack_user)} {self.rt.buttons.escape(question)}'
         if route['delegates']:
             text += self.msg('escalation.escalation.1', owner=self.name) + ' '.join(f'<@{d}>' for d in route['delegates']) + self.msg('escalation.escalation.2')
         footer = (self.msg('escalation.escalation.4', escape=self.rt.buttons.escape(self.rt.registry.task_id_for_cwd(w['cwd']) or self.msg('escalation.escalation.3') + owner['session'][:8]), link=link))
@@ -752,9 +758,6 @@ class EscalationCore:
             config = config or self.rt.buttons.load_config()
         except ValueError:
             return self.rt._fail('invalid_decision_config')
-        role = self.rt.buttons.authorize(config, self.owner_slack_user, now, bool(card['never_auto']))
-        if role is None:
-            return self.rt._fail('not_authorized')
         model = self.rt.buttons.card_model(card['options'])
         user_token, bot_token = self.rt.api_identity(), self.rt.api_identity(bot=True)
         # P3.2: a threaded card is a reply under the task's approvals root, so the owner's reply carries thread_ts = root, not the
@@ -766,6 +769,12 @@ class EscalationCore:
         m = next((x for x in found.get('messages', []) if x.get('ts') == reply_ts), None)
         if m is None or not getattr(self.rt.card_replies, f'{self.key}_typed')(self.rt, db, card['channel'], m, reply_thread):
             return self.rt._fail(f'reply_is_not_{self.key}s_own_typed_reply_in_this_card_thread')
+        # 0.78.10 (F22): the reply's own author decides (an owner-like approver typed it, not necessarily the owner), and
+        # only an active approver may (an owner who is not one keeps the owner's trust but cannot approve)
+        actor = str(m.get('user') or '')
+        role = self.rt.buttons.authorize(config, actor, now, bool(card['never_auto']))
+        if role is None:
+            return self.rt._fail('not_authorized')
         parsed = self.rt.buttons.parse_reply(m.get('text'), model, strict=self.rt.card_replies.strict(db, eid))
         if parsed['option'] is None:
             return self.rt._fail('no_unambiguous_choice', why=parsed['reason'])
@@ -774,7 +783,7 @@ class EscalationCore:
                 return self.rt._fail('already_decided')
             db.execute('INSERT INTO decisions (event_id,choice,actor,role,decided_at,card_channel,card_ts,stage,note,'
                        'provenance,source_ts) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                       (eid, parsed['option']['choice'], self.owner_slack_user, role, now, card['channel'], esc['thread_ts'], 'recorded',
+                       (eid, parsed['option']['choice'], actor, role, now, card['channel'], esc['thread_ts'], 'recorded',
                         None, 'thread_reply', reply_ts))
         secret = bool(w and w.get('secret_input'))  # a card waiting for a verification code never quotes a reply
         result = self._complete_decision(db, eid, model, False, user_token, bot_token, now,
@@ -1232,7 +1241,7 @@ class EscalationCore:
                         int(bool(smoke))))
         warning = None
         try:
-            ts = self._post_card(db, eid, route['channel'], f'<@{self.owner_slack_user}> {self.rt.buttons.escape(question)}', options, client_id,
+            ts = self._post_card(db, eid, route['channel'], f'{_authority.card_mentions(config, self.owner_slack_user)} {self.rt.buttons.escape(question)}', options, client_id,
                             user_token, bot_token, self.rt.agent_metadata(kind, event_id=eid, **(refs or {})), kind=kind,
                             footer=footer, hint=hint or self.rt.buttons.code_owned_hint(self.rt.buttons.card_model(options)), task_id=task_id,
                             broadcast=broadcast, establish_root=False, parent_event=parent_event, now=now, config=config,

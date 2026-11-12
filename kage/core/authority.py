@@ -54,11 +54,25 @@ def owner_like_users(worker_config, buttons, _cache={}):
     try:
         intake = worker_config.load()[0]['intake']
         if intake.get('identity') == 'bot' and intake.get('owner_like') == 'approvers':
-            users = frozenset(str(u) for u in buttons.load_config().get('approvers') or [])
+            config = buttons.load_config()  # 0.78.10 (F22): the owners when the file names them apart from the approvers
+            users = frozenset(str(u) for u in config.get('owners') or config.get('approvers') or [])
     except Exception:  # noqa: BLE001 - a broken config grants nothing
         users = frozenset()
     _cache[key] = (now, users)
     return users
+
+
+def card_mentions(config, owner_user):
+    """0.78.10 (F22): who a card mentions — the active approvers when the decisions config names the owners apart
+    (not every owner decides), else the owner."""
+    if (config or {}).get('owners') and config.get('approvers'):
+        return ' '.join(f'<@{u}>' for u in config['approvers'])
+    return f'<@{owner_user}>'
+
+
+def card_mentioned(config, owner_user, text):
+    """Whether a read-back card text carries its mention (the owner's, or an active approver's)."""
+    return any(f'<@{u}>' in str(text or '') for u in [owner_user, *((config or {}).get('approvers') or [])])
 
 
 def decision_channels(config):
@@ -106,7 +120,7 @@ class Authority:
         """A missing file means owner-only in the owner's DM (never a public channel); a malformed one fails closed."""
         path = Path(path).expanduser()
         if not path.exists():
-            return {'decision_channel': self.fallback, 'approvers': [self.fallback],
+            return {'decision_channel': self.fallback, 'approvers': [self.fallback], 'owners': None,
                     'ooo': {'active': False, 'start': None, 'end': None, 'delegates': [],
                             'delegate_scope': 'none', 'channel': None},
                     'source': 'default'}
@@ -142,10 +156,15 @@ class Authority:
         if ooo_channel == channel:
             raise ValueError('invalid_decision_config_ooo_channel_must_differ_from_decision_channel')
         delegates = self._users(ooo.get('delegates', []), 'ooo_delegates', allow_empty=True)
+        # 0.78.10 (F22): the owners (owner-like, may switch the approvers) apart from the active approvers; the approvers
+        # must be owners (the deployment owner always is one)
+        owners = self._users(raw['owners'], 'owners') if raw.get('owners') is not None else None
+        if owners is not None and set(approvers) - set(owners) - {self.fallback}:
+            raise ValueError('invalid_decision_config_approvers_must_be_owners')
         if ooo.get('active') and scope != 'none' and delegates and not ooo_channel:
             # Delegates are not in the owner-only decision channel and could not see cards.
             raise ValueError('invalid_decision_config_active_ooo_delegates_require_ooo_channel')
-        return {'decision_channel': channel, 'approvers': approvers,
+        return {'decision_channel': channel, 'approvers': approvers, 'owners': owners,
                 'ooo': {'active': ooo.get('active', False), 'start': start, 'end': end,
                         'delegates': delegates, 'delegate_scope': scope, 'channel': ooo_channel},
                 'source': str(path)}

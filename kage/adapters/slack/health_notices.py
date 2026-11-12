@@ -4,6 +4,7 @@ send is ledgered (it is the runtime's own message, never ingested as work). 0.78
 notices the same way (provider `system`, its own context line)."""
 from __future__ import annotations
 from kage import locale
+from kage.core import authority as _authority
 
 
 class HealthNotices:
@@ -18,7 +19,7 @@ class HealthNotices:
         # Config membership alone passed a public decision_channel; Slack must report it private (cached). A
         # refusal lands in notice_error and the notice is retried on the next pass.
         rt.buttons.require_private_destination(rt, db, channel, 'provider_health_notice', config=config)
-        body = f'<@{self.owner_user}> {rt.buttons.escape(text)}'
+        body = f'{_authority.card_mentions(config, self.owner_user)} {rt.buttons.escape(text)}'  # 0.78.10: approvers
         sent = rt.slack.api_call('chat.postMessage', rt.api_identity(bot=True), json_body={
             'channel': channel, 'text': body, 'unfurl_links': False, 'unfurl_media': False,
             'blocks': [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': body}},

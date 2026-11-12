@@ -381,6 +381,10 @@ class Control:
             return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
         if not self.typed(rt, db, channel, m):
             return {'ok': True, 'outcome': 'skipped', 'reason': 'not_hand_typed'}
+        from kage.core import approvers as _approvers  # 0.78.10 (F22): an owner's "审批人换成 X" is code's, not the agent's
+        switched = _approvers.handle_switch(rt, db, channel, m, now=now)
+        if switched is not None:
+            return switched
         mid = self._record_slack(rt, db, cfg, channel, m, None, 'push', now)
         if mid:
             rt.start(_db_path(db))
@@ -473,6 +477,10 @@ class Control:
                     walk['high'] = max(walk['high'], m['ts'], key=float)
                     if m.get('user') not in owners or m.get('thread_ts') not in (None, '', m['ts']):
                         continue
+                    if self.typed(rt, db, channel, m):
+                        from kage.core import approvers as _approvers  # 0.78.10 (F22): a switch is code's (once)
+                        if _approvers.handle_switch(rt, db, channel, m, now=now) is not None:
+                            continue
                     if self.typed(rt, db, channel, m) and self._record_slack(rt, db, cfg, channel, m, None, 'poll', now):
                         out['recorded'] += 1
                 walk['page'] = (page.get('response_metadata') or {}).get('next_cursor') or None

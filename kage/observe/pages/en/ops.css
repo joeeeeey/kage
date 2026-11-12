@@ -318,3 +318,8 @@ pre.json { margin-top: var(--sp-2); }
 .appr-input:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-ring); }
 #approvers-save { margin-left: auto; }
 @media (max-width: 720px) { .appr-row { grid-template-columns: 1fr auto; } .appr-tags { grid-column: 1 / -1; } }
+
+/* 0.78.10 (F22): owners with an Approve switch each */
+.appr-row { grid-template-columns: minmax(120px, 1fr) auto minmax(0, 1fr) auto auto; }
+.appr-row.is-active { border-color: rgba(59, 91, 253, .35); background: var(--accent-soft); }
+.appr-switch { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--ink-2); cursor: pointer; }

@@ -16,6 +16,7 @@ import time
 import urllib.error
 
 from kage import locale
+from kage.core import authority as _authority
 
 IDLE_SECONDS = 2 * 86400
 
@@ -678,7 +679,11 @@ class FollowupCore:
         is in the footer (`ask_<owner key>_footer`). In the owner's language unless the caller names another."""
         lang = lang or locale.card_lang(self.language)
         urgent = (self.msg('followup.ask_owner_text.1') if lang == 'zh' else '🚨 *HIGH PRIORITY* · ') if priority == 'high' else ''
-        text = f'<@{self.owner_slack_user}> {urgent}{self.rt.buttons.escape(question)}'
+        try:  # 0.78.10 (F22): the active approvers when the owners are named apart
+            mention = _authority.card_mentions(self.rt.buttons.load_config(), self.owner_slack_user)
+        except (ValueError, AttributeError):
+            mention = f'<@{self.owner_slack_user}>'
+        text = f'{mention} {urgent}{self.rt.buttons.escape(question)}'
         if delegates:
             text += self.msg('followup.ask_owner_text.2', owner=self.name) + ' '.join(f'<@{d}>' for d in delegates) + self.msg('followup.ask_owner_text.3')
         return text

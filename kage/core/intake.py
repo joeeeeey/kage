@@ -27,6 +27,7 @@ import uuid
 
 from kage import locale
 from kage.adapters import trackers as _trackers
+from kage.core import approvers as _approvers
 from kage.core import control as _control
 
 ACK_EMOJI = 'eyes'  # 0.78.2: the bot's immediate receipt on an accepted message (kage.core.loop SEEN_EMOJI)
@@ -3119,6 +3120,9 @@ class IntakeCore:
             return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
         if str(m.get('user') or '') != user:
             return {'ok': False, 'outcome': 'refused', 'reason': 'author_mismatch'}
+        switched = _approvers.handle_switch(rt, db, channel, m, now=now)  # 0.78.10 (F22): an owner's "审批人换成 X"
+        if switched is not None:
+            return switched
         control = getattr(getattr(rt, 'LOOP_CORE', None), 'control', None)
         if control is not None and m.get('thread_ts') in (None, '', ts) and user in _control.owner_users(rt) and \
                 channel in rt.card_threads.decision_channels(rt) and control.card_channel_on(rt)[0]:
