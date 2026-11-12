@@ -1061,6 +1061,8 @@ class Dispatcher:
         _write_private(run_dir / RUN_CONTEXT_FILE, rt.KEEP_WARM_CONTEXT)
         settings, extra, summary = self._claude_settings(profile, cwd, kw_id)
         settings['hooks']['PreToolUse'][0]['matcher'] = '*'  # dispatch-hook answers deny for every tool
+        if _watchdog_settings(config)['ttft_seconds']:  # 0.79.2 (F26): as a real run's command line (`_launch`)
+            extra = (*(extra or ()), PARTIAL_MESSAGES_ARG)
         cmd = self.core.build_command('claude', 'fresh', session, prompt, model, effort, yolo, run_dir, settings,
                             [*extra, *KEEP_WARM_ARGS], None, profile['drop_tools'])
         env = self._env(kw_id, task_id, 0, 'claude', config)

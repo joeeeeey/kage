@@ -557,6 +557,8 @@ class CliCore:
         ipush.add_argument('--ts', required=True)
         ipush.add_argument('--user', required=True)
         ipush.add_argument('--thread-ts')
+        ipush.add_argument('--followup', action='store_true', help='0.79.2: a thread reply without an @mention, taken only '
+                                                                   'in a thread that is a conversation with the bot')
         smoke_i = sub.add_parser('smoke-intake', help='TEST: synthetic burst through the live intake pipeline (no Slack read)')
         smoke_i.add_argument('--scenario', choices=['request', 'strategic', 'alert'], default='request')
         smoke_i.add_argument('--no-wait', action='store_true')
@@ -1163,7 +1165,7 @@ class CliCore:
         elif args.command == 'intake-push':  # 0.77.0: through INTAKE_CORE (the unit's names stay the deployment's)
             result = (self.rt._fail('agent_session_cannot_push_intake') if self.rt._agent_session() else
                       self.rt.intake.INTAKE_CORE.intake_push(self.rt, db, db_path, args.channel, args.ts, args.user,
-                                                             thread_ts=args.thread_ts))
+                                                             thread_ts=args.thread_ts, followup=args.followup))
         elif args.command == 'intake-launch':
             result = self.rt.intake.intake_launch(self.rt, db, db_path, args.from_burst, args.title,
                                           Path(args.brief_file).read_text(encoding='utf-8'), provider=args.provider,
@@ -1192,8 +1194,10 @@ class CliCore:
                                             provider=args.provider, category=args.category, slug=args.slug,
                                             wait_seconds=args.wait_seconds)
         elif args.command == 'intake-bootstrap':
-            result = self.rt.intake.intake_bootstrap(self.rt, db, db_path, launch=not args.no_launch,
-                                             rewrite_policy=args.rewrite_policy, wait_seconds=args.wait_seconds)
+            from kage.core import intake as _intake_core  # 0.79.2 (F28): existing tasks keep their own heading / title
+            result = _intake_core.keep_own_titles(self.rt, db, lambda: self.rt.intake.intake_bootstrap(
+                self.rt, db, db_path, launch=not args.no_launch, rewrite_policy=args.rewrite_policy,
+                wait_seconds=args.wait_seconds))
         elif args.command == 'smoke-intake':
             result = self.rt.intake.smoke_intake(self.rt, db, db_path, args.scenario, wait=not args.no_wait, timeout=args.timeout)
         elif args.command == 'people-propose':

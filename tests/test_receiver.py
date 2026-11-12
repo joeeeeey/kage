@@ -167,6 +167,27 @@ class IntakePushTest(unittest.TestCase):
                                                       thread_ts='1700000000.000100')))  # a DM thread reply: card path
         self.assertFalse(r.is_intake_event({'type': 'event_callback', 'event': 'x'}))
 
+    def test_a_thread_reply_is_a_followup_candidate(self):
+        # 0.79.2 (F28): a reply in a channel / private-channel thread, never a top-level post, a DM or an @mention event
+        reply = self.event(type='message', channel_type='channel', thread_ts='1700000000.000100')
+        self.assertTrue(r.is_thread_followup_event(reply))
+        self.assertTrue(r.is_thread_followup_event(self.event(type='message', channel_type='group',
+                                                              thread_ts='1700000000.000100')))
+        self.assertFalse(r.is_intake_event(reply))
+        for event in ({'type': 'message', 'channel_type': 'channel'}, {'thread_ts': '1700000000.000100'},
+                      {'type': 'message', 'channel_type': 'channel', 'thread_ts': '1700000001.000200'},
+                      {'type': 'message', 'channel_type': 'im', 'thread_ts': '1700000000.000100'}):
+            self.assertFalse(r.is_thread_followup_event(self.event(**event)), event)
+        refs, why = r.intake_followup_refs(reply, expected_team_id=TEAM, own_bot_user='U0000TEST09')
+        self.assertEqual((refs['thread_ts'], why), ('1700000000.000100', ''))
+        self.assertEqual(r.intake_followup_refs(self.event(), expected_team_id=TEAM), (None, 'not_thread_followup'))
+        self.assertEqual(r.intake_followup_refs(self.event(type='message', channel_type='channel', user='U0000TEST09',
+                                                           thread_ts='1700000000.000100'),
+                                                expected_team_id=TEAM, own_bot_user='U0000TEST09'), (None, 'our_bot'))
+        cmd = r.intake_push_command({**refs, 'followup': '1'}, python='py', script=Path('/x/kage.py'))
+        self.assertEqual(cmd[-3:], ['--thread-ts', '1700000000.000100', '--followup'])
+        self.assertNotIn('--followup', r.intake_push_command(refs, python='py', script=Path('/x/kage.py')))
+
     def test_refs_drops_and_command(self):
         refs, why = r.intake_refs(self.event(), expected_team_id=TEAM)
         self.assertEqual((refs, why), ({'channel': 'C0000TEST01', 'ts': '1700000001.000200', 'user': OWNER}, ''))

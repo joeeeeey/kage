@@ -256,6 +256,25 @@ def is_intake_event(payload: Any) -> bool:
         event.get("thread_ts") in (None, "", event.get("ts"))
 
 
+def is_thread_followup_event(payload: Any) -> bool:
+    """0.79.2 (F28): a `message` reply in a channel / private-channel thread (no @mention event of its own). The runtime
+    takes it only when that thread is a conversation with the bot (`intake-push --followup`); a card-reply channel's
+    threads stay with the card-reply path."""
+    if not (isinstance(payload, dict) and payload.get("type") == "event_callback" and isinstance(payload.get("event"), dict)):
+        return False
+    event = payload["event"]
+    return event.get("type") == "message" and event.get("channel_type") in ("channel", "group") and \
+        event.get("thread_ts") not in (None, "", event.get("ts"))
+
+
+def intake_followup_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user: str | None = None,
+                         own_app_id: str | None = None) -> tuple[dict[str, str] | None, str]:
+    """0.79.2 (F28): `intake_refs` for a thread follow-up (`is_thread_followup_event`): the same checks, the thread kept."""
+    if not is_thread_followup_event(payload):
+        return None, "not_thread_followup"
+    return _intake_refs(payload, expected_team_id=expected_team_id, own_bot_user=own_bot_user, own_app_id=own_app_id)
+
+
 def intake_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user: str | None = None,
                 own_app_id: str | None = None) -> tuple[dict[str, str] | None, str]:
     """0.77.0 bot intake: the receiver-side filter for a message to the bot (an @mention, or a DM): (refs, "") for a
@@ -265,6 +284,11 @@ def intake_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user:
     a person and the app is allowed (`intake.delegate_bot_names`)."""
     if not is_intake_event(payload):
         return None, "not_intake_event"
+    return _intake_refs(payload, expected_team_id=expected_team_id, own_bot_user=own_bot_user, own_app_id=own_app_id)
+
+
+def _intake_refs(payload: dict[str, Any], *, expected_team_id: str, own_bot_user: str | None,
+                 own_app_id: str | None) -> tuple[dict[str, str] | None, str]:
     event = payload["event"]
     if str(payload.get("team_id") or "") != expected_team_id:
         return None, "unexpected_team"
@@ -315,7 +339,8 @@ def intake_push_command(refs: dict[str, str], *, python: str, script: Path, db: 
     # Refs only: the runtime reads the message itself. Never the text.
     command = followup_base_command(python=python, script=script, db=db) + [
         "intake-push", "--channel", refs["channel"], "--ts", refs["ts"], "--user", refs["user"]]
-    return command + ["--thread-ts", refs["thread_ts"]] if refs.get("thread_ts") else command
+    command += ["--thread-ts", refs["thread_ts"]] if refs.get("thread_ts") else []
+    return command + ["--followup"] if refs.get("followup") else command
 
 
 def control_push_command(refs: dict[str, str], *, python: str, script: Path, db: str | None = None) -> list[str]:

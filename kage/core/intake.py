@@ -1003,6 +1003,24 @@ class Intake:
                 continue
         return None
 
+    def bot_thread(self, channel, root, now=None):
+        """0.79.2 (F28): this channel thread is a conversation with us, so a person's reply in it is addressed to the bot
+        without an @mention: a thread intake bound to a task, a thread one of our tasks watches or asked in, a thread
+        whose root is our own post, or the thread of a burst we answered (an intake reply or ack, `intake_sends`)."""
+        if not root:
+            return False
+        now = time.time() if now is None else now
+        if self.db.execute('SELECT 1 FROM intake_bindings WHERE channel=? AND thread_root=? AND (expires_at IS NULL OR '
+                           'expires_at>?) UNION ALL SELECT 1 FROM agent_sends WHERE channel=? AND ts=? UNION ALL '
+                           'SELECT 1 FROM intake_sends s JOIN intake_bursts b ON b.burst_id=s.burst_id WHERE s.channel=? '
+                           'AND coalesce(b.thread_root,b.first_ts)=? LIMIT 1',
+                           (channel, root, now, channel, root, channel, root)).fetchone():
+            return True
+        if ask_thread_card(self.db, channel, root) is not None:
+            return True
+        return any(w.get('channel') == channel and w.get('thread') == root and w.get('kind') != 'task_inbox'
+                   for w in self.running_watches())
+
     def delegate(self, m, ctx):
         """P42.1: delegate_app, and its user is a person, not that app's own bot user (users.info, see app_people)."""
         via = self.core.delegate_app(m, ctx.get('cfg'))
@@ -1036,7 +1054,8 @@ class Intake:
             return 'our_agent'
         cfg = ctx.get('cfg') or {}
         bot_only = cfg.get('identity') == 'bot'  # 0.77.0: a bot-only deployment answers what is said to it
-        addressed = conv_type != 'channel' or f'<@{self.core.bot_user}>' in str(m.get('text') or '')
+        addressed = conv_type != 'channel' or f'<@{self.core.bot_user}>' in str(m.get('text') or '') or \
+            bool(bot_only and root and self.bot_thread(channel, root, ctx.get('now')))  # 0.79.2 (F28): a reply to us
         if user == self.core.owner_slack_user and not (bot_only and addressed):
             return f'{self.core.key}_authored'  # (said to the bot, the owner's words are an instruction to it)
         if bot_only and not addressed and channel not in ctx.get('oncall', ()):
@@ -1121,8 +1140,12 @@ class Intake:
                                 'updated_at=? WHERE burst_id=?', (ts, status, now, prior['burst_id']))
                 return prior['burst_id'], 'alert_duplicate'
             key = f'alert:{fp}'
-        else:
+        elif root or conv_type in ('im', 'mpim'):
             key = f'{sender}|{channel}:{root or ""}'
+        else:
+            # 0.79.2 (F28): a top-level channel message is its own conversation, answered in its own thread: never merged
+            # with the same person's next top-level message (only lines in one thread or one DM merge).
+            key = f'{sender}|{channel}:{ts}'
         open_burst = self.db.execute("SELECT * FROM intake_bursts WHERE state='open' AND conv_key=? ORDER BY created_at DESC "
                                      'LIMIT 1', (key,)).fetchone()
         if open_burst is not None:
@@ -3093,13 +3116,15 @@ class IntakeCore:
         return {'ok': True, 'queries': out,
                 'hint': 'A DM-discovery query should return mostly im/mpim matches; adjust intake.dm_queries otherwise.'}
 
-    def intake_push(self, rt, db, db_path, channel, ts, user, thread_ts=None, now=None):
+    def intake_push(self, rt, db, db_path, channel, ts, user, thread_ts=None, now=None, followup=False):
         """0.77.0 bot intake: the receiver's refs for an @mention of the bot or a DM to it (`intake-push`). Only with
         `intake.identity: bot`: the message is read back with the bot token and takes the same filter -> burst path as
-        a polled one (`intake_seen` dedups); the refs carry no authority, the read-back message decides."""
+        a polled one (`intake_seen` dedups); the refs carry no authority, the read-back message decides. 0.79.2 (F28):
+        `followup` = a channel thread reply without a known @mention; it is taken only when the thread is a conversation
+        with us (`Intake.bot_thread`), else skipped as `not_bot_thread` (the receiver's card-reply path goes on)."""
         now = time.time() if now is None else now
         if not (CHANNEL_ID_RE.fullmatch(str(channel)) and TS_RE.fullmatch(str(ts)) and USER_RE.fullmatch(str(user))
-                and (thread_ts is None or TS_RE.fullmatch(str(thread_ts)))):
+                and (thread_ts is None or TS_RE.fullmatch(str(thread_ts))) and (thread_ts or not followup)):
             return {'ok': False, 'outcome': 'refused', 'reason': 'invalid_refs'}
         cfg = _cfg(rt)['intake']
         if not cfg['enabled'] or cfg.get('identity') != 'bot':
@@ -3120,6 +3145,8 @@ class IntakeCore:
             return {'ok': False, 'outcome': 'refused', 'reason': 'message_not_found'}
         if str(m.get('user') or '') != user:
             return {'ok': False, 'outcome': 'refused', 'reason': 'author_mismatch'}
+        if followup and f'<@{self.bot_user}>' not in str(m.get('text') or '') and not engine.bot_thread(channel, thread_ts, now):
+            return {'ok': True, 'outcome': 'skipped', 'reason': 'not_bot_thread'}
         switched = _approvers.handle_switch(rt, db, channel, m, now=now)  # 0.78.10 (F22): an owner's "审批人换成 X"
         if switched is not None:
             return switched
@@ -3294,6 +3321,39 @@ def unavailable_playbook(reason='no_intake_playbook'):
         else:
             names[name] = refuse
     return types.SimpleNamespace(**names)
+
+
+GOAL_HEADING_RE = re.compile(r'^#{1,6}\s+\S')
+
+
+def keep_own_titles(rt, db, run):
+    """0.79.2 (F28): `run()` (intake-bootstrap) with each EXISTING inbox / oncall task keeping its own name: a policy
+    goal.md written again gets back the deployment's first heading line, and tasks.title its earlier text (the pack's
+    templates carry a default title; the bot's identity text comes from these two)."""
+    cfg = _cfg(rt)['intake']
+    before = {}
+    for task_id in dict.fromkeys(cfg[f'{role}_task'] for role in ('inbox', 'oncall')):
+        goal = rt.registry.root() / task_id / 'goal.md'
+        try:
+            lines = goal.read_text(encoding='utf-8').splitlines(keepends=True)
+        except OSError:
+            continue
+        row = db.execute('SELECT title FROM tasks WHERE task_id=?', (task_id,)).fetchone()
+        before[task_id] = (goal, next((x for x in lines[:80] if GOAL_HEADING_RE.match(x)), None), row and row['title'])
+    result = run()
+    for task_id, (goal, heading, title) in before.items():
+        try:
+            lines = goal.read_text(encoding='utf-8').splitlines(keepends=True)
+        except OSError:
+            continue
+        at = next((i for i, x in enumerate(lines[:80]) if GOAL_HEADING_RE.match(x)), None)
+        if heading and at is not None and lines[at].rstrip('\n') != heading.rstrip('\n'):
+            lines[at] = heading.rstrip('\n') + '\n'
+            goal.write_text(''.join(lines), encoding='utf-8')
+        if title:
+            with rt.transaction(db):
+                db.execute('UPDATE tasks SET title=? WHERE task_id=? AND coalesce(title,?)!=?', (title, task_id, '', title))
+    return result
 
 
 def run_workspace_bootstrap(bootstrap, title, brief, context, *, agent, root, ticket=False, slug=None, date=None,

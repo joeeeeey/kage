@@ -230,6 +230,37 @@ class SocketModeTest(unittest.TestCase):
         retry = next(rec for rec in r.logged if rec.get('event') == 'intake_push_retry')
         self.assertEqual((retry['reason'], retry['returncode'], retry['error']), ('intake_push_failed', 1, 'OperationalError'))
 
+    def test_a_thread_reply_without_a_mention_goes_to_intake_followup(self):
+        # 0.79.2 (F28): a person's reply in a channel thread reaches `intake-push --followup` (the runtime keeps it only in
+        # a thread with the bot); a card-reply channel's threads and non-person posts stay with the card-reply path
+        from kage.adapters.slack import receiver as R
+        ns = namespace(**{name: getattr(R, name) for name in (
+            'is_intake_event', 'is_thread_followup_event', 'intake_refs', 'intake_followup_refs', 'intake_push_command',
+            'run_followup_json', '_safe', 'SAFE_CODE_RE', 'SAFE_ERROR_RE')})
+        r = Runner(ns)
+        r.own_bot_user = 'U0000TEST09'
+        r._card_reply_cache = (float('inf'), {'intake_push': True, 'channels': frozenset({'C0000CARD01'})})
+        commands = []
+        r.followup_runner = lambda command, **kw: commands.append(command) or types.SimpleNamespace(
+            returncode=0, stdout='{"ok": true, "outcome": "skipped", "reason": "not_bot_thread"}', stderr='')
+        event = {'type': 'message', 'channel': 'C0000TEST01', 'channel_type': 'channel', 'ts': '1700000001.000200',
+                 'thread_ts': '1700000000.000100', 'user': 'U0000TEST05'}
+        payload = {'type': 'event_callback', 'team_id': 'T0000TEST01', 'event': event}
+        record = r.process_intake(payload)
+        self.assertEqual((record['event'], record['outcome'], record['reason'], record['followup']),
+                         ('intake_pushed', 'skipped', 'not_bot_thread', True))
+        self.assertEqual(commands[0][-10:], ['intake-push', '--channel', 'C0000TEST01', '--ts', '1700000001.000200',
+                                             '--user', 'U0000TEST05', '--thread-ts', '1700000000.000100', '--followup'])
+        for other in ({**event, 'channel': 'C0000CARD01'},            # a card-reply channel: the card-reply path
+                      {**event, 'thread_ts': event['ts']},             # a thread root / top-level post: not a follow-up
+                      {**event, 'channel_type': 'im', 'channel': 'D0000TEST01'},  # a DM thread: the card-reply path
+                      {**event, 'user': 'U0000TEST09'},                # the bot's own post
+                      {**event, 'subtype': 'message_changed'}):
+            self.assertIsNone(r.process_intake({**payload, 'event': other}))
+        r._card_reply_cache = (float('inf'), {'intake_push': False})  # bot intake off: as before
+        self.assertIsNone(r.process_intake(payload))
+        self.assertEqual(len(commands), 1)
+
     def test_the_owners_card_reply_through_an_allowed_app_is_pushed(self):
         # 0.78.8 (F20): no longer dropped as has_bot_id; the runtime re-reads it and checks the person
         from kage.adapters.slack import receiver as R

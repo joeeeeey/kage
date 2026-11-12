@@ -294,15 +294,32 @@ class SocketModeRunner:
         """0.77.0 bot intake: an @mention of the bot or a DM to it -> the runtime's `intake-push` (refs only) when the
         runtime takes them (`card-reply-config` "intake_push", on only for a bot-identity intake). None otherwise (not
         such an event, or the gate is off: the event goes on to the card-reply path as before). A deployment whose
-        receiver namespace has no intake functions never reaches it. Logs carry ids and codes only, never the text."""
+        receiver namespace has no intake functions never reaches it. Logs carry ids and codes only, never the text.
+        0.79.2 (F28): a channel thread reply without an @mention goes to `intake-push --followup` too (the runtime takes it
+        only in a thread that is a conversation with the bot), except in a card-reply channel (the card-reply path)
+        and when it is no person's plain message (then the card-reply path drops it, as before)."""
         is_intake = getattr(self.ns, "is_intake_event", None)
-        if is_intake is None or not is_intake(payload):
+        if is_intake is None:
+            return None
+        followup = not is_intake(payload)
+        is_followup = getattr(self.ns, "is_thread_followup_event", None)
+        if followup and (is_followup is None or not is_followup(payload)):
             return None
         try:
-            if not self.card_reply_settings().get("intake_push"):
+            settings = self.card_reply_settings()
+            if not settings.get("intake_push"):
                 return None
-            refs, code = self.ns.intake_refs(payload, expected_team_id=self.args.expected_team_id,
-                                             own_bot_user=self.own_bot_user, own_app_id=self.own_app_id)
+            if followup:
+                if payload["event"].get("channel") in (settings.get("channels") or ()):
+                    return None
+                refs, code = self.ns.intake_followup_refs(payload, expected_team_id=self.args.expected_team_id,
+                                                          own_bot_user=self.own_bot_user, own_app_id=self.own_app_id)
+                if refs is None:
+                    return None
+                refs["followup"] = "1"
+            else:
+                refs, code = self.ns.intake_refs(payload, expected_team_id=self.args.expected_team_id,
+                                                 own_bot_user=self.own_bot_user, own_app_id=self.own_app_id)
             if refs is None:
                 event = payload.get("event") if isinstance(payload.get("event"), dict) else {}
                 record = {"event": "intake_dropped", "reason": code, "channel_id": self.ns._safe(event.get("channel")),
@@ -326,6 +343,7 @@ class SocketModeRunner:
                 "outcome": self.ns._safe(result.get("outcome"), self.ns.SAFE_CODE_RE),
                 "reason": self.ns._safe(result.get("reason"), self.ns.SAFE_CODE_RE),
                 "attempts": attempts,
+                **({"followup": True} if followup else {}),
             }
             if not result.get("ok"):  # 0.78.4 (F16): the cause, as codes
                 record.update(returncode=result.get("returncode"), error=self.ns._safe(
