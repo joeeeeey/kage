@@ -561,6 +561,9 @@ class Notices:
         elif USER_RE.fullmatch(who):
             who = name(who)
         parts = []
+        moved = record.get('deployment_owner')  # 0.79.3 (F30): `owner-transfer`
+        if isinstance(moved, dict) and moved.get('new'):
+            parts.append(self.msg('approvers.deployment_owner', new=name(moved['new']), old=name(moved.get('old'))))
         if record.get('added'):
             parts.append(self.msg('approvers.added', people=people(record['added'])))
         if record.get('removed'):

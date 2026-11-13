@@ -223,6 +223,7 @@
     "approvers.someone": "有人",
     "approvers.notice_context": "审批人 · 在控制台的设置页修改：{link}",
     "approvers.owners_now": "owner 现在是 {people}",
+    "approvers.deployment_owner": "部署 owner 从 {old} 换成了 {new}",
     "approvers.schedule_who": "到期自动",
     "approvers.until": " 到 {date} 自动换回原来的审批人。",
     "approvers.switched": "✅ 审批人已换成 {people}，之后的卡片发给 TA 审批。",

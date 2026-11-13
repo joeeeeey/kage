@@ -188,8 +188,11 @@ def records(key, home=None):
 
 def files(answers, owner_record, bot_record, pin):
     """The tree init owns: {relative path: bytes} (packs included)."""
-    who = answers['owner']
+    who = dict(answers['owner'])
     key = who['key']
+    for field in ('name', 'short_name'):  # 0.79.3: an owner transfer records the new owner's names with the proof
+        if isinstance(owner_record.get(field), str) and owner_record[field].strip():
+            who[field] = owner_record[field]
     access = packs.template('default.access')
     playbook = packs.template('default.playbook')
     playbook_rel = f'deploy/packs/{key}/playbook.py'
@@ -232,10 +235,17 @@ def keep_local(target, wanted):
     """F11 (0.78.1): a re-run keeps what the deployment added on top of what init writes: instance.json keys init does
     not write (e.g. `console`, `assembly.values` / `modules`, extra `paths`), kage.lock packs init does not write and
     the pin of every pack file it keeps (init never replaces a pack), extra lock switches, and a dashboard port that
-    differs from the default. Everything init writes itself is still regenerated from the answers."""
+    differs from the default. Everything init writes itself is still regenerated from the answers. F29 (0.79.3): also
+    owner.json's `assistant` (the deployment's bot user, app and display name, which an operator may have re-pinned
+    after onboarding)."""
     target = Path(target)
     if not target.is_dir():
         return wanted
+    old = _read_json(target / 'deploy/owner.json')
+    if isinstance(old, dict) and isinstance(old.get('assistant'), dict):
+        new = json.loads(wanted['deploy/owner.json'])
+        new['assistant'] = old['assistant']
+        wanted['deploy/owner.json'] = _json(new)
     old = _read_json(target / 'deploy/instance.json')
     if isinstance(old, dict):
         new = json.loads(wanted['deploy/instance.json'])
@@ -462,12 +472,21 @@ def _private_mkdir(path):
 
 
 def outside_files(answers, owner_record, home=None):
-    """{absolute path: bytes} init writes outside the deployment: the decisions config for a card channel."""
+    """{absolute path: bytes} init writes outside the deployment: the decisions config for a card channel. F29
+    (0.79.3): an existing decisions config keeps everything but the channel (owners, approvers, names, other keys); only
+    a missing or empty approvers list becomes the owner."""
     key, cards = answers['owner']['key'], answers['slack']['cards']
     if cards == 'dm':
         return {}
-    return {config_dir(key, home) / 'decisions.json':
-            _json({'decision_channel': cards, 'approvers': [owner_record['user_id']]})}
+    path = config_dir(key, home) / 'decisions.json'
+    data = {'decision_channel': cards, 'approvers': [owner_record['user_id']]}
+    old = _read_json(path)
+    if isinstance(old, dict):
+        approvers = old.get('approvers')
+        data = {**old, 'decision_channel': cards}
+        if not isinstance(approvers, list) or not approvers:
+            data['approvers'] = [owner_record['user_id']]
+    return {path: _json(data)}
 
 
 def record_step(db_path, step, status, detail, *, clock=time.time):

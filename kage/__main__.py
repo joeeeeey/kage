@@ -7,7 +7,8 @@ own: exit 1 with {"error", "detail"} on stderr (details of unexpected errors wit
 
 `python3 -m kage init …` (O1c4) creates or adopts a deployment and runs before any assembly (kage.onboard.init_cli).
 `python3 -m kage --deployment DIR serve dashboard|receiver …` (O1c5) runs Kage's own service entries (kage.serve);
-`… services plan|start|stop|status` loads a generated deployment's launchd jobs (kage.onboard.services)."""
+`… services plan|start|stop|status` loads a generated deployment's launchd jobs (kage.onboard.services);
+`… owner-transfer --to <Slack user id>` hands the deployment to another person (kage.onboard.transfer, 0.79.3)."""
 from __future__ import annotations
 import json
 from pathlib import Path
@@ -36,6 +37,9 @@ def main(argv=None):
     if argv[2:3] == ['services']:  # O1c5e: a generated deployment's launchd jobs (plan / start / stop / status)
         from kage.onboard import services
         return services.main(assembly, argv[3:])
+    if argv[2:3] == ['owner-transfer']:  # 0.79.3 (F30): hand the deployment to another person of its workspace
+        from kage.onboard import transfer
+        return transfer.main(assembly, runtime, argv[3:])
     sys.argv = [Path(assembly.program).name, *app.owner_alias(argv[2:], assembly.deployment.owner.key)]
     try:
         runtime['main']()

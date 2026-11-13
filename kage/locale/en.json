@@ -223,6 +223,7 @@
     "approvers.someone": "someone",
     "approvers.notice_context": "approvers · edited on the console's settings page: {link}",
     "approvers.owners_now": "owners are now {people}",
+    "approvers.deployment_owner": "the deployment owner is now {new} (was {old})",
     "approvers.schedule_who": "the schedule",
     "approvers.until": " The previous approvers come back at {date}.",
     "approvers.switched": "✅ Approvers switched to {people}; new cards go to them.",

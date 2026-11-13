@@ -104,9 +104,10 @@ def _pages(call, token, method, params, key, skip=frozenset()):
     raise TokenRefused(f'slack_{method}_too_many_pages')
 
 
-def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time):
+def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time, expect_user=None):
     """Find the code in the bot's DMs; `bot`: tokens.check_bot's result for `bot_token`. Records and returns the
-    identity, or raises TokenRefused (the challenge stays for a retry unless it expired)."""
+    identity, or raises TokenRefused (the challenge stays for a retry unless it expired). `expect_user` (0.79.3, the
+    owner transfer): only that person may send the code; anyone else ends the challenge and nothing is recorded."""
     d = _private_dir(state_dir)
     try:
         challenge = json.loads((d / CHALLENGE).read_text(encoding='utf-8'))
@@ -134,6 +135,9 @@ def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time):
         (d / CHALLENGE).unlink()
         raise TokenRefused('identity_code_sent_by_more_than_one_person')
     (user_id, (channel, ts, team)), = senders.items()
+    if expect_user is not None and user_id != expect_user:
+        (d / CHALLENGE).unlink()
+        raise TokenRefused('identity_code_sent_by_another_person')
     if team is None:
         payload, _headers = call('users.info', bot_token, {'user': user_id})
         info = payload.get('user') if isinstance(payload, dict) and payload.get('ok') is True else None
