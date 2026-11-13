@@ -186,6 +186,26 @@ class TransferTest(Base):
         self.assertFalse((self.state / identity.CHALLENGE).exists())
         self.assertFalse(A.log_path(self.decisions).exists())
 
+    def test_only_the_new_owners_dm_is_read_and_rate_limits_are_waited_out(self):
+        calls, failures = [], ['history', 'list']  # one rate-limited history read, then an unreachable list
+        slack = self.slack
+
+        def call(method, token, params=None):
+            calls.append((method, (params or {}).get('channel')))
+            if method == 'conversations.history' and failures[:1] == ['history']:
+                failures.pop(0)
+                return {'ok': False, 'error': 'ratelimited'}, {}
+            if method == 'conversations.list' and failures[:1] == ['list']:
+                failures.pop(0)
+                raise identity.TokenRefused('slack_unreachable_for_conversations.list')
+            return slack(method, token, params)
+        t = self.transfer(call=call)
+        t.apply(t.plan())
+        self.assertEqual(identity.load(self.state)['user_id'], NEW)
+        self.assertEqual({c for m, c in calls if m == 'conversations.history'}, {'D0000TEST02'})
+        self.assertEqual(failures, [])
+        self.assertGreaterEqual(self.now - START, 2 * transfer.POLL_SECONDS)
+
     def test_no_code_within_the_wait_changes_nothing(self):
         before = self.snapshot()
         self.sender = None

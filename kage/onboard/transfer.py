@@ -2,7 +2,8 @@
 workspace. The deployment key, every path, the state database, the config, the rules and the people registry stay.
 
 The new owner proves who they are as at init (kage.onboard.identity, `dm_code`): the command prints a one-time OWNER
-CODE and waits up to 10 minutes for that person, and only that person, to send it to the bot as a direct message. Then
+CODE and waits up to 10 minutes for that person, and only that person, to send it to the bot as a direct message (only
+their DM with the bot is read, every 10 s; Slack rate limits and network errors are waited out). Then
 it rewrites, with a copy of every file it touches in `<state>/owner-transfer/<UTC time>/` first:
 
   deploy/owner.json        identities.slack.user and the owner's name / short name (from Slack, or --name /
@@ -39,7 +40,14 @@ from kage.core import approvers as _approvers
 from kage.onboard import dispatch_files, identity, init, tokens
 
 TIMEOUT = identity.CODE_TTL
-POLL_SECONDS = 5
+POLL_SECONDS = 10
+WAITING = 'identity_code_not_found_in_the_bots_direct_messages'
+
+
+def transient(code):
+    """A refusal the wait rides out: no code yet, Slack rate limits, an unreachable Slack."""
+    return code == WAITING or code.startswith('slack_unreachable_for_') or code.endswith('_refused_ratelimited')
+
 AGENT_ENV = ('CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CODEX_THREAD_ID')
 BACKUPS, AUDIT = 'owner-transfer', 'owner-transfer.jsonl'
 DISPATCH_TEXT = (dispatch_files.SKILL, dispatch_files.RULES, dispatch_files.EXAMPLE_SPEC)
@@ -311,8 +319,7 @@ class Transfer:
                 return identity.prove_by_dm(self.state, self.bot_token, plan['bot'], call=self.call, clock=self.clock,
                                             expect_user=plan['new'])
             except tokens.TokenRefused as exc:
-                if exc.code != 'identity_code_not_found_in_the_bots_direct_messages' or \
-                        self.clock() - started > self.timeout:
+                if not transient(exc.code) or self.clock() - started > self.timeout:
                     with_challenge = self.state / identity.CHALLENGE
                     if with_challenge.exists():
                         with_challenge.unlink()

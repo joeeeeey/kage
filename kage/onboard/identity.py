@@ -107,7 +107,8 @@ def _pages(call, token, method, params, key, skip=frozenset()):
 def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time, expect_user=None):
     """Find the code in the bot's DMs; `bot`: tokens.check_bot's result for `bot_token`. Records and returns the
     identity, or raises TokenRefused (the challenge stays for a retry unless it expired). `expect_user` (0.79.3, the
-    owner transfer): only that person may send the code; anyone else ends the challenge and nothing is recorded."""
+    owner transfer): only that person's DM with the bot is read (one history call however many DMs the bot has), and
+    a code from anyone else ends the challenge with nothing recorded."""
     d = _private_dir(state_dir)
     try:
         challenge = json.loads((d / CHALLENGE).read_text(encoding='utf-8'))
@@ -120,6 +121,8 @@ def prove_by_dm(state_dir, bot_token, bot, *, call=slack_call, clock=time.time, 
     senders = {}
     for im in _pages(call, bot_token, 'conversations.list', {'types': 'im', 'limit': 200}, 'channels'):
         if not im.get('id') or im.get('user') in SKIPPED_IM_USERS or im.get('is_user_deleted'):
+            continue
+        if expect_user is not None and im.get('user') != expect_user:
             continue
         history = _pages(call, bot_token, 'conversations.history',
                          {'channel': im['id'], 'oldest': f'{created:.6f}', 'limit': 200}, 'messages',
